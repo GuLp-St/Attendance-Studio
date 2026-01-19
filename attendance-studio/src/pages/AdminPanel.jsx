@@ -127,7 +127,7 @@ export default function AdminPanel() {
     setConsoleOutput("Initializing Sync...");
     try {
       const endpoint = type === 'class' ? '/admin_sync_class' : '/admin_sync_activity';
-      const response = await fetch(`https://api-evqvrhn5wa-as.a.run.app${endpoint}?key=${key}`);
+      const response = await fetch(`/api${endpoint}?key=${key}`);
       const text = await response.text();
       setConsoleOutput(text);
       loadData();
