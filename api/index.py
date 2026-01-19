@@ -192,7 +192,17 @@ def api_handler(path):
     if request.method == 'OPTIONS':
         return Response("", status=204, headers=headers)
 
-    path = "/" + path
+    actual_path = request.path
+    if actual_path.startswith("/api"):
+        # Remove the first 4 characters ("/api")
+        path = actual_path[4:]
+    else:
+        path = actual_path
+
+    # Ensure it starts with /
+    if not path.startswith("/"):
+        path = "/" + path
+        
     args = request.args
     client_ip = get_client_ip()
 
