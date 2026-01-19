@@ -1,3 +1,8 @@
+import sys
+import os
+
+# FIX: Add the current folder to Python's path so it can find 'core_api.py'
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, request, jsonify, Response
 from firebase_admin import credentials, initialize_app, firestore
 from google.cloud.firestore import FieldFilter
