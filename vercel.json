@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index.py" }
+  ],
+  "buildCommand": "cd attendance-studio && npm install && npm run build",
+  "outputDirectory": "attendance-studio/dist",
+  "framework": "vite"
+}
