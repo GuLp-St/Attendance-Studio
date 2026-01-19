@@ -1,15 +1,16 @@
 import sys
 import os
 
-# FIX: Add the current folder to Python's path so it can find 'core_api.py'
+# 1. Fix Path for Vercel
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from flask import Flask, request, jsonify, Response
-from firebase_admin import credentials, initialize_app, firestore
+import firebase_admin # <--- IMPORT THE MAIN MODULE
+from firebase_admin import credentials, firestore
 from google.cloud.firestore import FieldFilter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 import json
-import os
 import requests
 import traceback
 import core_api
@@ -19,16 +20,15 @@ import core_api
 # ==========================================
 app = Flask(__name__)
 
-# Initialize Firebase only once to prevent Vercel hot-reload errors
-if not len(initialize_app._apps):
+# FIX: Check firebase_admin._apps instead of initialize_app._apps
+if not firebase_admin._apps:
     # Retrieve JSON string from Vercel Environment Variables
     cred_content = os.environ.get('FIREBASE_CREDENTIALS')
     if cred_content:
         cred_json = json.loads(cred_content)
         cred = credentials.Certificate(cred_json)
-        initialize_app(cred)
+        firebase_admin.initialize_app(cred) # <--- Use module function
     else:
-        # Fallback for local testing if env var missing
         print("WARNING: FIREBASE_CREDENTIALS env var not found.")
 
 db = firestore.client()
