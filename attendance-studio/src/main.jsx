@@ -1,19 +1,22 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
-import { AuthProvider } from './contexts/AuthContext';
-import { ToastProvider } from './contexts/ToastContext';
-import { ConfirmProvider } from './contexts/ConfirmContext';
-import './assets/style.css';
+// attendance-studio/src/main.jsx
 
-// --- Service Worker Registration ---
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App.jsx'
+import { AuthProvider } from './contexts/AuthContext'
+import { ToastProvider } from './contexts/ToastContext'
+import { ConfirmProvider } from './contexts/ConfirmContext'
+import './assets/style.css'
+
+// --- ADD THIS BLOCK TO KILL THE SERVICE WORKER ---
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then(reg => console.log('SW registered'))
-      .catch(err => console.log('SW failed', err));
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    for (let registration of registrations) {
+      registration.unregister();
+    }
   });
 }
+// ------------------------------------------------
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -25,4 +28,4 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       </ConfirmProvider>
     </ToastProvider>
   </React.StrictMode>,
-);
+)
