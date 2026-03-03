@@ -1,11 +1,14 @@
+# --- START OF FILE index.py ---
+
 import sys
 import os
+import time
 
 # 1. Fix Path for Vercel
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, request, jsonify, Response
-import firebase_admin # <--- IMPORT THE MAIN MODULE
+import firebase_admin 
 from firebase_admin import credentials, firestore
 from google.cloud.firestore import FieldFilter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,14 +23,12 @@ import core_api
 # ==========================================
 app = Flask(__name__)
 
-# FIX: Check firebase_admin._apps instead of initialize_app._apps
 if not firebase_admin._apps:
-    # Retrieve JSON string from Vercel Environment Variables
     cred_content = os.environ.get('FIREBASE_CREDENTIALS')
     if cred_content:
         cred_json = json.loads(cred_content)
         cred = credentials.Certificate(cred_json)
-        firebase_admin.initialize_app(cred) # <--- Use module function
+        firebase_admin.initialize_app(cred)
     else:
         print("WARNING: FIREBASE_CREDENTIALS env var not found.")
 
@@ -38,10 +39,10 @@ ADMIN_SECRET_KEY = "nexus"
 FALLBACK_USER = "85699"
 FALLBACK_PASS = "Unimas!010914011427"
 FALLBACK_START_ID = 100000 
-FALLBACK_BATCH = 1000
-FALLBACK_THRESH = 500
-FALLBACK_LIMIT = 5000
-FALLBACK_ACT_START = 107000
+FALLBACK_LIMIT = 2000
+FALLBACK_STUDENT_BATCH = 50
+FALLBACK_ACT_START = 122000
+FALLBACK_ACT_LIMIT = 2000
 FALLBACK_ACT_MONTHS = 6 
 
 # ==========================================
@@ -49,7 +50,6 @@ FALLBACK_ACT_MONTHS = 6
 # ==========================================
 
 def get_malaysia_time():
-    """Returns current time in UTC+8."""
     return datetime.now(timezone.utc) + timedelta(hours=8)
 
 def get_sys_config():
@@ -65,11 +65,11 @@ def get_sys_config():
         "user": auth.get("username", FALLBACK_USER),
         "pass": auth.get("password", FALLBACK_PASS),
         "start_id": int(conf.get("last_scanned_id", FALLBACK_START_ID)),
-        "batch_size": int(conf.get("batch_size", FALLBACK_BATCH)),
-        "empty_thresh": int(conf.get("empty_threshold", FALLBACK_THRESH)),
         "scan_limit": int(conf.get("scan_limit", FALLBACK_LIMIT)),
+        "student_sync_batch": int(conf.get("student_sync_batch", FALLBACK_STUDENT_BATCH)),
         "current_semester": conf.get("current_semester", ""),
         "act_start_id": int(conf.get("act_last_scanned_id", FALLBACK_ACT_START)),
+        "act_scan_limit": int(conf.get("act_scan_limit", FALLBACK_ACT_LIMIT)),
         "act_months": int(conf.get("act_time_threshold", FALLBACK_ACT_MONTHS))
     }
 
@@ -86,9 +86,7 @@ def get_client_ip():
 
 def log_action(ip, matric, action, details=""):
     try:
-        # Capture Device ID from headers if available
         dev_id = request.headers.get('X-Device-ID', 'unknown')
-        
         db.collection('system_logs').add({
             "timestamp": get_malaysia_time().isoformat(),
             "ip": ip,
@@ -121,7 +119,6 @@ def save_sync_log(type, status, messages, items_count):
             "log_text": "\n".join(messages),
             "items_found": items_count
         })
-        # Cleanup
         docs = list(db.collection('sync_history').order_by('timestamp', direction=firestore.Query.DESCENDING).stream())
         if len(docs) > 10:
             batch = db.batch()
@@ -175,13 +172,12 @@ def delete_collection(collection_name, batch_size=400):
         delete_collection(collection_name, batch_size)
 
 # ==========================================
-#  MAIN ROUTE HANDLER (CATCH-ALL)
+#  MAIN ROUTE HANDLER
 # ==========================================
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'DELETE', 'OPTIONS'])
 @app.route('/<path:path>', methods=['GET', 'POST', 'DELETE', 'OPTIONS'])
 def api_handler(path):
-    # CORS HEADERS
     headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
@@ -189,24 +185,16 @@ def api_handler(path):
         'Content-Type': 'application/json'
     }
     
-    if request.method == 'OPTIONS':
-        return Response("", status=204, headers=headers)
+    if request.method == 'OPTIONS': return Response("", status=204, headers=headers)
 
     actual_path = request.path
-    if actual_path.startswith("/api"):
-        # Remove the first 4 characters ("/api")
-        path = actual_path[4:]
-    else:
-        path = actual_path
+    if actual_path.startswith("/api"): path = actual_path[4:]
+    else: path = actual_path
 
-    # Ensure it starts with /
-    if not path.startswith("/"):
-        path = "/" + path
-        
+    if not path.startswith("/"): path = "/" + path
     args = request.args
     client_ip = get_client_ip()
 
-    # 0. IP BAN CHECK
     if db.collection('banned_ips').document(client_ip).get().exists:
         return jsonify({"error": "Access Denied"}), 403
 
@@ -214,20 +202,18 @@ def api_handler(path):
     #  ENDPOINTS
     # ==========================================
 
-    # 1. DIRECTORY
     if path == '/directory':
         dir_type = args.get('type', 'student')
         prefix = 'dir_' if dir_type == 'student' else 'org_dir_'
         try:
             full_dir = []
-            for i in range(50):
+            for i in range(55):
                 doc = db.collection('system').document(f'{prefix}{i}').get()
                 if not doc.exists: break
                 full_dir.extend(json.loads(doc.to_dict().get('json', '[]')))
             return Response(json.dumps(full_dir), headers=headers)
         except: return jsonify([])
 
-    # 2. SEARCH
     elif path == '/search':
         query = args.get('q', '').strip()
         if len(query) < 2: return jsonify([])
@@ -241,7 +227,6 @@ def api_handler(path):
         except: return jsonify([])
         return Response(json.dumps(results), headers=headers)
 
-    # 3. DASHBOARD
     elif path == '/dashboard':
         matric = args.get('matric')
         log_action(client_ip, matric, "VIEW_DASHBOARD")
@@ -250,8 +235,6 @@ def api_handler(path):
             if not doc.exists: return jsonify({}), 404
             
             req_session = get_authorized_session()
-            
-            # Note: Requests session adapter pool size is less relevant in Serverless, but keeping safe
             user_data = doc.to_dict()
             group_ids = user_data.get('groups', [])
             following_ids = user_data.get('following', [])
@@ -265,7 +248,6 @@ def api_handler(path):
             courses = {}
             raw_timetable = []
 
-            # STEP 1: FETCH COURSE INFO
             with ThreadPoolExecutor(max_workers=8) as ex:
                 f_info = {ex.submit(core_api.get_group_info, gid, req_session): gid for gid in group_ids}
                 for f in as_completed(f_info):
@@ -276,7 +258,6 @@ def api_handler(path):
                         res['sessions'] = None
                         courses[gid] = res
 
-            # STEP 2: FETCH TIMETABLE
             with ThreadPoolExecutor(max_workers=8) as ex:
                 f_time = {ex.submit(core_api.get_timetable, gid, req_session): gid for gid in group_ids}
                 for f in as_completed(f_time):
@@ -300,7 +281,6 @@ def api_handler(path):
             traceback.print_exc()
             return jsonify({"error": str(e)}), 500
 
-    # 4. COURSE DETAILS
     elif path == '/course_details':
         matric, gid = args.get('matric'), args.get('gid')
         try:
@@ -335,7 +315,6 @@ def api_handler(path):
             return Response(json.dumps(c_sess), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
-    # 5. TARGET DETAILS
     elif path == '/target_details':
         matric, sid, stype = args.get('matric'), args.get('sid'), args.get('type')
         log_action(client_ip, matric, "TARGET_SEARCH", f"{stype}:{sid}")
@@ -367,7 +346,6 @@ def api_handler(path):
             return Response(json.dumps(res), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
-    # 6. ACTIONS
     elif path == '/action' and request.method == 'POST':
         d = request.get_json()
         log_action(client_ip, d.get('matric'), d.get('type'), f"ID:{d.get('sid')}")
@@ -405,14 +383,12 @@ def api_handler(path):
         except Exception as e: msg = str(e)
         return jsonify({"msg": msg})
 
-    # 7. CRON
     elif path == '/cron':
         try:
             req_session = get_authorized_session()
             now_my = get_malaysia_time()
             today_str = now_my.strftime('%Y-%m-%d')
             
-            # Clean old logs
             cutoff = (now_my - timedelta(days=7)).isoformat()
             old_logs = db.collection('system_logs').where(filter=FieldFilter("timestamp", "<", cutoff)).limit(400).stream()
             batch = db.batch(); deleted_logs = 0
@@ -517,7 +493,6 @@ def api_handler(path):
             return Response(f"Jobs: {len(jobs)} | Processed: {len(results)}", headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
-    # 8. NOTIFICATIONS
     elif path == '/notifications':
         matric = args.get('matric')
         if request.method == 'GET':
@@ -530,7 +505,6 @@ def api_handler(path):
             db.collection('notifications').document(nid).delete()
             return jsonify({"status": "deleted"})
 
-    # 9. PROFILE
     elif path == '/profile':
         try:
             req_session = get_authorized_session()
@@ -539,83 +513,188 @@ def api_handler(path):
             else: return jsonify({"error": "No Data"}), 404
         except Exception as e: return jsonify({"error": str(e)}), 500
 
-    # 10. ADMIN SYNC CLASS
+    # 10. ADMIN SYNC CLASS (DISCOVERY)
     elif path == '/admin_sync_class':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
         log_buffer = []
         def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
         try:
-            log("Starting Class Sync...")
+            log("Starting Class Discovery...")
             cfg = get_sys_config()
             req_session = requests.Session()
             core_api.configure_session(req_session, cfg['user'], cfg['pass'])
             active_sem = core_api.get_active_semester(req_session)
             stored_sem = cfg.get('current_semester')
+            
             if active_sem and active_sem != stored_sem:
+                log(f"New Semester Detected: {active_sem}. Clearing DB...")
                 delete_collection('students', 400)
+                delete_collection('courses', 400)
                 batch = db.batch()
                 for i in range(55): batch.delete(db.collection('system').document(f'dir_{i}'))
                 batch.commit()
                 db.collection('system').document('config').set({'current_semester': active_sem}, merge=True)
-            curr, limit, threshold = cfg['start_id'], cfg['scan_limit'], cfg['empty_thresh']
-            discovered, empty_streak, ids_checked = [], 0, 0
+                
+            curr = cfg['start_id']
+            limit = cfg['scan_limit']
             highest_valid_id = curr
-            with ThreadPoolExecutor(max_workers=8) as ex:
-                while empty_streak < threshold and ids_checked < limit:
-                    futures = {ex.submit(core_api.get_group_info, i, req_session): i for i in range(curr, curr + cfg['batch_size'])}
-                    found_in_batch, batch_max = 0, 0
+            discovered = []
+            
+            log(f"Scanning from {curr} to {curr + limit}...")
+            for i in range(curr, curr + limit, 100):
+                end = min(i + 100, curr + limit)
+                with ThreadPoolExecutor(max_workers=10) as ex:
+                    futures = {ex.submit(core_api.get_group_info, j, req_session): j for j in range(i, end)}
                     for f in as_completed(futures):
                         if res := f.result():
                             res_id = int(res['id'])
-                            if res_id > batch_max: batch_max = res_id
-                            if not active_sem or res.get('semester') == active_sem: discovered.append(res)
-                            found_in_batch += 1
-                    if found_in_batch > 0:
-                        empty_streak = 0
-                        if batch_max > highest_valid_id: highest_valid_id = batch_max
-                        log(f"Found {found_in_batch} (Max: {batch_max})")
-                    else: empty_streak += cfg['batch_size']
-                    curr += cfg['batch_size']; ids_checked += cfg['batch_size']
-            new_cursor = highest_valid_id if empty_streak >= threshold else curr
+                            if not active_sem or res.get('semester') == active_sem:
+                                discovered.append(res)
+                                if res_id > highest_valid_id: highest_valid_id = res_id
+                                
+            # Cursor only moves forward if we actually found something valid
+            new_cursor = highest_valid_id
+            log(f"Found {len(discovered)} active courses. Next Start ID will be: {new_cursor}")
+            
             if discovered:
-                log(f"Processing {len(discovered)} groups...")
-                updates = {}
-                with ThreadPoolExecutor(max_workers=8) as ex:
-                    futures = {ex.submit(core_api.get_students, g['id'], req_session): g['id'] for g in discovered}
-                    for f in as_completed(futures):
-                        gid = futures[f]
-                        for s in f.result():
-                            m, n = s.get("NOMATRIK"), s.get("NAMAPELAJAR")
-                            if m:
-                                if m not in updates: updates[m] = {"name": n, "groups": [], "semester": active_sem}
-                                if n and n != "Unknown": updates[m]["name"] = n
-                                if gid not in updates[m]["groups"]: updates[m]["groups"].append(gid)
-                log(f"Updating {len(updates)} students...")
                 batch = db.batch(); count = 0
-                for m, d in updates.items():
-                    batch.set(db.collection('students').document(m), {
-                        "name": d['name'], "semester": d['semester'], "groups": firestore.ArrayUnion(d['groups'])
+                for d in discovered:
+                    doc_ref = db.collection('courses').document(str(d['id']))
+                    batch.set(doc_ref, {
+                        "code": d['code'], "name": d['name'], 
+                        "semester": d['semester'], "group": d['group']
                     }, merge=True)
                     count += 1
                     if count >= 400: batch.commit(); batch = db.batch(); count = 0
                 if count > 0: batch.commit()
-                all_std = db.collection('students').stream()
-                d_list = [{"m": d.id, "n": d.to_dict().get('name')} for d in all_std]
-                chunks = [d_list[i:i + 4000] for i in range(0, len(d_list), 4000)]
-                for idx, chunk in enumerate(chunks):
-                    batch.set(db.collection('system').document(f'dir_{idx}'), {'json': json.dumps(chunk)})
-                    count += 1
-                    if count >= 400: batch.commit(); batch = db.batch(); count = 0
-                for idx in range(len(chunks), 55): batch.delete(db.collection('system').document(f'dir_{idx}'))
-                batch.commit()
+
             db.collection('system').document('config').set({'last_scanned_id': new_cursor}, merge=True)
             save_sync_log("CLASS", "SUCCESS", log_buffer, len(discovered))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
+            traceback.print_exc()
             save_sync_log("CLASS", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
 
-    # 11. ADMIN SYNC ACTIVITY
+    # 11. ADMIN SYNC STUDENT (FILL DB)
+    elif path == '/admin_sync_student':
+        if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+        log_buffer = []
+        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
+        try:
+            log("Starting Student Sync...")
+            cfg = get_sys_config()
+            req_session = requests.Session()
+            core_api.configure_session(req_session, cfg['user'], cfg['pass'])
+            active_sem = core_api.get_active_semester(req_session)
+            
+            batch_limit = cfg.get('student_sync_batch', 50)
+            
+            courses_query = db.collection('courses').where(filter=FieldFilter("semester", "==", active_sem)).stream()
+            active_courses = []
+            for c in courses_query:
+                d = c.to_dict(); d['id'] = c.id
+                d['last_sync'] = d.get('last_student_sync', 0)
+                active_courses.append(d)
+                
+            active_courses.sort(key=lambda x: x['last_sync'])
+            target_courses = active_courses[:batch_limit]
+            
+            if not target_courses:
+                log("No active courses found to sync.")
+                return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
+                
+            log(f"Selected {len(target_courses)} courses to sync.")
+            
+            course_students = {}
+            student_names = {}
+            
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                futures = {ex.submit(core_api.get_students, c['id'], req_session): c['id'] for c in target_courses}
+                for f in as_completed(futures):
+                    gid = futures[f]
+                    matrics = []
+                    for s in (f.result() or []):
+                        m, n = s.get("NOMATRIK"), s.get("NAMAPELAJAR")
+                        if m:
+                            matrics.append(m)
+                            if n and n != "Unknown": student_names[m] = n
+                    course_students[gid] = matrics
+                    
+            updates_by_student = {}
+            for m, name in student_names.items(): updates_by_student[m] = {"add": [], "remove": [], "name": name}
+            
+            now_ts = int(datetime.now().timestamp())
+            course_batch = db.batch(); cb_count = 0
+            
+            for c in target_courses:
+                gid = c['id']
+                current_matrics = set(course_students.get(gid, []))
+                previous_matrics = set(c.get('enrolled_students', []))
+                
+                added = current_matrics - previous_matrics
+                removed = previous_matrics - current_matrics
+                
+                for m in added:
+                    if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
+                    updates_by_student[m]["add"].append(gid)
+                    
+                for m in removed:
+                    if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
+                    updates_by_student[m]["remove"].append(gid)
+                    
+                doc_ref = db.collection('courses').document(gid)
+                course_batch.set(doc_ref, {
+                    "enrolled_students": list(current_matrics),
+                    "last_student_sync": now_ts
+                }, merge=True)
+                cb_count += 1
+                if cb_count >= 400: course_batch.commit(); course_batch = db.batch(); cb_count = 0
+            if cb_count > 0: course_batch.commit()
+            
+            log(f"Applying updates to {len(updates_by_student)} students...")
+            
+            # Write Additions & Names
+            add_batch = db.batch(); sb_count = 0
+            for m, diff in updates_by_student.items():
+                if diff["add"] or diff.get("name"):
+                    s_ref = db.collection('students').document(m)
+                    update_data = {"semester": active_sem}
+                    if diff.get("name"): update_data["name"] = diff["name"]
+                    if diff["add"]: update_data["groups"] = firestore.ArrayUnion(diff["add"])
+                    add_batch.set(s_ref, update_data, merge=True)
+                    sb_count += 1
+                if sb_count >= 400: add_batch.commit(); add_batch = db.batch(); sb_count = 0
+            if sb_count > 0: add_batch.commit()
+            
+            # Write Removals (Dropped classes)
+            rem_batch = db.batch(); rb_count = 0
+            for m, diff in updates_by_student.items():
+                if diff["remove"]:
+                    s_ref = db.collection('students').document(m)
+                    rem_batch.set(s_ref, {"groups": firestore.ArrayRemove(diff["remove"])}, merge=True)
+                    rb_count += 1
+                if rb_count >= 400: rem_batch.commit(); rem_batch = db.batch(); rb_count = 0
+            if rb_count > 0: rem_batch.commit()
+            
+            # Rebuild Directory Cache
+            log("Rebuilding Search Directory...")
+            all_std = db.collection('students').stream()
+            d_list = [{"m": d.id, "n": d.to_dict().get('name')} for d in all_std]
+            chunks = [d_list[i:i + 4000] for i in range(0, len(d_list), 4000)]
+            dir_batch = db.batch()
+            for idx, chunk in enumerate(chunks): dir_batch.set(db.collection('system').document(f'dir_{idx}'), {'json': json.dumps(chunk)})
+            for idx in range(len(chunks), 55): dir_batch.delete(db.collection('system').document(f'dir_{idx}'))
+            dir_batch.commit()
+
+            save_sync_log("STUDENT", "SUCCESS", log_buffer, len(target_courses))
+            return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
+        except Exception as e:
+            traceback.print_exc()
+            save_sync_log("STUDENT", "ERROR", log_buffer + [str(e)], 0)
+            return Response(f"Error: {str(e)}", status=500, headers=headers)
+
+    # 12. ADMIN SYNC ACTIVITY
     elif path == '/admin_sync_activity':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
         log_buffer = []
@@ -625,26 +704,26 @@ def api_handler(path):
             cfg = get_sys_config()
             req_session = requests.Session()
             core_api.configure_session(req_session, cfg['user'], cfg['pass'])
-            curr, limit, threshold = cfg['act_start_id'], cfg['scan_limit'], cfg['empty_thresh']
-            organizers, empty_streak, ids_checked, highest_valid_id = set(), 0, 0, curr
-            with ThreadPoolExecutor(max_workers=8) as ex:
-                while empty_streak < threshold and ids_checked < limit:
-                    futures = {ex.submit(core_api.get_activity_details, i, req_session): i for i in range(curr, curr + cfg['batch_size'])}
-                    found_in_batch, batch_max = 0, 0
+            
+            curr = cfg['act_start_id']
+            limit = cfg.get('act_scan_limit', 5000)
+            highest_valid_id = curr
+            organizers = set()
+            
+            log(f"Scanning from {curr} to {curr + limit}...")
+            for i in range(curr, curr + limit, 100):
+                end = min(i + 100, curr + limit)
+                with ThreadPoolExecutor(max_workers=20) as ex:
+                    futures = {ex.submit(core_api.get_activity_details, j, req_session): j for j in range(i, end)}
                     for f in as_completed(futures):
                         if res := f.result():
                             res_id = int(res['id'])
-                            if res_id > batch_max: batch_max = res_id
                             if res.get('organizeBy'): organizers.add(res['organizeBy'])
-                            found_in_batch += 1
-                    if found_in_batch > 0:
-                        empty_streak = 0
-                        if batch_max > highest_valid_id: highest_valid_id = batch_max
-                        log(f"Found {found_in_batch} (Max: {batch_max})")
-                    else: empty_streak += cfg['batch_size']
-                    curr += cfg['batch_size']; ids_checked += cfg['batch_size']
-            new_cursor = highest_valid_id if empty_streak >= threshold else curr
-            log(f"Unique Organizers Found: {len(organizers)}")
+                            if res_id > highest_valid_id: highest_valid_id = res_id
+                            
+            new_cursor = highest_valid_id
+            log(f"Unique Organizers Found: {len(organizers)}. Next Start ID will be: {new_cursor}")
+            
             cutoff = datetime.now() - timedelta(days=30 * cfg['act_months'])
             for org_id in organizers:
                 events = core_api.get_organizer_events(org_id, req_session)
@@ -663,6 +742,7 @@ def api_handler(path):
                 name = f"Organizer {org_id}"
                 if bio: name = bio.get('NAMAPELAJAR') or bio.get('namaPelajar') or bio.get('Name') or name
                 db.collection('organizers').document(str(org_id)).set({"id": str(org_id), "name": name, "last_active": latest.isoformat(), "activities": top10})
+                
             all_orgs = db.collection('organizers').stream()
             full_dir = []
             for doc in all_orgs:
@@ -670,18 +750,20 @@ def api_handler(path):
                 acts = d.get('activities', [])
                 act_str = " | ".join([str(e.get('name', '')) for e in acts[:5] if e.get('name')]).upper()
                 full_dir.append({"m": str(d['id']), "n": d.get('name', f"Organizer {d['id']}"), "a": act_str})
+                
             c_size = 4000; chunks = [full_dir[i:i + c_size] for i in range(0, len(full_dir), c_size)]; batch = db.batch()
             for idx, chunk in enumerate(chunks): batch.set(db.collection('system').document(f'org_dir_{idx}'), {'json': json.dumps(chunk)})
             for idx in range(len(chunks), 20): batch.delete(db.collection('system').document(f'org_dir_{idx}'))
             batch.commit()
+            
             db.collection('system').document('config').set({'act_last_scanned_id': new_cursor}, merge=True)
             save_sync_log("ACTIVITY", "SUCCESS", log_buffer, len(full_dir))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
+            traceback.print_exc()
             save_sync_log("ACTIVITY", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
 
-    # 12. ORGANIZER DETAILS
     elif path == '/organizer_details':
         oid, matric = args.get('oid'), args.get('matric')
         try:
@@ -721,7 +803,6 @@ def api_handler(path):
             return Response(json.dumps(data), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
-    # 13. ADMIN DASHBOARD
     elif path == '/admin_dashboard' and request.method == 'POST':
         data = request.get_json()
         if data.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
@@ -741,6 +822,7 @@ def api_handler(path):
             ip_meta = {}
             for d in db.collection('ip_metadata').stream(): ip_meta[d.id] = d.to_dict().get('name')
             return Response(json.dumps({"config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, "sync_history": sync_hist, "ip_meta": ip_meta}), headers=headers)
+        
         elif req_type == 'save_settings':
             nu, np = data.get('user'), data.get('pass')
             if nu and np:
@@ -748,13 +830,17 @@ def api_handler(path):
                     if not core_api.validate_login(nu, np): return jsonify({"status": "Error: Invalid Credentials"})
                     db.collection('system').document('auth').set({"username": nu, "password": np})
                 else: db.collection('system').document('auth').set({"username": nu}, merge=True)
+            
             update = {}
-            if data.get('batch_size'): update.update({"batch_size": int(data['batch_size']), "empty_threshold": int(data['empty_thresh']), "scan_limit": int(data['scan_limit'])})
-            if data.get('last_scanned'): update["last_scanned_id"] = int(data['last_scanned'])
-            if data.get('act_start_id'): update["act_last_scanned_id"] = int(data['act_start_id'])
+            if data.get('scan_limit'): update["scan_limit"] = int(data['scan_limit'])
+            if data.get('last_scanned') is not None: update["last_scanned_id"] = int(data['last_scanned'])
+            if data.get('student_sync_batch'): update["student_sync_batch"] = int(data['student_sync_batch'])
+            if data.get('act_scan_limit'): update["act_scan_limit"] = int(data['act_scan_limit'])
+            if data.get('act_start_id') is not None: update["act_last_scanned_id"] = int(data['act_start_id'])
             if data.get('act_months'): update["act_time_threshold"] = int(data['act_months'])
             db.collection('system').document('config').set(update, merge=True)
             return jsonify({"status": "Settings Saved"})
+            
         elif req_type == 'delete_all_jobs':
             batch = db.batch(); count = 0
             for j in db.collection('autoscan_jobs').stream():
@@ -762,29 +848,29 @@ def api_handler(path):
                 if count >= 400: batch.commit(); batch = db.batch(); count = 0
             if count > 0: batch.commit()
             return jsonify({"status": f"Deleted {count} jobs"})
+            
         elif req_type == 'delete_single_job':
             db.collection('autoscan_jobs').document(data.get('job_id')).delete()
             return jsonify({"status": "Deleted"})
+            
         elif req_type == 'ban_ip':
             ip, act = data.get('ip'), data.get('action')
             if act == 'ban': db.collection('banned_ips').document(ip).set({"banned_at": get_malaysia_time().isoformat()})
             else: db.collection('banned_ips').document(ip).delete()
             return jsonify({"status": "ok"})
+            
         elif req_type == 'set_ip_name':
             db.collection('ip_metadata').document(data.get('ip')).set({"name": data.get('name')}, merge=True)
             return jsonify({"status": "Saved"})
         
-        # --- NEW: Delete Device Logs ---
         elif req_type == 'delete_device_logs':
             target_id = data.get('target_id')
             db.collection('banned_ips').document(target_id).delete()
             logs_ref = db.collection('system_logs')
             batch = db.batch(); cnt = 0
-            # Delete by ID
             for doc in logs_ref.where(filter=FieldFilter("device_id", "==", target_id)).stream():
                 batch.delete(doc.reference); cnt += 1
                 if cnt >= 400: batch.commit(); batch = db.batch(); cnt = 0
-            # Delete by IP
             for doc in logs_ref.where(filter=FieldFilter("ip", "==", target_id)).stream():
                 batch.delete(doc.reference); cnt += 1
                 if cnt >= 400: batch.commit(); batch = db.batch(); cnt = 0

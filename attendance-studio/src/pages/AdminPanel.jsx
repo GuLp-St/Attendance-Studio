@@ -1,3 +1,5 @@
+// --- START OF FILE AdminPanel.txt ---
+
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
@@ -12,26 +14,22 @@ export default function AdminPanel() {
   // 1. STATE MANAGEMENT
   // =========================================================================
 
-  // Authentication
   const [key, setKey] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Dashboard Data
-  const [data, setData] = useState(null); // { config, logs, jobs, banned_ips, sync_history, ip_meta }
+  const [data, setData] = useState(null); 
   const [consoleOutput, setConsoleOutput] = useState("Ready...");
 
-  // UI State
-  const [expandedIps, setExpandedIps] = useState({}); // Toggle for Network Accordion
-  const [tagModalData, setTagModalData] = useState(null); // { id, name }
+  const [expandedIps, setExpandedIps] = useState({});
+  const [tagModalData, setTagModalData] = useState(null); 
 
-  // Forms
   const [formCreds, setFormCreds] = useState({ user: '', pass: '' });
   const [formSync, setFormSync] = useState({
-    batch: 1000,
-    thresh: 500,
     limit: 5000,
     classStart: 0,
+    studentBatch: 50,
+    actLimit: 5000,
     actStart: 0,
     actMonths: 6
   });
@@ -52,12 +50,10 @@ export default function AdminPanel() {
   useEffect(() => {
     const handlePopState = (e) => {
       const state = e.state;
-      // If we popped back and state is NOT 'admin_tag', close the modal
       if (tagModalData && (!state || state.level !== 'admin_tag')) {
         setTagModalData(null);
       }
     };
-
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, [tagModalData]);
@@ -75,14 +71,13 @@ export default function AdminPanel() {
       setData(res);
       setIsAuthenticated(true);
 
-      // Initialize config inputs
       if (res.config) {
         setFormCreds({ user: res.config.user, pass: res.config.pass });
         setFormSync({
-          batch: res.config.batch_size,
-          thresh: res.config.empty_thresh,
           limit: res.config.scan_limit,
           classStart: res.config.start_id,
+          studentBatch: res.config.student_sync_batch,
+          actLimit: res.config.act_scan_limit,
           actStart: res.config.act_start_id,
           actMonths: res.config.act_months
         });
@@ -110,10 +105,10 @@ export default function AdminPanel() {
     try {
       const payload = {
         key, type: 'save_settings',
-        batch_size: formSync.batch,
-        empty_thresh: formSync.thresh,
         scan_limit: formSync.limit,
         last_scanned: formSync.classStart,
+        student_sync_batch: formSync.studentBatch,
+        act_scan_limit: formSync.actLimit,
         act_start_id: formSync.actStart,
         act_months: formSync.actMonths
       };
@@ -126,7 +121,11 @@ export default function AdminPanel() {
     if (!await confirm(`Start ${type.toUpperCase()} Sync?`)) return;
     setConsoleOutput("Initializing Sync...");
     try {
-      const endpoint = type === 'class' ? '/admin_sync_class' : '/admin_sync_activity';
+      let endpoint = '';
+      if (type === 'class') endpoint = '/admin_sync_class';
+      else if (type === 'student') endpoint = '/admin_sync_student';
+      else if (type === 'activity') endpoint = '/admin_sync_activity';
+
       const response = await fetch(`/api${endpoint}?key=${key}`);
       const text = await response.text();
       setConsoleOutput(text);
@@ -144,7 +143,6 @@ export default function AdminPanel() {
     } catch (e) { showToast(e.message, "error"); }
   };
 
-  // --- New: Delete Logs & Unban ---
   const handleDeviceDelete = async (id) => {
     if (!await confirm("Delete ALL logs & Unban this device?")) return;
     try {
@@ -186,47 +184,34 @@ export default function AdminPanel() {
     
     const groups = {};
     
-    // 1. GROUP BY DEVICE ID
     data.logs.forEach(l => {
       const key = l.device_id && l.device_id !== 'unknown' ? l.device_id : l.ip;
       
       if (!groups[key]) {
           groups[key] = { 
-              id: key, 
-              logs: [], 
-              banned: false, 
-              name: '', 
-              recentIdentity: 'Unknown User',
-              lastActive: '',
-              lastIdentityTime: '' // <--- NEW: Track time of identity assignment
+              id: key, logs: [], banned: false, name: '', 
+              recentIdentity: 'Unknown User', lastActive: '', lastIdentityTime: '' 
           };
       }
       groups[key].logs.push(l);
 
-      // Track the most recent timestamp for sorting the list order
       if (l.timestamp > groups[key].lastActive) {
           groups[key].lastActive = l.timestamp;
       }
 
-      // INTELLIGENT IDENTIFICATION (FIXED)
-      // Only update identity if this log is NEWER than what we currently have
       if (l.matric && l.matric !== 'undefined' && l.matric !== 'null') {
           if (l.timestamp > groups[key].lastIdentityTime) {
               groups[key].recentIdentity = `User: ${l.matric}`;
               groups[key].lastIdentityTime = l.timestamp;
           }
       }
-      // Fallback: If we haven't found a real user yet, verify if it's a search action
       else if (l.action === 'TARGET_SEARCH' && groups[key].recentIdentity === 'Unknown User') {
-          // Only update if this search is newer than previous search info
           if (l.timestamp > groups[key].lastIdentityTime) {
               groups[key].recentIdentity = `Searched: ${l.details}`;
-              // We don't update lastIdentityTime here strictly, so a real Login later can overwrite this easily
           }
       }
     });
 
-    // Process Bans
     data.banned_ips.forEach(ip => {
         if (!groups[ip]) {
             groups[ip] = { id: ip, logs: [], banned: true, name: '', recentIdentity: 'Banned (No Logs)', lastActive: '9999' };
@@ -234,12 +219,10 @@ export default function AdminPanel() {
         groups[ip].banned = true;
     });
 
-    // Process Nicknames
     Object.keys(data.ip_meta || {}).forEach(key => {
       if (groups[key]) groups[key].name = data.ip_meta[key];
     });
 
-    // 3. SORT BY MOST RECENT ACTIVITY
     return Object.values(groups).sort((a, b) => {
         return (b.lastActive || "").localeCompare(a.lastActive || "");
     });
@@ -288,19 +271,30 @@ export default function AdminPanel() {
         <div className="admin-title">SYNC MANAGER</div>
 
         <div className="admin-config-grid">
-          <div><label>BATCH</label><input type="number" className="t-input" value={formSync.batch} onChange={e => setFormSync({ ...formSync, batch: e.target.value })} /></div>
-          <div><label>THRESH</label><input type="number" className="t-input" value={formSync.thresh} onChange={e => setFormSync({ ...formSync, thresh: e.target.value })} /></div>
-          <div><label>LIMIT</label><input type="number" className="t-input" value={formSync.limit} onChange={e => setFormSync({ ...formSync, limit: e.target.value })} /></div>
+          <div><label>CLASS LIMIT</label><input type="number" className="t-input" value={formSync.limit} onChange={e => setFormSync({ ...formSync, limit: e.target.value })} /></div>
+          <div><label>ACT LIMIT</label><input type="number" className="t-input" value={formSync.actLimit} onChange={e => setFormSync({ ...formSync, actLimit: e.target.value })} /></div>
+          <div><label>STUDENT BATCH</label><input type="number" className="t-input" value={formSync.studentBatch} onChange={e => setFormSync({ ...formSync, studentBatch: e.target.value })} /></div>
         </div>
 
+        {/* CLASS SYNC */}
         <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
-          <div style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 'bold', marginBottom: '8px' }}>CLASS SYNC</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 'bold', marginBottom: '8px' }}>CLASS SYNC (DISCOVERY)</div>
           <div className="ctrl-row">
             <input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID" value={formSync.classStart} onChange={e => setFormSync({ ...formSync, classStart: e.target.value })} />
             <button className="btn" onClick={() => triggerSync('class')}>RUN</button>
           </div>
         </div>
 
+        {/* STUDENT SYNC */}
+        <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
+          <div style={{ fontSize: '0.7rem', color: '#0f0', fontWeight: 'bold', marginBottom: '8px' }}>STUDENT SYNC (FILL DB)</div>
+          <div className="ctrl-row">
+            <div style={{ flex: 1, color: '#888', fontSize: '0.75rem', padding: '10px 0' }}>Syncs missing students into discovered classes.</div>
+            <button className="btn" style={{ borderColor: '#0f0', color: '#0f0' }} onClick={() => triggerSync('student')}>RUN</button>
+          </div>
+        </div>
+
+        {/* ACTIVITY SYNC */}
         <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
           <div style={{ fontSize: '0.7rem', color: 'var(--accent)', fontWeight: 'bold', marginBottom: '8px' }}>ACTIVITY SYNC</div>
           <div className="ctrl-row">
@@ -323,7 +317,7 @@ export default function AdminPanel() {
             {data.sync_history?.map(h => (
               <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ color: '#888', width: '80px' }}>{h.timestamp.substring(11, 19)}</span>
-                <span style={{ color: h.type === 'CLASS' ? 'var(--primary)' : 'var(--accent)', fontWeight: 'bold' }}>{h.type}</span>
+                <span style={{ color: h.type === 'CLASS' ? 'var(--primary)' : h.type === 'STUDENT' ? '#0f0' : 'var(--accent)', fontWeight: 'bold' }}>{h.type}</span>
                 <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00' }}>{h.status} ({h.items_found})</span>
               </div>
             ))}
@@ -372,7 +366,6 @@ export default function AdminPanel() {
                     <span style={{ color, marginRight: '5px', fontSize: '1.2rem' }}>●</span>
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                       <span className="ip-addr-text">{group.id}</span>
-                      {/* Identity Display */}
                       <div style={{ fontSize: '0.7rem', color: '#888' }}>
                         {group.name ? <span style={{ color: 'var(--primary)', marginRight: '5px' }}>({group.name})</span> : null}
                         {group.recentIdentity}
@@ -381,27 +374,12 @@ export default function AdminPanel() {
                   </div>
 
                   <div className="ip-actions" onClick={e => e.stopPropagation()}>
-                    {/* Tag Button */}
-                    <button className="btn" style={{ color: '#888', padding: '4px 8px', minWidth: 'auto' }}
-                      onClick={() => openTagModal(group.id, group.name || '')}>
-                      TAG
-                    </button>
-
-                    {/* Delete Logs Button */}
-                    <button className="btn" style={{ color: '#f00', padding: '4px 8px', minWidth: 'auto' }}
-                      onClick={() => handleDeviceDelete(group.id)}>
-                      DEL
-                    </button>
-
-                    {/* Ban Button */}
-                    <button className="btn" style={{ color: color, padding: '4px 8px', minWidth: 'auto' }}
-                      onClick={() => handleIpAction(group.id, group.banned ? 'unban' : 'ban')}>
-                      {group.banned ? 'UNBAN' : 'BAN'}
-                    </button>
+                    <button className="btn" style={{ color: '#888', padding: '4px 8px', minWidth: 'auto' }} onClick={() => openTagModal(group.id, group.name || '')}>TAG</button>
+                    <button className="btn" style={{ color: '#f00', padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleDeviceDelete(group.id)}>DEL</button>
+                    <button className="btn" style={{ color: color, padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleIpAction(group.id, group.banned ? 'unban' : 'ban')}>{group.banned ? 'UNBAN' : 'BAN'}</button>
                   </div>
                 </div>
 
-                {/* Expanded Logs */}
                 {isExpanded && (
                   <div className="ip-logs" style={{ display: 'block' }}>
                     {group.logs.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No recent logs</div>}
