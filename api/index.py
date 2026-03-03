@@ -567,22 +567,34 @@ def api_handler(path):
                     count += 1
                     if count >= 400: batch.commit(); batch = db.batch(); count = 0
                 if count > 0: batch.commit()
+                
+            log("Rebuilding Search Directory...")
+            all_std = db.collection('students').stream()
+            d_list = [{"m": d.id, "n": d.to_dict().get('name')} for d in all_std]
+            chunks = [d_list[i:i + 4000] for i in range(0, len(d_list), 4000)]
+            dir_batch = db.batch()
+            for idx, chunk in enumerate(chunks): 
+                dir_batch.set(db.collection('system').document(f'dir_{idx}'), {'json': json.dumps(chunk)})
+            for idx in range(len(chunks), 55): 
+                dir_batch.delete(db.collection('system').document(f'dir_{idx}'))
+            dir_batch.commit()
 
             db.collection('system').document('config').set({'last_scanned_id': new_cursor}, merge=True)
             save_sync_log("CLASS", "SUCCESS", log_buffer, len(discovered))
+            
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
             traceback.print_exc()
             save_sync_log("CLASS", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
 
-    # 11. ADMIN SYNC STUDENT (FILL DB)
+    # 11. ADMIN SYNC STUDENT (FILL DB) - QUOTA OPTIMIZED
     elif path == '/admin_sync_student':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
         log_buffer = []
         def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
         try:
-            log("Starting Student Sync...")
+            log("Starting Student Sync (Quota Optimized)...")
             cfg = get_sys_config()
             req_session = requests.Session()
             core_api.configure_session(req_session, cfg['user'], cfg['pass'])
@@ -590,6 +602,7 @@ def api_handler(path):
             
             batch_limit = cfg.get('student_sync_batch', 50)
             
+            # READ QUOTA: Fetch only 'batch_limit' courses (e.g., 50 reads)
             courses_query = db.collection('courses').where(filter=FieldFilter("semester", "==", active_sem)).stream()
             active_courses = []
             for c in courses_query:
@@ -604,7 +617,7 @@ def api_handler(path):
                 log("No active courses found to sync.")
                 return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
                 
-            log(f"Selected {len(target_courses)} courses to sync.")
+            log(f"Selected {len(target_courses)} oldest courses to sync.")
             
             course_students = {}
             student_names = {}
@@ -627,6 +640,9 @@ def api_handler(path):
             now_ts = int(datetime.now().timestamp())
             course_batch = db.batch(); cb_count = 0
             
+            total_added_actions = 0
+            total_removed_actions = 0
+
             for c in target_courses:
                 gid = c['id']
                 current_matrics = set(course_students.get(gid, []))
@@ -638,11 +654,14 @@ def api_handler(path):
                 for m in added:
                     if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
                     updates_by_student[m]["add"].append(gid)
+                    total_added_actions += 1
                     
                 for m in removed:
                     if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
                     updates_by_student[m]["remove"].append(gid)
+                    total_removed_actions += 1
                     
+                # WRITE QUOTA: Update the course document (50 writes)
                 doc_ref = db.collection('courses').document(gid)
                 course_batch.set(doc_ref, {
                     "enrolled_students": list(current_matrics),
@@ -652,22 +671,21 @@ def api_handler(path):
                 if cb_count >= 400: course_batch.commit(); course_batch = db.batch(); cb_count = 0
             if cb_count > 0: course_batch.commit()
             
-            log(f"Applying updates to {len(updates_by_student)} students...")
+            log(f"Detected Changes -> Additions: {total_added_actions}, Drops: {total_removed_actions}")
             
-            # Write Additions & Names
+            # WRITE QUOTA: Strictly ONLY write to students who actually added a class
             add_batch = db.batch(); sb_count = 0
             for m, diff in updates_by_student.items():
-                if diff["add"] or diff.get("name"):
+                if diff["add"]:  # <- CRITICAL FIX: Only triggers if a class was actually added
                     s_ref = db.collection('students').document(m)
-                    update_data = {"semester": active_sem}
+                    update_data = {"semester": active_sem, "groups": firestore.ArrayUnion(diff["add"])}
                     if diff.get("name"): update_data["name"] = diff["name"]
-                    if diff["add"]: update_data["groups"] = firestore.ArrayUnion(diff["add"])
                     add_batch.set(s_ref, update_data, merge=True)
                     sb_count += 1
                 if sb_count >= 400: add_batch.commit(); add_batch = db.batch(); sb_count = 0
             if sb_count > 0: add_batch.commit()
             
-            # Write Removals (Dropped classes)
+            # WRITE QUOTA: Strictly ONLY write to students who dropped a class
             rem_batch = db.batch(); rb_count = 0
             for m, diff in updates_by_student.items():
                 if diff["remove"]:
@@ -677,15 +695,8 @@ def api_handler(path):
                 if rb_count >= 400: rem_batch.commit(); rem_batch = db.batch(); rb_count = 0
             if rb_count > 0: rem_batch.commit()
             
-            # Rebuild Directory Cache
-            log("Rebuilding Search Directory...")
-            all_std = db.collection('students').stream()
-            d_list = [{"m": d.id, "n": d.to_dict().get('name')} for d in all_std]
-            chunks = [d_list[i:i + 4000] for i in range(0, len(d_list), 4000)]
-            dir_batch = db.batch()
-            for idx, chunk in enumerate(chunks): dir_batch.set(db.collection('system').document(f'dir_{idx}'), {'json': json.dumps(chunk)})
-            for idx in range(len(chunks), 55): dir_batch.delete(db.collection('system').document(f'dir_{idx}'))
-            dir_batch.commit()
+            # NOTE: Directory rebuild (reading all 15k students) was removed from here.
+            # It will now ONLY run during the daily admin_sync_class to protect quotas.
 
             save_sync_log("STUDENT", "SUCCESS", log_buffer, len(target_courses))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
