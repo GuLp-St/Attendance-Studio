@@ -118,7 +118,7 @@ export default function Dashboard() {
           // LEVEL 1: Exit (Hash is empty or different)
           else {
               // If we are not in a "safe" hash (like #confirm used by ConfirmContext), logout.
-              if (hash !== '#confirm') {
+              if (hash !== '#confirm' && !hash.startsWith('#tools')) {
                   logoutRef.current();
               }
           }
