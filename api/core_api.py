@@ -114,6 +114,67 @@ def get_student_biodata(matric, s):
     return None
 
 # ==========================================
+#  MASTER TOOLS APIS
+# ==========================================
+
+def get_all_session_logs(session_id, s):
+    """Fetches attendance status for EVERY student in a specific session"""
+    try:
+        import time
+        ts = int(time.time() * 1000)
+        url = f"https://qr.unimas.my/atdcloud/api/class_attendance/{session_id}/logs?studCategory=ug&page=0&size=999&_t={ts}"
+        r = s.get(url, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except: pass
+    return []
+
+def register_course(matric, password, course_code, class_id, semester):
+    """Executes the POST request to add a course using the student's own credentials"""
+    try:
+        s = requests.Session()
+        encoded = base64.b64encode(f"{matric}:{password}".encode()).decode()
+        s.headers.update({
+            'Authorization': f'Basic {encoded}',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0'
+        })
+        
+        url = f"https://acsa2.unimas.my/courseregcloud/api/course-registration/add-course/{matric}"
+        payload = {
+            "noMatrik": matric, "sesiSemester": semester, "kodKursus": course_code,
+            "idKelas": class_id, "kumpKuliah": "G01", "tarafKursus": "P",
+            "updatedby": matric, "idLab": 0, "idTutorial": 0, "idWrkshp": 0
+        }
+        
+        r = s.post(url, json=payload, timeout=10)
+        return r.status_code, r.text
+    except Exception as e:
+        return 500, str(e)
+
+def drop_course(matric, password, course_code, class_id, semester):
+    """Executes the POST request to drop a course using the student's own credentials"""
+    try:
+        s = requests.Session()
+        encoded = base64.b64encode(f"{matric}:{password}".encode()).decode()
+        s.headers.update({
+            'Authorization': f'Basic {encoded}',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0'
+        })
+        
+        url = f"https://acsa2.unimas.my/courseregcloud/api/course-registration/drop-course/{course_code}/{matric}"
+        payload = {
+            "noMatrik": matric, "sesiSemester": semester, "kodKursus": course_code,
+            "idKelas": class_id, "updatedby": matric
+        }
+        
+        r = s.post(url, json=payload, params={"kodSesiSem": semester}, timeout=10)
+        return r.status_code, r.text
+    except Exception as e:
+        return 500, str(e)
+
+# ==========================================
 #  ACTIVITY / EVENT READS
 # ==========================================
 

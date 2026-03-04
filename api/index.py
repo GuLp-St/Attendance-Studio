@@ -4,7 +4,7 @@ import sys
 import os
 import time
 
-# 1. Fix Path for Vercel
+# Fix Path for Vercel
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, request, jsonify, Response
@@ -17,6 +17,7 @@ import json
 import requests
 import traceback
 import core_api
+import base64
 
 # ==========================================
 #  INITIALIZATION
@@ -39,10 +40,10 @@ ADMIN_SECRET_KEY = "nexus"
 FALLBACK_USER = "85699"
 FALLBACK_PASS = "Unimas!010914011427"
 FALLBACK_START_ID = 100000 
-FALLBACK_LIMIT = 2000
+FALLBACK_LIMIT = 5000
 FALLBACK_STUDENT_BATCH = 50
-FALLBACK_ACT_START = 122000
-FALLBACK_ACT_LIMIT = 2000
+FALLBACK_ACT_START = 107000
+FALLBACK_ACT_LIMIT = 5000
 FALLBACK_ACT_MONTHS = 6 
 
 # ==========================================
@@ -199,7 +200,7 @@ def api_handler(path):
         return jsonify({"error": "Access Denied"}), 403
 
     # ==========================================
-    #  ENDPOINTS
+    #  STANDARD ENDPOINTS
     # ==========================================
 
     if path == '/directory':
@@ -513,7 +514,101 @@ def api_handler(path):
             else: return jsonify({"error": "No Data"}), 404
         except Exception as e: return jsonify({"error": str(e)}), 500
 
-    # 10. ADMIN SYNC CLASS (DISCOVERY)
+    # ==========================================
+    #  TOOLS & MASTER API
+    # ==========================================
+
+    elif path == '/tools/details':
+        query, q_type = args.get('q'), args.get('t') # t = 's' (student) or 'c' (course)
+        try:
+            res = []
+            if q_type == 'c':
+                docs = db.collection('courses').where(filter=FieldFilter("code", "==", query)).stream()
+                for d in docs:
+                    data = d.to_dict()
+                    res.append({"id": d.id, "group": data.get('group'), "name": data.get('name'), "code": data.get('code'), "students": len(data.get('enrolled_students', []))})
+            elif q_type == 's':
+                student = db.collection('students').document(query).get()
+                if student.exists:
+                    s_data = student.to_dict()
+                    for gid in s_data.get('groups', []):
+                        cdoc = db.collection('courses').document(str(gid)).get()
+                        if cdoc.exists:
+                            c_data = cdoc.to_dict()
+                            res.append({"id": gid, "group": c_data.get('group'), "name": c_data.get('name'), "code": c_data.get('code'), "students": len(c_data.get('enrolled_students', []))})
+            return Response(json.dumps(res), headers=headers)
+        except Exception as e: return jsonify({"error": str(e)}), 500
+
+    elif path == '/tools/session_master':
+        sid = args.get('sid')
+        try:
+            req_s = get_authorized_session()
+            logs = core_api.get_all_session_logs(sid, req_s)
+            return Response(json.dumps(logs), headers=headers)
+        except Exception as e: return jsonify({"error": str(e)}), 500
+
+    elif path == '/tools/roster':
+        gid = args.get('gid')
+        try:
+            req_s = get_authorized_session()
+            students = core_api.get_students(gid, req_s)
+            roster = []
+            for s in students:
+                m = s.get("NOMATRIK")
+                name = s.get("NAMAPELAJAR")
+                doc = db.collection('students').document(m).get()
+                pwd = doc.to_dict().get('password', '') if doc.exists else ''
+                roster.append({"matric": m, "name": name, "password": pwd})
+            return Response(json.dumps(roster), headers=headers)
+        except Exception as e: return jsonify({"error": str(e)}), 500
+
+    elif path == '/tools/validate' and request.method == 'POST':
+        data = request.get_json()
+        m, pwd, auto_fetch, initiator = data.get('matric'), data.get('password'), data.get('auto'), data.get('initiator', 'unknown')
+        req_s = get_authorized_session()
+        
+        if auto_fetch:
+            try:
+                bio = core_api.get_student_biodata(m, req_s)
+                if bio:
+                    ic = bio.get('noKadPengenalan') or bio.get('noIc')
+                    if ic: pwd = f"Unimas!{ic}"
+            except: pass
+            
+        if not pwd: return jsonify({"valid": False})
+        
+        is_valid = core_api.validate_login(m, pwd)
+        if is_valid:
+            db.collection('students').document(m).set({"password": pwd}, merge=True)
+            log_action(client_ip, initiator, "TOOL_VALIDATE_PWD", f"Target:{m}")
+            return jsonify({"valid": True, "password": pwd})
+        return jsonify({"valid": False})
+
+    elif path == '/tools/action' and request.method == 'POST':
+        d = request.get_json()
+        action, m, pwd, code, cid, initiator = d.get('action'), d.get('matric'), d.get('password'), d.get('code'), d.get('cid'), d.get('initiator', 'unknown')
+        sem = get_sys_config().get('current_semester', '2025/2026-2')
+        
+        # LOG THE ACTION
+        log_action(client_ip, initiator, f"TOOL_MASTER_{action}", f"Target:{m} Course:{code}({cid})")
+        
+        try:
+            if action == "DROP":
+                status, resp = core_api.drop_course(m, pwd, code, cid, sem)
+            else:
+                status, resp = core_api.register_course(m, pwd, code, cid, sem)
+            
+            # TRIGGER HOURLY SYNC TO UPDATE DB
+            if status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or "error\":false" in resp.lower()):
+                db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
+                
+            return jsonify({"status": status, "response": resp})
+        except Exception as e: return jsonify({"error": str(e)}), 500
+
+    # ==========================================
+    #  ADMIN SYNC CRONS (OPTIMIZED)
+    # ==========================================
+    
     elif path == '/admin_sync_class':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
         log_buffer = []
@@ -552,43 +647,43 @@ def api_handler(path):
                                 discovered.append(res)
                                 if res_id > highest_valid_id: highest_valid_id = res_id
                                 
-            # Cursor only moves forward if we actually found something valid
-            new_cursor = highest_valid_id
-            log(f"Found {len(discovered)} active courses. Next Start ID will be: {new_cursor}")
-            
             if discovered:
                 batch = db.batch(); count = 0
                 for d in discovered:
-                    doc_ref = db.collection('courses').document(str(d['id']))
-                    batch.set(doc_ref, {
-                        "code": d['code'], "name": d['name'], 
-                        "semester": d['semester'], "group": d['group']
+                    batch.set(db.collection('courses').document(str(d['id'])), {
+                        "code": d['code'], "name": d['name'], "semester": d['semester'], "group": d['group']
                     }, merge=True)
                     count += 1
                     if count >= 400: batch.commit(); batch = db.batch(); count = 0
                 if count > 0: batch.commit()
+
+            # REBUILD UNIFIED DIRECTORY
+            log("Rebuilding Unified Search Directory (Students + Courses)...")
+            d_list = []
+            for d in db.collection('students').stream():
+                d_list.append({"m": d.id, "n": d.to_dict().get('name'), "t": "s"})
                 
-            log("Rebuilding Search Directory...")
-            all_std = db.collection('students').stream()
-            d_list = [{"m": d.id, "n": d.to_dict().get('name')} for d in all_std]
+            seen_c = set()
+            for c in db.collection('courses').stream():
+                cd = c.to_dict()
+                code = cd.get('code')
+                if code and code not in seen_c:
+                    seen_c.add(code)
+                    d_list.append({"m": code, "n": cd.get('name'), "t": "c"})
+                    
             chunks = [d_list[i:i + 4000] for i in range(0, len(d_list), 4000)]
             dir_batch = db.batch()
-            for idx, chunk in enumerate(chunks): 
-                dir_batch.set(db.collection('system').document(f'dir_{idx}'), {'json': json.dumps(chunk)})
-            for idx in range(len(chunks), 55): 
-                dir_batch.delete(db.collection('system').document(f'dir_{idx}'))
+            for idx, chunk in enumerate(chunks): dir_batch.set(db.collection('system').document(f'dir_{idx}'), {'json': json.dumps(chunk)})
+            for idx in range(len(chunks), 55): dir_batch.delete(db.collection('system').document(f'dir_{idx}'))
             dir_batch.commit()
 
-            db.collection('system').document('config').set({'last_scanned_id': new_cursor}, merge=True)
+            db.collection('system').document('config').set({'last_scanned_id': highest_valid_id}, merge=True)
             save_sync_log("CLASS", "SUCCESS", log_buffer, len(discovered))
-            
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
-            traceback.print_exc()
             save_sync_log("CLASS", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
 
-    # 11. ADMIN SYNC STUDENT (FILL DB) - QUOTA OPTIMIZED
     elif path == '/admin_sync_student':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
         log_buffer = []
@@ -599,29 +694,29 @@ def api_handler(path):
             req_session = requests.Session()
             core_api.configure_session(req_session, cfg['user'], cfg['pass'])
             active_sem = core_api.get_active_semester(req_session)
-            
             batch_limit = cfg.get('student_sync_batch', 50)
             
-            # READ QUOTA: Fetch only 'batch_limit' courses (e.g., 50 reads)
-            courses_query = db.collection('courses').where(filter=FieldFilter("semester", "==", active_sem)).stream()
-            active_courses = []
+            # THE 50-READ FIX
+            courses_query = db.collection('courses').order_by('last_student_sync').limit(batch_limit).stream()
+            
+            target_courses = []
+            now_ts = int(datetime.now().timestamp())
+            skip_batch = db.batch(); skip_count = 0
+            
             for c in courses_query:
                 d = c.to_dict(); d['id'] = c.id
-                d['last_sync'] = d.get('last_student_sync', 0)
-                active_courses.append(d)
-                
-            active_courses.sort(key=lambda x: x['last_sync'])
-            target_courses = active_courses[:batch_limit]
+                if d.get('semester') == active_sem:
+                    target_courses.append(d)
+                else:
+                    skip_batch.set(c.reference, {"last_student_sync": 9999999999}, merge=True)
+                    skip_count += 1
+            if skip_count > 0: skip_batch.commit()
             
-            if not target_courses:
-                log("No active courses found to sync.")
-                return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
-                
+            if not target_courses: return Response("No courses to sync", headers=headers)
             log(f"Selected {len(target_courses)} oldest courses to sync.")
             
             course_students = {}
             student_names = {}
-            
             with ThreadPoolExecutor(max_workers=8) as ex:
                 futures = {ex.submit(core_api.get_students, c['id'], req_session): c['id'] for c in target_courses}
                 for f in as_completed(futures):
@@ -637,75 +732,47 @@ def api_handler(path):
             updates_by_student = {}
             for m, name in student_names.items(): updates_by_student[m] = {"add": [], "remove": [], "name": name}
             
-            now_ts = int(datetime.now().timestamp())
             course_batch = db.batch(); cb_count = 0
-            
-            total_added_actions = 0
-            total_removed_actions = 0
-
             for c in target_courses:
                 gid = c['id']
                 current_matrics = set(course_students.get(gid, []))
                 previous_matrics = set(c.get('enrolled_students', []))
                 
-                added = current_matrics - previous_matrics
-                removed = previous_matrics - current_matrics
-                
-                for m in added:
+                for m in (current_matrics - previous_matrics):
                     if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
                     updates_by_student[m]["add"].append(gid)
-                    total_added_actions += 1
                     
-                for m in removed:
+                for m in (previous_matrics - current_matrics):
                     if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
                     updates_by_student[m]["remove"].append(gid)
-                    total_removed_actions += 1
                     
-                # WRITE QUOTA: Update the course document (50 writes)
-                doc_ref = db.collection('courses').document(gid)
-                course_batch.set(doc_ref, {
-                    "enrolled_students": list(current_matrics),
-                    "last_student_sync": now_ts
-                }, merge=True)
+                course_batch.set(db.collection('courses').document(gid), {"enrolled_students": list(current_matrics), "last_student_sync": now_ts}, merge=True)
                 cb_count += 1
                 if cb_count >= 400: course_batch.commit(); course_batch = db.batch(); cb_count = 0
             if cb_count > 0: course_batch.commit()
             
-            log(f"Detected Changes -> Additions: {total_added_actions}, Drops: {total_removed_actions}")
-            
-            # WRITE QUOTA: Strictly ONLY write to students who actually added a class
             add_batch = db.batch(); sb_count = 0
             for m, diff in updates_by_student.items():
-                if diff["add"]:  # <- CRITICAL FIX: Only triggers if a class was actually added
-                    s_ref = db.collection('students').document(m)
-                    update_data = {"semester": active_sem, "groups": firestore.ArrayUnion(diff["add"])}
-                    if diff.get("name"): update_data["name"] = diff["name"]
-                    add_batch.set(s_ref, update_data, merge=True)
+                if diff["add"]: 
+                    add_batch.set(db.collection('students').document(m), {"semester": active_sem, "name": diff.get("name", ""), "groups": firestore.ArrayUnion(diff["add"])}, merge=True)
                     sb_count += 1
                 if sb_count >= 400: add_batch.commit(); add_batch = db.batch(); sb_count = 0
             if sb_count > 0: add_batch.commit()
             
-            # WRITE QUOTA: Strictly ONLY write to students who dropped a class
             rem_batch = db.batch(); rb_count = 0
             for m, diff in updates_by_student.items():
                 if diff["remove"]:
-                    s_ref = db.collection('students').document(m)
-                    rem_batch.set(s_ref, {"groups": firestore.ArrayRemove(diff["remove"])}, merge=True)
+                    rem_batch.set(db.collection('students').document(m), {"groups": firestore.ArrayRemove(diff["remove"])}, merge=True)
                     rb_count += 1
                 if rb_count >= 400: rem_batch.commit(); rem_batch = db.batch(); rb_count = 0
             if rb_count > 0: rem_batch.commit()
-            
-            # NOTE: Directory rebuild (reading all 15k students) was removed from here.
-            # It will now ONLY run during the daily admin_sync_class to protect quotas.
 
             save_sync_log("STUDENT", "SUCCESS", log_buffer, len(target_courses))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
-            traceback.print_exc()
             save_sync_log("STUDENT", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
 
-    # 12. ADMIN SYNC ACTIVITY
     elif path == '/admin_sync_activity':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
         log_buffer = []
@@ -721,7 +788,6 @@ def api_handler(path):
             highest_valid_id = curr
             organizers = set()
             
-            log(f"Scanning from {curr} to {curr + limit}...")
             for i in range(curr, curr + limit, 100):
                 end = min(i + 100, curr + limit)
                 with ThreadPoolExecutor(max_workers=20) as ex:
@@ -732,9 +798,6 @@ def api_handler(path):
                             if res.get('organizeBy'): organizers.add(res['organizeBy'])
                             if res_id > highest_valid_id: highest_valid_id = res_id
                             
-            new_cursor = highest_valid_id
-            log(f"Unique Organizers Found: {len(organizers)}. Next Start ID will be: {new_cursor}")
-            
             cutoff = datetime.now() - timedelta(days=30 * cfg['act_months'])
             for org_id in organizers:
                 events = core_api.get_organizer_events(org_id, req_session)
@@ -767,11 +830,10 @@ def api_handler(path):
             for idx in range(len(chunks), 20): batch.delete(db.collection('system').document(f'org_dir_{idx}'))
             batch.commit()
             
-            db.collection('system').document('config').set({'act_last_scanned_id': new_cursor}, merge=True)
+            db.collection('system').document('config').set({'act_last_scanned_id': highest_valid_id}, merge=True)
             save_sync_log("ACTIVITY", "SUCCESS", log_buffer, len(full_dir))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
-            traceback.print_exc()
             save_sync_log("ACTIVITY", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
 
