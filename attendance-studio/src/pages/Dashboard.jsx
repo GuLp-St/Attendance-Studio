@@ -5,6 +5,7 @@ import { useConfirm } from '../contexts/ConfirmContext';
 import { api } from '../services/api';
 import Modal from '../components/Modal';
 import OrgSearchModal from '../components/DashboardModals/OrgSearchModal';
+import ToolsModal from '../components/DashboardModals/ToolsModal';
 
 // UI Components
 import { 
@@ -547,6 +548,9 @@ export default function Dashboard() {
           onSubmit={handleExemptSubmit} 
       />
 
+      {/* --- 9. MASTER TOOLS --- */}
+      <ToolsModal user={user} />
+      
     </div>
   );
 }

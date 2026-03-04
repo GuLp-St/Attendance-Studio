@@ -66,6 +66,7 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLoadProfi
                 </button>
 
                 <button className="target-btn" onClick={onTarget}>TARGET</button>
+                <button className="target-btn" style={{ borderColor: '#0f0', color: '#0f0' }} onClick={() => window.location.hash = '#tools'}>TOOLS</button>
                 <button className="back-btn" onClick={onLogout}>LOGOUT</button>
             </div>
         </div>
