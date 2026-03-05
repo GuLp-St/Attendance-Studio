@@ -91,3 +91,22 @@ export const api = {
     return res.json();
   }
 };
+
+// --- GLOBAL DICTIONARY CACHE ---
+let _directoryCache = null;
+let _directoryPromise = null;
+
+export const getDirectory = (force = false) => {
+  if (_directoryCache && !force) return Promise.resolve(_directoryCache);
+  if (_directoryPromise && !force) return _directoryPromise;
+  
+  _directoryPromise = api.get('/directory?type=student').then(res => {
+      _directoryCache = res;
+      _directoryPromise = null;
+      return res;
+  }).catch(() => {
+      _directoryPromise = null;
+      return [];
+  });
+  return _directoryPromise;
+};

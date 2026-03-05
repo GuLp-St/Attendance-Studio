@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Modal from '../Modal';
 import Skeleton from '../Skeleton';
-import { api } from '../../services/api';
+import { api, getDirectory } from '../../services/api';
 import { useToast } from '../../contexts/ToastContext';
 
 export default function ToolsModal({ user }) {
@@ -29,18 +29,18 @@ export default function ToolsModal({ user }) {
     
     const [isFetching, setIsFetching] = useState(false);
     const [actionLoading, setActionLoading] = useState(false);
+    const [attendanceLoadingId, setAttendanceLoadingId] = useState(null); // specific row loader
     const [fetchProgress, setFetchProgress] = useState('');
     const fetchAbort = useRef(false);
 
     // Self Prompts
     const [selfPwdPrompt, setSelfPwdPrompt] = useState('');
     const [showSelfPrompt, setShowSelfPrompt] = useState(false);
-    const [selfPwdTested, setSelfPwdTested] = useState(false); // Tracks if self pwd is valid
+    const [selfPwdTested, setSelfPwdTested] = useState(false);
     const [localUserGroups, setLocalUserGroups] = useState([]); 
     
     const [exemptTarget, setExemptTarget] = useState(null); 
     const [exemptReason, setExemptReason] = useState('');
-    const [sessionTab, setSessionTab] = useState('present');
 
     useEffect(() => {
         if (user?.courses) setLocalUserGroups(user.courses.map(c => String(c.gid)));
@@ -66,9 +66,10 @@ export default function ToolsModal({ user }) {
 
     const navTo = (hashLevel) => { window.location.hash = hashLevel; };
 
+    // Fetch master directory instantly
     useEffect(() => {
-        if (view === 'search' && directory.length === 0) {
-            api.get('/directory?type=student').then(setDirectory).catch(()=>{});
+        if (view === 'search') {
+            getDirectory().then(setDirectory).catch(()=>{});
         }
     }, [view]);
 
@@ -96,7 +97,7 @@ export default function ToolsModal({ user }) {
     const selectGroup = async (g) => {
         setActiveGroup(g);
         setHubSessions(null);
-        setGroupTimetable('Loading...');
+        setGroupTimetable('Loading timetable...');
         setRoster(null); 
         setShowSelfPrompt(false);
         navTo('#tools/hub');
@@ -107,25 +108,22 @@ export default function ToolsModal({ user }) {
         } catch(e) {}
     };
 
-    // --- SELF PASSWORD TESTER ---
+    // --- SELF TEST & ACTION LOGIC ---
     const handleSelfTest = async () => {
         if (!selfPwdPrompt) return;
         setActionLoading(true);
         try {
             const res = await api.post('/tools/validate', { matric: user.matric, password: selfPwdPrompt, auto: false, initiator: user.matric });
             if (res.valid) {
-                showToast("Password Valid & Saved!", "success");
+                showToast("Password Valid!", "success");
                 setSelfPwdTested(true);
             } else {
                 showToast("Invalid Password", "error");
             }
-        } catch (e) {
-            showToast("Test Failed", "error");
-        }
+        } catch (e) { showToast("Test Failed", "error"); }
         setActionLoading(false);
     };
 
-    // --- AUTO PASSWORD SELF ACTION ---
     const handleSelfAction = async (action, submitPwd = false) => {
         const pwdToUse = submitPwd ? selfPwdPrompt : "";
         setActionLoading(true);
@@ -146,6 +144,10 @@ export default function ToolsModal({ user }) {
             if (res.status === 200 && res.response.includes('error":false')) {
                 showToast(`${action} Successful`, "success");
                 setShowSelfPrompt(false);
+                
+                // Force global directory to refresh in background
+                getDirectory(true).then(setDirectory);
+                
                 if (action === 'ADD') {
                     setLocalUserGroups(prev => [...prev, String(activeGroup.id)]);
                     setActiveGroup(prev => ({...prev, students: (prev.students || 0) + 1}));
@@ -154,17 +156,17 @@ export default function ToolsModal({ user }) {
                     setActiveGroup(prev => ({...prev, students: Math.max(0, (prev.students || 1) - 1)}));
                 }
             } else {
-                // CLEAN ERROR PARSING
                 try {
                     const errorJson = JSON.parse(res.response);
                     showToast(errorJson.message || "Action Failed", "error");
-                } catch {
-                    showToast("Action Failed: Server Error", "error");
-                }
+                } catch { showToast("Action Failed", "error"); }
             }
         } catch(e) { showToast(e.message, "error"); }
         setActionLoading(false);
     };
+
+    // --- SESSION LOGIC ---
+    const [sessionTab, setSessionTab] = useState('present');
 
     const loadSession = async (session) => {
         setActiveSession(session);
@@ -179,13 +181,11 @@ export default function ToolsModal({ user }) {
             let currentRoster = roster;
             if (!currentRoster) {
                 currentRoster = await api.get(`/tools/roster?gid=${activeGroup.id}`);
-                if (!Array.isArray(currentRoster)) currentRoster = []; // Safety check
+                if (!Array.isArray(currentRoster)) currentRoster = [];
                 setRoster(currentRoster);
             }
             
             const logs = await api.get(`/tools/session_master?sid=${sid}`);
-            
-            // Safety check for empty API responses
             if (!Array.isArray(logs)) {
                 showToast("Logs unavailable", "error");
                 setMasterLogs({ present: [], absent: currentRoster || [] });
@@ -194,7 +194,6 @@ export default function ToolsModal({ user }) {
             
             const present = [];
             const absent = [];
-            
             (currentRoster || []).forEach(student => {
                 const log = logs.find(l => l.matricNo === student.matric);
                 if (log && (log.status === 'P' || log.status === 'M' || log.status === 'L')) {
@@ -205,22 +204,24 @@ export default function ToolsModal({ user }) {
             });
             setMasterLogs({ present, absent });
         } catch(e) { 
-            showToast("Failed to load session data", "error"); 
             setMasterLogs({ present: [], absent: [] });
         }
     };
 
     const handleAttendanceAction = async (type, targetMatric, targetLogId, reason = '') => {
+        setAttendanceLoadingId(targetMatric);
         try {
             setExemptTarget(null); 
             await api.post('/action', { 
                 type, matric: targetMatric, sid: activeSession.id, lid: targetLogId, gid: activeGroup.id, remark: reason 
             });
             showToast("Success", "success");
-            refreshSessionData(activeSession.id);
+            await refreshSessionData(activeSession.id);
         } catch(e) { showToast(e.message, "error"); }
+        setAttendanceLoadingId(null);
     };
 
+    // --- ROSTER LOGIC ---
     const loadRoster = async () => {
         navTo('#tools/roster');
         if (!roster) {
@@ -286,16 +287,14 @@ export default function ToolsModal({ user }) {
                 showToast("Dropped", "success");
                 setRoster(prev => prev.filter(s => s.matric !== matric));
                 setActiveGroup(prev => ({...prev, students: Math.max(0, (prev.students || 1) - 1)}));
+                getDirectory(true).then(setDirectory); // Update background directory
             } else {
-                // CLEAN ERROR PARSING
                 try {
-                    const errorJson = JSON.parse(res.response);
-                    showToast(errorJson.message || "Drop Failed", "error");
-                } catch {
-                    showToast("Drop Failed: Server Error", "error");
-                }
+                    const err = JSON.parse(res.response);
+                    showToast(err.message || "Drop Failed", "error");
+                } catch { showToast("Drop Failed", "error"); }
             }
-        } catch(e) { showToast("Failed", "error"); }
+        } catch(e) { showToast("Error", "error"); }
         setActionLoading(false);
     };
 
@@ -306,14 +305,14 @@ export default function ToolsModal({ user }) {
         <Modal title="MASTER TOOLS" isOpen={!!view} onClose={() => window.history.back()} maxWidth="450px">
             
             {view === 'search' && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: '20px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: '10px' }}>
                     <div style={{width: '100%', maxWidth: '350px', position: 'relative', marginTop: '10px'}}>
                         <input type="text" className="t-input" placeholder="SEARCH DATABASE..." 
                             value={searchQuery} onChange={(e) => handleSearch(e.target.value)} 
                             style={{width: '100%', padding: '12px', textAlign: 'center', background: '#000'}}/>
                         
                         {searchResults.length > 0 && (
-                            <div className="results-list" style={{ display: 'block', maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--grid-line)', position: 'relative', marginTop: '10px' }}>
+                            <div className="results-list" style={{ display: 'block', maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--grid-line)', position: 'relative', marginTop: '5px' }}>
                                 {searchResults.map(u => (
                                     <div key={u.m} className="result-item" onClick={() => selectSearchItem(u)}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
@@ -353,7 +352,7 @@ export default function ToolsModal({ user }) {
                     <div className="tools-hub-header">
                         <div className="hub-title">{activeGroup.code} {activeGroup.group}</div>
                         <div className="hub-meta">{activeGroup.name} | ID: {activeGroup.id}</div>
-                        <div style={{fontSize: '0.7rem', color: '#888', marginBottom: '15px'}}>{groupTimetable}</div>
+                        <div style={{fontSize: '0.7rem', color: '#888', marginBottom: '15px', textTransform:'uppercase'}}>{groupTimetable}</div>
                         
                         {!showSelfPrompt ? (
                             <div style={{display:'flex', gap:'10px', justifyContent:'center'}}>
@@ -377,7 +376,7 @@ export default function ToolsModal({ user }) {
                                     </button>
                                 ) : (
                                     <button className="btn" disabled={actionLoading} style={{borderColor: showSelfPrompt==='DROP'?'#f00':'#0f0', padding: '4px 10px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction(showSelfPrompt, true)}>
-                                        {showSelfPrompt}
+                                        {actionLoading ? '...' : showSelfPrompt}
                                     </button>
                                 )}
                                 
@@ -438,12 +437,20 @@ export default function ToolsModal({ user }) {
                                     </div>
                                     <div className="master-actions">
                                         {sessionTab === 'present' ? (
-                                            <button className="btn" style={{borderColor:'#f00', color:'#f00', padding:'4px 8px'}} onClick={() => handleAttendanceAction('delete', s.matric, s.log_id)}>DEL</button>
+                                            <button className="btn" disabled={attendanceLoadingId === s.matric} style={{borderColor:'#f00', color:'#f00', padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('delete', s.matric, s.log_id)}>
+                                                {attendanceLoadingId === s.matric ? 'WAIT' : 'DEL'}
+                                            </button>
                                         ) : (
                                             <>
-                                                <button className="btn" style={{borderColor:'var(--primary)', color:'var(--primary)', padding:'4px 8px'}} onClick={() => handleAttendanceAction('scan', s.matric, null)}>SCAN</button>
-                                                <button className="btn" style={{padding:'4px 8px'}} onClick={() => handleAttendanceAction('manual', s.matric, null)}>MAN</button>
-                                                <button className="btn" style={{borderColor:'var(--accent)', color:'var(--accent)', padding:'4px 8px'}} onClick={() => { setExemptTarget(s); setExemptReason(''); }}>EXM</button>
+                                                <button className="btn" disabled={attendanceLoadingId === s.matric} style={{borderColor:'var(--primary)', color:'var(--primary)', padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('scan', s.matric, null)}>
+                                                    {attendanceLoadingId === s.matric ? '...' : 'SCAN'}
+                                                </button>
+                                                <button className="btn" disabled={attendanceLoadingId === s.matric} style={{padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('manual', s.matric, null)}>
+                                                    {attendanceLoadingId === s.matric ? '...' : 'MAN'}
+                                                </button>
+                                                <button className="btn" disabled={attendanceLoadingId === s.matric} style={{borderColor:'var(--accent)', color:'var(--accent)', padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => { setExemptTarget(s); setExemptReason(''); }}>
+                                                    {attendanceLoadingId === s.matric ? '...' : 'EXM'}
+                                                </button>
                                             </>
                                         )}
                                     </div>
@@ -485,7 +492,7 @@ export default function ToolsModal({ user }) {
                                                 </button>
                                             ) : (
                                                 <button className="btn" disabled={actionLoading} style={{borderColor: s.password === 'Unknown' ? '#555' : 'var(--accent)', color: s.password === 'Unknown' ? '#555' : 'var(--accent)', padding:'3px 8px', opacity: actionLoading ? 0.5 : 1}} onClick={() => testPassword(s.matric, s.password)}>
-                                                    {s.password === 'Unknown' ? 'SKIP' : (actionLoading ? '...' : 'TEST')}
+                                                    {s.password === 'Unknown' ? 'SKIP' : (actionLoading ? 'WAIT' : 'TEST')}
                                                 </button>
                                             )}
                                         </div>

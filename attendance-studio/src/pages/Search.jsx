@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import { getDirectory } from '../services/api';
 import Modal from '../components/Modal';
 import AdminPanel from './AdminPanel';
 
@@ -59,7 +60,9 @@ export default function Search() {
   // 2. SEARCH LOGIC (Unchanged)
   // =========================================================================
   
-  useEffect(() => { api.get('/directory?type=student').then(setDirectory).catch(() => {}); }, []);
+  useEffect(() => { 
+      getDirectory().then(setDirectory); 
+  }, []);
 
   const handleSearch = (val) => {
     setQuery(val);

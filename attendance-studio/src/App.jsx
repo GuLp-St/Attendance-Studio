@@ -5,6 +5,8 @@ import { useAuth } from './contexts/AuthContext';
 
 function App() {
   const { user, loading } = useAuth();
+  
+  useEffect(() => { getDirectory(); }, []); 
 
   return (
     <div className="container">

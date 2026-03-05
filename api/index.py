@@ -56,28 +56,45 @@ def get_malaysia_time():
 def get_sys_config():
     try:
         conf_doc = db.collection('system').document('config').get()
-        auth_doc = db.collection('system').document('auth').get()
         conf = conf_doc.to_dict() if conf_doc.exists else {}
-        auth = auth_doc.to_dict() if auth_doc.exists else {}
     except:
-        conf, auth = {}, {}
+        conf = {}
     
     return {
-        "user": auth.get("username", FALLBACK_USER),
-        "pass": auth.get("password", FALLBACK_PASS),
-        "start_id": int(conf.get("last_scanned_id", FALLBACK_START_ID)),
-        "scan_limit": int(conf.get("scan_limit", FALLBACK_LIMIT)),
-        "student_sync_batch": int(conf.get("student_sync_batch", FALLBACK_STUDENT_BATCH)),
+        "start_id": int(conf.get("last_scanned_id", 100000)),
+        "scan_limit": int(conf.get("scan_limit", 5000)),
+        "student_sync_batch": int(conf.get("student_sync_batch", 50)),
         "current_semester": conf.get("current_semester", ""),
-        "act_start_id": int(conf.get("act_last_scanned_id", FALLBACK_ACT_START)),
-        "act_scan_limit": int(conf.get("act_scan_limit", FALLBACK_ACT_LIMIT)),
-        "act_months": int(conf.get("act_time_threshold", FALLBACK_ACT_MONTHS))
+        "act_start_id": int(conf.get("act_last_scanned_id", 107000)),
+        "act_scan_limit": int(conf.get("act_scan_limit", 5000)),
+        "act_months": int(conf.get("act_time_threshold", 6)),
+        "priority_courses": conf.get("priority_courses", []), 
+        "system_matric": conf.get("system_matric", "")
     }
-
+    
 def get_authorized_session():
     cfg = get_sys_config()
+    sys_m = cfg.get("system_matric")
+    pwd = None
+    
+    if sys_m:
+        doc = db.collection('students').document(sys_m).get()
+        if doc.exists: pwd = doc.to_dict().get('password')
+        
+    if not pwd or pwd == "Unknown":
+        docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(20).stream()
+        for d in docs:
+            p = d.to_dict().get('password')
+            if p and p != "Unknown":
+                sys_m = d.id
+                pwd = p
+                break
+                
+    if not sys_m or not pwd:
+        raise Exception("CRITICAL: No valid system credentials found in database. The system needs at least one student password saved.")
+        
     s = requests.Session()
-    core_api.configure_session(s, cfg['user'], cfg['pass'])
+    core_api.configure_session(s, sys_m, pwd)
     return s
 
 def get_client_ip():
@@ -735,28 +752,47 @@ def api_handler(path):
             log("Starting Student Sync (Quota Optimized)...")
             cfg = get_sys_config()
             req_session = requests.Session()
-            core_api.configure_session(req_session, cfg['user'], cfg['pass'])
+            core_api.configure_session(req_session, cfg['system_matric'] or '85699', 'dummy') # Triggers auto-auth inside core_api
+            req_session = get_authorized_session() # Overwrite with real auth
+            
             active_sem = core_api.get_active_semester(req_session)
             batch_limit = cfg.get('student_sync_batch', 50)
             
-            # THE 50-READ FIX
-            courses_query = db.collection('courses').order_by('last_student_sync').limit(batch_limit).stream()
-            
             target_courses = []
-            now_ts = int(datetime.now().timestamp())
-            skip_batch = db.batch(); skip_count = 0
+            seen_gids = set()
             
-            for c in courses_query:
-                d = c.to_dict(); d['id'] = c.id
-                if d.get('semester') == active_sem:
-                    target_courses.append(d)
-                else:
-                    skip_batch.set(c.reference, {"last_student_sync": 9999999999}, merge=True)
-                    skip_count += 1
-            if skip_count > 0: skip_batch.commit()
+            # --- PRIORITY COURSES FETCH ---
+            priority_codes = cfg.get('priority_courses', [])
+            if priority_codes:
+                log(f"Processing {len(priority_codes)} Priority Courses...")
+                for code in priority_codes:
+                    docs = db.collection('courses').where(filter=FieldFilter("code", "==", code)).where(filter=FieldFilter("semester", "==", active_sem)).stream()
+                    for c in docs:
+                        d = c.to_dict(); d['id'] = c.id
+                        target_courses.append(d)
+                        seen_gids.add(c.id)
+            
+            # --- NORMAL FETCH TO FILL QUOTA ---
+            rem_limit = batch_limit - len(target_courses)
+            if rem_limit > 0:
+                courses_query = db.collection('courses').order_by('last_student_sync').limit(batch_limit + len(target_courses)).stream()
+                skip_batch = db.batch(); skip_count = 0
+                
+                for c in courses_query:
+                    if rem_limit <= 0: break
+                    if c.id in seen_gids: continue
+                    d = c.to_dict(); d['id'] = c.id
+                    if d.get('semester') == active_sem:
+                        target_courses.append(d)
+                        seen_gids.add(c.id)
+                        rem_limit -= 1
+                    else:
+                        skip_batch.set(c.reference, {"last_student_sync": 9999999999}, merge=True)
+                        skip_count += 1
+                if skip_count > 0: skip_batch.commit()
             
             if not target_courses: return Response("No courses to sync", headers=headers)
-            log(f"Selected {len(target_courses)} oldest courses to sync.")
+            log(f"Selected {len(target_courses)} total courses to sync.")
             
             course_students = {}
             student_names = {}
@@ -775,6 +811,7 @@ def api_handler(path):
             updates_by_student = {}
             for m, name in student_names.items(): updates_by_student[m] = {"add": [], "remove": [], "name": name}
             
+            now_ts = int(datetime.now().timestamp())
             course_batch = db.batch(); cb_count = 0
             for c in target_courses:
                 gid = c['id']
@@ -813,6 +850,7 @@ def api_handler(path):
             save_sync_log("STUDENT", "SUCCESS", log_buffer, len(target_courses))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
+            traceback.print_exc()
             save_sync_log("STUDENT", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
 
@@ -940,13 +978,6 @@ def api_handler(path):
             return Response(json.dumps({"config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, "sync_history": sync_hist, "ip_meta": ip_meta}), headers=headers)
         
         elif req_type == 'save_settings':
-            nu, np = data.get('user'), data.get('pass')
-            if nu and np:
-                if np != "******":
-                    if not core_api.validate_login(nu, np): return jsonify({"status": "Error: Invalid Credentials"})
-                    db.collection('system').document('auth').set({"username": nu, "password": np})
-                else: db.collection('system').document('auth').set({"username": nu}, merge=True)
-            
             update = {}
             if data.get('scan_limit'): update["scan_limit"] = int(data['scan_limit'])
             if data.get('last_scanned') is not None: update["last_scanned_id"] = int(data['last_scanned'])
@@ -954,6 +985,11 @@ def api_handler(path):
             if data.get('act_scan_limit'): update["act_scan_limit"] = int(data['act_scan_limit'])
             if data.get('act_start_id') is not None: update["act_last_scanned_id"] = int(data['act_start_id'])
             if data.get('act_months'): update["act_time_threshold"] = int(data['act_months'])
+            
+            # NEW: Save Priority Courses and System Account
+            if 'priority_courses' in data: update["priority_courses"] = data['priority_courses']
+            if 'system_matric' in data: update["system_matric"] = data['system_matric']
+            
             db.collection('system').document('config').set(update, merge=True)
             return jsonify({"status": "Settings Saved"})
             
