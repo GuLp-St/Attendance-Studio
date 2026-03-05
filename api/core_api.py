@@ -129,7 +129,7 @@ def get_all_session_logs(session_id, s):
     except: pass
     return []
 
-def register_course(matric, password, course_code, class_id, semester):
+def register_course(matric, password, course_code, class_id, semester, group_name="G01", taraf="P"):
     """Executes the POST request to add a course using the student's own credentials"""
     try:
         s = requests.Session()
@@ -141,9 +141,10 @@ def register_course(matric, password, course_code, class_id, semester):
         })
         
         url = f"https://acsa2.unimas.my/courseregcloud/api/course-registration/add-course/{matric}"
+        
         payload = {
             "noMatrik": matric, "sesiSemester": semester, "kodKursus": course_code,
-            "idKelas": class_id, "kumpKuliah": "G01", "tarafKursus": "P",
+            "idKelas": class_id, "kumpKuliah": group_name, "tarafKursus": taraf,
             "updatedby": matric, "idLab": 0, "idTutorial": 0, "idWrkshp": 0
         }
         

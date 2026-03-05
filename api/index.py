@@ -307,8 +307,15 @@ def api_handler(path):
                     sc = ld.get('status')
                     st = "Present (Scan)" if sc == 'P' else "Present (Manual)" if sc == 'M' else "Exempted" if sc == 'L' else sc
                     lid = ld.get('id')
+                
+                # --- NEW DATE FORMATTING LOGIC ---
+                try:
+                    date_str = datetime.fromtimestamp(s['eventDate']/1000).strftime('%Y-%m-%d')
+                except:
+                    date_str = str(s['eventDate'])
+
                 c_sess.append({
-                    "id": s['id'], "date": s['eventDate'], "start": s['startTime'], "end": s.get('endTime', ''),
+                    "id": s['id'], "date": date_str, "start": s['startTime'], "end": s.get('endTime', ''),
                     "location": s.get('venue') or s.get('location') or "Unknown Venue",
                     "name": s.get('topic') or s.get('description') or "", 
                     "status": st, "log_id": lid
@@ -553,12 +560,19 @@ def api_handler(path):
             req_s = get_authorized_session()
             students = core_api.get_students(gid, req_s)
             roster = []
+            
+            # --- SUPER FAST FIREBASE BATCH READ ---
+            matrics = [s.get("NOMATRIK") for s in students if s.get("NOMATRIK")]
+            refs = [db.collection('students').document(m) for m in matrics]
+            docs = db.get_all(refs) if refs else []
+            pwd_map = {d.id: d.to_dict().get('password', '') for d in docs if d.exists}
+            
             for s in students:
                 m = s.get("NOMATRIK")
-                name = s.get("NAMAPELAJAR")
-                doc = db.collection('students').document(m).get()
-                pwd = doc.to_dict().get('password', '') if doc.exists else ''
-                roster.append({"matric": m, "name": name, "password": pwd})
+                pwd = pwd_map.get(m, '')
+                # If password exists, mark as valid automatically
+                roster.append({"matric": m, "name": s.get("NAMAPELAJAR"), "password": pwd, "valid": bool(pwd)})
+            
             return Response(json.dumps(roster), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -586,24 +600,45 @@ def api_handler(path):
 
     elif path == '/tools/action' and request.method == 'POST':
         d = request.get_json()
-        action, m, pwd, code, cid, initiator = d.get('action'), d.get('matric'), d.get('password'), d.get('code'), d.get('cid'), d.get('initiator', 'unknown')
+        action = d.get('action')
+        m = d.get('matric')
+        pwd = d.get('password')
+        code = d.get('code')
+        cid = d.get('cid')
+        group_name = d.get('group_name', 'G01') # <-- CATCH THE GROUP NAME (Default to G01 if missing)
         sem = get_sys_config().get('current_semester', '2025/2026-2')
         
-        # LOG THE ACTION
-        log_action(client_ip, initiator, f"TOOL_MASTER_{action}", f"Target:{m} Course:{code}({cid})")
-        
         try:
+            if not pwd:
+                doc = db.collection('students').document(m).get()
+                pwd = doc.to_dict().get('password') if doc.exists else None
+            
+            if not pwd:
+                return jsonify({"needs_password": True})
+
             if action == "DROP":
                 status, resp = core_api.drop_course(m, pwd, code, cid, sem)
+                if status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or "error\":false" in resp.lower()):
+                    db.collection('students').document(m).set({"groups": firestore.ArrayRemove([cid])}, merge=True)
             else:
-                status, resp = core_api.register_course(m, pwd, code, cid, sem)
-            
-            # TRIGGER HOURLY SYNC TO UPDATE DB
-            if status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or "error\":false" in resp.lower()):
-                db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
+                status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "P")
+                if "error\":true" in resp.lower() or "taraf" in resp.lower() or "syarat" in resp.lower():
+                    status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "T")
                 
+                if status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or "error\":false" in resp.lower()):
+                    db.collection('students').document(m).set({"groups": firestore.ArrayUnion([cid])}, merge=True)
+            
             return jsonify({"status": status, "response": resp})
         except Exception as e: return jsonify({"error": str(e)}), 500
+        
+    elif path == '/tools/timetable':
+        gid = args.get('gid')
+        try:
+            req_s = get_authorized_session()
+            slots = core_api.get_timetable(gid, req_s)
+            tt_str = " | ".join([f"{s.get('KETERANGAN_HARI')} {s.get('MASA_MULA')}-{s.get('MASA_TAMAT')}" for s in slots]) if slots else "No Timetable"
+            return Response(json.dumps({"timetable": tt_str}), headers=headers)
+        except: return Response(json.dumps({"timetable": "No Timetable"}), headers=headers)
 
     # ==========================================
     #  ADMIN SYNC CRONS (OPTIMIZED)

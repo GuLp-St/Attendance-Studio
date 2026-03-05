@@ -9,10 +9,8 @@ import { useToast } from '../../contexts/ToastContext';
 export default function ToolsModal({ user }) {
     const { showToast } = useToast();
 
-    // State Navigation
     const [view, setView] = useState(null); 
     
-    // Data State
     const [directory, setDirectory] = useState([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
@@ -22,26 +20,22 @@ export default function ToolsModal({ user }) {
     
     const [activeGroup, setActiveGroup] = useState(null); 
     const [hubSessions, setHubSessions] = useState(null);
+    const [groupTimetable, setGroupTimetable] = useState('');
     
     const [activeSession, setActiveSession] = useState(null);
     const [masterLogs, setMasterLogs] = useState(null); 
     
     const [roster, setRoster] = useState(null); 
     
-    // Auto-Fetch State
     const [isFetching, setIsFetching] = useState(false);
     const [fetchProgress, setFetchProgress] = useState('');
     const fetchAbort = useRef(false);
 
-    // Prompts
     const [selfPwdPrompt, setSelfPwdPrompt] = useState('');
     const [showSelfPrompt, setShowSelfPrompt] = useState(false);
     const [exemptTarget, setExemptTarget] = useState(null); 
     const [exemptReason, setExemptReason] = useState('');
 
-    // ===================================================================
-    // 1. HASH ROUTING
-    // ===================================================================
     useEffect(() => {
         const handleHash = () => {
             const h = window.location.hash;
@@ -62,9 +56,6 @@ export default function ToolsModal({ user }) {
 
     const navTo = (hashLevel) => { window.location.hash = hashLevel; };
 
-    // ===================================================================
-    // 2. VIEW: SEARCH
-    // ===================================================================
     useEffect(() => {
         if (view === 'search' && directory.length === 0) {
             api.get('/directory?type=student').then(setDirectory).catch(()=>{});
@@ -92,42 +83,44 @@ export default function ToolsModal({ user }) {
         } catch(e) { showToast("Failed to fetch groups", "error"); }
     };
 
-    // ===================================================================
-    // 3. VIEW: GROUPS & HUB
-    // ===================================================================
     const selectGroup = async (g) => {
         setActiveGroup(g);
         setHubSessions(null);
+        setGroupTimetable('Loading...');
         setRoster(null); 
         setShowSelfPrompt(false);
         navTo('#tools/hub');
         try {
+            api.get(`/tools/timetable?gid=${g.id}`).then(r => setGroupTimetable(r.timetable));
             const res = await api.get(`/course_details?gid=${g.id}&matric=${user.matric}`);
             setHubSessions(res);
         } catch(e) {}
     };
 
-    const handleSelfAction = async (action) => {
-        if (!selfPwdPrompt) { showToast("Enter your password", "error"); return; }
+    // --- AUTO PASSWORD SELF ACTION ---
+    const handleSelfAction = async (action, submitPwd = false) => {
+        const pwdToUse = submitPwd ? selfPwdPrompt : "";
         try {
             const res = await api.post('/tools/action', {
-                action: action, matric: user.matric, password: selfPwdPrompt,
-                code: activeGroup.code, cid: activeGroup.id, initiator: user.matric
+                action: action, matric: user.matric, password: pwdToUse,
+                code: activeGroup.code, cid: activeGroup.id,
+                group_name: activeGroup.group
             });
+
+            if (res.needs_password) {
+                setShowSelfPrompt(action);
+                return;
+            }
+
             if (res.status === 200 && res.response.includes('error":false')) {
                 showToast(`${action} Successful`, "success");
                 setShowSelfPrompt(false);
-                setTimeout(() => window.location.reload(), 1500);
+                setTimeout(() => window.location.reload(), 1500); // Hard refresh to update main dashboard
             } else {
                 showToast(res.response.substring(0,40), "error");
             }
         } catch(e) { showToast(e.message, "error"); }
     };
-
-    // ===================================================================
-    // 4. VIEW: SESSION MASTER
-    // ===================================================================
-    const [sessionTab, setSessionTab] = useState('present');
 
     const loadSession = async (session) => {
         setActiveSession(session);
@@ -172,9 +165,6 @@ export default function ToolsModal({ user }) {
         } catch(e) { showToast(e.message, "error"); }
     };
 
-    // ===================================================================
-    // 5. VIEW: ROSTER & GOD MODE
-    // ===================================================================
     const loadRoster = async () => {
         navTo('#tools/roster');
         if (!roster) {
@@ -185,18 +175,20 @@ export default function ToolsModal({ user }) {
         }
     };
 
+    // State tracks if the password was manually typed (needs testing)
     const handlePwdChange = (matric, val) => {
-        setRoster(prev => prev.map(s => s.matric === matric ? { ...s, password: val, failed: false } : s));
+        setRoster(prev => prev.map(s => s.matric === matric ? { ...s, password: val, valid: false } : s));
     };
 
     const testPassword = async (matric, pwd, auto = false) => {
         try {
-            const res = await api.post('/tools/validate', { matric, password: pwd, auto, initiator: user.matric });
+            const res = await api.post('/tools/validate', { matric, password: pwd, auto });
             if (res.valid) {
-                setRoster(prev => prev.map(s => s.matric === matric ? { ...s, password: res.password, failed: false } : s));
+                setRoster(prev => prev.map(s => s.matric === matric ? { ...s, password: res.password, valid: true } : s));
                 return true;
             } else {
-                setRoster(prev => prev.map(s => s.matric === matric ? { ...s, failed: true } : s));
+                // Mark as Unknown so auto-fetch skips it next time
+                setRoster(prev => prev.map(s => s.matric === matric ? { ...s, password: 'Unknown', valid: false } : s));
                 return false;
             }
         } catch(e) { return false; }
@@ -206,7 +198,7 @@ export default function ToolsModal({ user }) {
         if (isFetching) { fetchAbort.current = true; return; }
         setIsFetching(true);
         fetchAbort.current = false;
-        const targets = roster.filter(s => !s.password || s.failed);
+        const targets = roster.filter(s => !s.valid && s.password !== 'Unknown');
         let count = 0;
         for (let s of targets) {
             if (fetchAbort.current) break;
@@ -228,7 +220,7 @@ export default function ToolsModal({ user }) {
     const dropStudent = async (matric, pwd) => {
         try {
             const res = await api.post('/tools/action', {
-                action: 'DROP', matric, password: pwd, code: activeGroup.code, cid: activeGroup.id, initiator: user.matric
+                action: 'DROP', matric, password: pwd, code: activeGroup.code, cid: activeGroup.id
             });
             if (res.status === 200 && res.response.includes('error":false')) {
                 showToast("Dropped", "success");
@@ -243,28 +235,26 @@ export default function ToolsModal({ user }) {
     if (!view) return null;
     const isUserEnrolled = activeGroup ? (user?.courses?.some(c => String(c.gid) === String(activeGroup.id)) || false) : false;
 
-    // Notice the locked maxWidth="450px" to make it sleek
     return (
         <Modal title="MASTER TOOLS" isOpen={!!view} onClose={() => window.history.back()} maxWidth="450px">
             
             {view === 'search' && (
-                <div style={{ display: 'flex', flexDirection: 'column', height: '60vh' }}>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginBottom: '5px' }}>DATABASE EXPLORER</div>
-                    <input type="text" className="t-input" placeholder="Search Course or Student..." 
-                        value={searchQuery} onChange={(e) => handleSearch(e.target.value)} style={{ width: '100%', marginBottom: '15px', borderColor: 'var(--primary)', textAlign: 'left', padding: '10px' }} />
-                    <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--grid-line)', borderRadius: '4px', background: 'rgba(0,0,0,0.5)' }}>
-                        {searchResults.length === 0 ? (
-                            <div style={{ textAlign: 'center', color: '#555', padding: '30px 10px', fontSize: '0.8rem' }}>{searchQuery.length < 2 ? "Type to search..." : "NO MATCHES FOUND"}</div>
-                        ) : (
-                            searchResults.map(u => (
-                                <div key={u.m} onClick={() => selectSearchItem(u)} style={{ padding: '10px 12px', borderBottom: '1px solid #222', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                        <span style={{ color: u.t === 'c' ? '#0f0' : 'var(--primary)', fontWeight: 'bold', fontSize: '0.85rem' }}>{u.n}</span>
-                                        <span style={{ color: '#888', fontSize: '0.65rem', marginTop: '2px' }}>{u.t === 'c' ? 'COURSE' : 'STUDENT'} ID: {u.m}</span>
+                <div style={{ display: 'flex', flexDirection: 'column', height: '60vh', alignItems: 'center' }}>
+                    <div style={{width: '100%', maxWidth: '400px', position: 'relative', marginTop: '20px'}}>
+                        <input type="text" className="search-input" placeholder="SEARCH DATABASE..." 
+                            value={searchQuery} onChange={(e) => handleSearch(e.target.value)} />
+                        
+                        {searchResults.length > 0 && (
+                            <div className="results-list" style={{ display: 'block' }}>
+                                {searchResults.map(u => (
+                                    <div key={u.m} className="result-item" onClick={() => selectSearchItem(u)}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                            <span style={{ color: u.t === 'c' ? '#0f0' : '#fff' }}>{u.n}</span>
+                                            <span style={{ color: 'var(--primary)', fontSize: '0.8em' }}>{u.m}</span>
+                                        </div>
                                     </div>
-                                    <span style={{ color: '#555', fontWeight: 'bold' }}>{'>'}</span>
-                                </div>
-                            ))
+                                ))}
+                            </div>
                         )}
                     </div>
                 </div>
@@ -295,19 +285,20 @@ export default function ToolsModal({ user }) {
                     <div className="tools-hub-header">
                         <div className="hub-title">{activeGroup.code} {activeGroup.group}</div>
                         <div className="hub-meta">{activeGroup.name} | ID: {activeGroup.id}</div>
+                        <div style={{fontSize: '0.7rem', color: '#888', marginBottom: '10px'}}>{groupTimetable}</div>
                         
                         {!showSelfPrompt ? (
                             <div style={{display:'flex', gap:'10px', justifyContent:'center'}}>
                                 {isUserEnrolled ? (
-                                    <button className="btn" style={{borderColor:'#f00', color:'#f00', padding: '6px 12px'}} onClick={()=>setShowSelfPrompt('DROP')}>DROP SELF</button>
+                                    <button className="btn" style={{borderColor:'#f00', color:'#f00', padding: '6px 12px'}} onClick={()=>handleSelfAction('DROP')}>DROP SELF</button>
                                 ) : (
-                                    <button className="btn" style={{borderColor:'#0f0', color:'#0f0', padding: '6px 12px'}} onClick={()=>setShowSelfPrompt('REGISTER')}>REGISTER SELF</button>
+                                    <button className="btn" style={{borderColor:'#0f0', color:'#0f0', padding: '6px 12px'}} onClick={()=>handleSelfAction('ADD')}>REGISTER SELF</button>
                                 )}
                             </div>
                         ) : (
                             <div style={{display:'flex', gap:'8px', justifyContent:'center'}}>
-                                <input type="password" placeholder="UNIMAS Password" value={selfPwdPrompt} onChange={e=>setSelfPwdPrompt(e.target.value)} className="t-input" style={{width:'140px', padding:'4px'}}/>
-                                <button className="btn" style={{borderColor: showSelfPrompt==='DROP'?'#f00':'#0f0', padding: '4px 10px'}} onClick={()=>handleSelfAction(showSelfPrompt)}>CONFIRM</button>
+                                <input type="text" placeholder="UNIMAS Password" value={selfPwdPrompt} onChange={e=>setSelfPwdPrompt(e.target.value)} className="t-input" style={{width:'140px', padding:'4px'}}/>
+                                <button className="btn" style={{borderColor: showSelfPrompt==='DROP'?'#f00':'#0f0', padding: '4px 10px'}} onClick={()=>handleSelfAction(showSelfPrompt, true)}>CONFIRM</button>
                                 <button className="btn" style={{padding: '4px 10px'}} onClick={()=>setShowSelfPrompt(false)}>X</button>
                             </div>
                         )}
@@ -400,15 +391,17 @@ export default function ToolsModal({ user }) {
                                         <span className="master-matric">{s.matric}</span>
                                     </div>
                                     <div className="master-actions" style={{flexDirection:'column', gap:'4px', alignItems:'flex-end'}}>
-                                        <input type="text" className={`pwd-input ${s.failed ? 'pwd-failed' : ''}`} 
-                                            placeholder={s.failed ? "Failed ❌" : "Password..."} value={s.password || ''} 
+                                        <input type="text" className="pwd-input" 
+                                            placeholder="Password..." value={s.password === 'Unknown' ? '' : (s.password || '')} 
                                             onChange={(e) => handlePwdChange(s.matric, e.target.value)} 
                                         />
                                         <div style={{display:'flex', gap:'5px'}}>
-                                            {s.password && !s.failed ? (
+                                            {s.valid ? (
                                                 <button className="btn" style={{borderColor:'#f00', color:'#f00', padding:'3px 8px'}} onClick={() => dropStudent(s.matric, s.password)}>DROP</button>
                                             ) : (
-                                                <button className="btn" style={{borderColor:'var(--accent)', color:'var(--accent)', padding:'3px 8px'}} onClick={() => testPassword(s.matric, s.password)}>TEST</button>
+                                                <button className="btn" style={{borderColor: s.password === 'Unknown' ? '#555' : 'var(--accent)', color: s.password === 'Unknown' ? '#555' : 'var(--accent)', padding:'3px 8px'}} onClick={() => testPassword(s.matric, s.password)}>
+                                                    {s.password === 'Unknown' ? 'FAILED' : 'TEST'}
+                                                </button>
                                             )}
                                         </div>
                                     </div>
