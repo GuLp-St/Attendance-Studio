@@ -295,9 +295,7 @@ def api_handler(path):
                 ml, hl = f_m.result() or [], f_h.result() or []
             
             ml.sort(key=lambda x: x['eventDate'], reverse=True)
-            h_map = {}
-            for h in hl:
-                if 'jadualKehadiran' in h and 'id' in h['jadualKehadiran']: h_map[h['jadualKehadiran']['id']] = h
+            h_map = {h['jadualKehadiran']['id']: h for h in hl if 'jadualKehadiran' in h and 'id' in h['jadualKehadiran']}
             
             c_sess = []
             for s in ml:
@@ -308,9 +306,9 @@ def api_handler(path):
                     st = "Present (Scan)" if sc == 'P' else "Present (Manual)" if sc == 'M' else "Exempted" if sc == 'L' else sc
                     lid = ld.get('id')
                 
-                # --- NEW DATE FORMATTING LOGIC ---
+                # FIXED DATE PARSING
                 try:
-                    date_str = datetime.fromtimestamp(s['eventDate']/1000).strftime('%Y-%m-%d')
+                    date_str = datetime.fromtimestamp(int(s['eventDate'])/1000).strftime('%Y-%m-%d')
                 except:
                     date_str = str(s['eventDate'])
 
@@ -596,37 +594,40 @@ def api_handler(path):
             db.collection('students').document(m).set({"password": pwd}, merge=True)
             log_action(client_ip, initiator, "TOOL_VALIDATE_PWD", f"Target:{m}")
             return jsonify({"valid": True, "password": pwd})
-        return jsonify({"valid": False})
+        else:
+            if auto_fetch:
+                # Save as Unknown so it doesn't re-test next time
+                db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
+            return jsonify({"valid": False})
 
     elif path == '/tools/action' and request.method == 'POST':
         d = request.get_json()
-        action = d.get('action')
-        m = d.get('matric')
-        pwd = d.get('password')
-        code = d.get('code')
-        cid = d.get('cid')
-        group_name = d.get('group_name', 'G01') # <-- CATCH THE GROUP NAME (Default to G01 if missing)
+        action, m, pwd, code, cid, group_name, initiator = d.get('action'), d.get('matric'), d.get('password'), d.get('code'), d.get('cid'), d.get('group_name', 'G01'), d.get('initiator', 'unknown')
         sem = get_sys_config().get('current_semester', '2025/2026-2')
+        
+        log_action(client_ip, initiator, f"TOOL_MASTER_{action}", f"Target:{m} Course:{code}({cid})")
         
         try:
             if not pwd:
                 doc = db.collection('students').document(m).get()
                 pwd = doc.to_dict().get('password') if doc.exists else None
             
-            if not pwd:
+            if not pwd or pwd == 'Unknown':
                 return jsonify({"needs_password": True})
 
             if action == "DROP":
                 status, resp = core_api.drop_course(m, pwd, code, cid, sem)
                 if status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or "error\":false" in resp.lower()):
-                    db.collection('students').document(m).set({"groups": firestore.ArrayRemove([cid])}, merge=True)
+                    db.collection('students').document(m).set({"groups": firestore.ArrayRemove([cid]), "password": pwd}, merge=True)
+                    db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True) # Force Sync
             else:
                 status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "P")
                 if "error\":true" in resp.lower() or "taraf" in resp.lower() or "syarat" in resp.lower():
                     status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "T")
                 
                 if status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or "error\":false" in resp.lower()):
-                    db.collection('students').document(m).set({"groups": firestore.ArrayUnion([cid])}, merge=True)
+                    db.collection('students').document(m).set({"groups": firestore.ArrayUnion([cid]), "password": pwd}, merge=True)
+                    db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True) # Force Sync
             
             return jsonify({"status": status, "response": resp})
         except Exception as e: return jsonify({"error": str(e)}), 500
@@ -636,7 +637,14 @@ def api_handler(path):
         try:
             req_s = get_authorized_session()
             slots = core_api.get_timetable(gid, req_s)
-            tt_str = " | ".join([f"{s.get('KETERANGAN_HARI')} {s.get('MASA_MULA')}-{s.get('MASA_TAMAT')}" for s in slots]) if slots else "No Timetable"
+            
+            # Format slots for the consolidate function
+            fmt_slots = []
+            for s in (slots or []):
+                fmt_slots.append({"day": s.get('KETERANGAN_HARI'), "start": s.get('MASA_MULA'), "end": s.get('MASA_TAMAT'), "loc": s.get('LOKASI'), "code": "", "name": ""})
+            
+            merged = consolidate_timetable(fmt_slots)
+            tt_str = " | ".join([f"{s['day']} {s['start']}-{s['end']}" for s in merged]) if merged else "No Timetable"
             return Response(json.dumps({"timetable": tt_str}), headers=headers)
         except: return Response(json.dumps({"timetable": "No Timetable"}), headers=headers)
 

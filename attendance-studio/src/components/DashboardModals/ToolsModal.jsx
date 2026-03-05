@@ -28,13 +28,21 @@ export default function ToolsModal({ user }) {
     const [roster, setRoster] = useState(null); 
     
     const [isFetching, setIsFetching] = useState(false);
+    const [actionLoading, setActionLoading] = useState(false); // Global processing state
     const [fetchProgress, setFetchProgress] = useState('');
     const fetchAbort = useRef(false);
 
     const [selfPwdPrompt, setSelfPwdPrompt] = useState('');
     const [showSelfPrompt, setShowSelfPrompt] = useState(false);
+    const [localUserGroups, setLocalUserGroups] = useState([]); // Local state for immediate UI updates
+    
     const [exemptTarget, setExemptTarget] = useState(null); 
     const [exemptReason, setExemptReason] = useState('');
+
+    // Init local user groups when modal opens
+    useEffect(() => {
+        if (user?.courses) setLocalUserGroups(user.courses.map(c => String(c.gid)));
+    }, [user]);
 
     useEffect(() => {
         const handleHash = () => {
@@ -97,29 +105,38 @@ export default function ToolsModal({ user }) {
         } catch(e) {}
     };
 
-    // --- AUTO PASSWORD SELF ACTION ---
     const handleSelfAction = async (action, submitPwd = false) => {
         const pwdToUse = submitPwd ? selfPwdPrompt : "";
+        setActionLoading(true);
         try {
             const res = await api.post('/tools/action', {
                 action: action, matric: user.matric, password: pwdToUse,
-                code: activeGroup.code, cid: activeGroup.id,
-                group_name: activeGroup.group
+                code: activeGroup.code, cid: activeGroup.id, group_name: activeGroup.group, initiator: user.matric
             });
 
             if (res.needs_password) {
                 setShowSelfPrompt(action);
+                setActionLoading(false);
                 return;
             }
 
             if (res.status === 200 && res.response.includes('error":false')) {
                 showToast(`${action} Successful`, "success");
                 setShowSelfPrompt(false);
-                setTimeout(() => window.location.reload(), 1500); // Hard refresh to update main dashboard
+                
+                // INSTANT UI UPDATE WITHOUT RELOADING
+                if (action === 'ADD') {
+                    setLocalUserGroups(prev => [...prev, String(activeGroup.id)]);
+                    setActiveGroup(prev => ({...prev, students: (prev.students || 0) + 1}));
+                } else {
+                    setLocalUserGroups(prev => prev.filter(gid => gid !== String(activeGroup.id)));
+                    setActiveGroup(prev => ({...prev, students: Math.max(0, (prev.students || 1) - 1)}));
+                }
             } else {
                 showToast(res.response.substring(0,40), "error");
             }
         } catch(e) { showToast(e.message, "error"); }
+        setActionLoading(false);
     };
 
     const loadSession = async (session) => {
@@ -137,7 +154,15 @@ export default function ToolsModal({ user }) {
                 currentRoster = await api.get(`/tools/roster?gid=${activeGroup.id}`);
                 setRoster(currentRoster);
             }
+            
             const logs = await api.get(`/tools/session_master?sid=${sid}`);
+            
+            // SAFETY CHECK: Ensure logs is an array before processing
+            if (!Array.isArray(logs)) {
+                showToast("Logs unavailable (Empty or Error)", "error");
+                setMasterLogs({ present: [], absent: currentRoster });
+                return;
+            }
             
             const present = [];
             const absent = [];
@@ -175,20 +200,18 @@ export default function ToolsModal({ user }) {
         }
     };
 
-    // State tracks if the password was manually typed (needs testing)
     const handlePwdChange = (matric, val) => {
         setRoster(prev => prev.map(s => s.matric === matric ? { ...s, password: val, valid: false } : s));
     };
 
     const testPassword = async (matric, pwd, auto = false) => {
         try {
-            const res = await api.post('/tools/validate', { matric, password: pwd, auto });
+            const res = await api.post('/tools/validate', { matric, password: pwd, auto, initiator: user.matric });
             if (res.valid) {
                 setRoster(prev => prev.map(s => s.matric === matric ? { ...s, password: res.password, valid: true } : s));
                 return true;
             } else {
-                // Mark as Unknown so auto-fetch skips it next time
-                setRoster(prev => prev.map(s => s.matric === matric ? { ...s, password: 'Unknown', valid: false } : s));
+                setRoster(prev => prev.map(s => s.matric === matric ? { ...s, password: auto ? 'Unknown' : pwd, valid: false } : s));
                 return false;
             }
         } catch(e) { return false; }
@@ -218,34 +241,37 @@ export default function ToolsModal({ user }) {
     }, [view, isFetching]);
 
     const dropStudent = async (matric, pwd) => {
+        setActionLoading(true);
         try {
             const res = await api.post('/tools/action', {
-                action: 'DROP', matric, password: pwd, code: activeGroup.code, cid: activeGroup.id
+                action: 'DROP', matric, password: pwd, code: activeGroup.code, cid: activeGroup.id, initiator: user.matric
             });
             if (res.status === 200 && res.response.includes('error":false')) {
                 showToast("Dropped", "success");
                 setRoster(prev => prev.filter(s => s.matric !== matric));
-                setActiveGroup(prev => ({...prev, students: (prev.students || 1) - 1}));
+                setActiveGroup(prev => ({...prev, students: Math.max(0, (prev.students || 1) - 1)}));
             } else {
                 showToast(res.response.substring(0,30), "error");
             }
         } catch(e) { showToast("Failed", "error"); }
+        setActionLoading(false);
     };
 
     if (!view) return null;
-    const isUserEnrolled = activeGroup ? (user?.courses?.some(c => String(c.gid) === String(activeGroup.id)) || false) : false;
+    const isUserEnrolled = activeGroup ? localUserGroups.includes(String(activeGroup.id)) : false;
 
     return (
         <Modal title="MASTER TOOLS" isOpen={!!view} onClose={() => window.history.back()} maxWidth="450px">
             
             {view === 'search' && (
-                <div style={{ display: 'flex', flexDirection: 'column', height: '60vh', alignItems: 'center' }}>
-                    <div style={{width: '100%', maxWidth: '400px', position: 'relative', marginTop: '20px'}}>
-                        <input type="text" className="search-input" placeholder="SEARCH DATABASE..." 
-                            value={searchQuery} onChange={(e) => handleSearch(e.target.value)} />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <div style={{width: '100%', maxWidth: '350px', position: 'relative', marginTop: '10px'}}>
+                        <input type="text" className="t-input" placeholder="SEARCH DATABASE..." 
+                            value={searchQuery} onChange={(e) => handleSearch(e.target.value)} 
+                            style={{width: '100%', padding: '12px', textAlign: 'center', background: '#000'}}/>
                         
                         {searchResults.length > 0 && (
-                            <div className="results-list" style={{ display: 'block' }}>
+                            <div className="results-list" style={{ display: 'block', maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--grid-line)' }}>
                                 {searchResults.map(u => (
                                     <div key={u.m} className="result-item" onClick={() => selectSearchItem(u)}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
@@ -285,25 +311,31 @@ export default function ToolsModal({ user }) {
                     <div className="tools-hub-header">
                         <div className="hub-title">{activeGroup.code} {activeGroup.group}</div>
                         <div className="hub-meta">{activeGroup.name} | ID: {activeGroup.id}</div>
-                        <div style={{fontSize: '0.7rem', color: '#888', marginBottom: '10px'}}>{groupTimetable}</div>
+                        <div style={{fontSize: '0.7rem', color: '#888', marginBottom: '15px'}}>{groupTimetable}</div>
                         
                         {!showSelfPrompt ? (
                             <div style={{display:'flex', gap:'10px', justifyContent:'center'}}>
                                 {isUserEnrolled ? (
-                                    <button className="btn" style={{borderColor:'#f00', color:'#f00', padding: '6px 12px'}} onClick={()=>handleSelfAction('DROP')}>DROP SELF</button>
+                                    <button className="btn" disabled={actionLoading} style={{borderColor:'#f00', color:'#f00', padding: '6px 12px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction('DROP')}>
+                                        {actionLoading ? 'PROCESSING...' : 'DROP SELF'}
+                                    </button>
                                 ) : (
-                                    <button className="btn" style={{borderColor:'#0f0', color:'#0f0', padding: '6px 12px'}} onClick={()=>handleSelfAction('ADD')}>REGISTER SELF</button>
+                                    <button className="btn" disabled={actionLoading} style={{borderColor:'#0f0', color:'#0f0', padding: '6px 12px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction('ADD')}>
+                                        {actionLoading ? 'PROCESSING...' : 'REGISTER SELF'}
+                                    </button>
                                 )}
                             </div>
                         ) : (
                             <div style={{display:'flex', gap:'8px', justifyContent:'center'}}>
-                                <input type="text" placeholder="UNIMAS Password" value={selfPwdPrompt} onChange={e=>setSelfPwdPrompt(e.target.value)} className="t-input" style={{width:'140px', padding:'4px'}}/>
-                                <button className="btn" style={{borderColor: showSelfPrompt==='DROP'?'#f00':'#0f0', padding: '4px 10px'}} onClick={()=>handleSelfAction(showSelfPrompt, true)}>CONFIRM</button>
-                                <button className="btn" style={{padding: '4px 10px'}} onClick={()=>setShowSelfPrompt(false)}>X</button>
+                                <input type="text" placeholder="UNIMAS Password" value={selfPwdPrompt} onChange={e=>setSelfPwdPrompt(e.target.value)} className="t-input" style={{width:'140px', padding:'4px'}} disabled={actionLoading}/>
+                                <button className="btn" disabled={actionLoading} style={{borderColor: showSelfPrompt==='DROP'?'#f00':'#0f0', padding: '4px 10px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction(showSelfPrompt, true)}>
+                                    {actionLoading ? 'WAIT' : 'CONFIRM'}
+                                </button>
+                                <button className="btn" style={{padding: '4px 10px'}} onClick={()=>setShowSelfPrompt(false)} disabled={actionLoading}>X</button>
                             </div>
                         )}
                         
-                        <div style={{marginTop:'12px', fontSize:'0.8rem', color:'var(--primary)', cursor:'pointer', textDecoration:'underline'}} onClick={loadRoster}>
+                        <div style={{marginTop:'15px', fontSize:'0.8rem', color:'var(--primary)', cursor:'pointer', textDecoration:'underline'}} onClick={loadRoster}>
                             View Enrolled Students - {activeGroup.students || 0} Students
                         </div>
                     </div>
@@ -375,7 +407,7 @@ export default function ToolsModal({ user }) {
             {view === 'roster' && (
                 <div>
                     <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px', borderBottom:'1px solid var(--grid-line)', paddingBottom:'8px'}}>
-                        <div style={{color:'var(--primary)', fontWeight:'bold', fontSize: '0.9rem'}}>DROP LIST</div>
+                        <div style={{color:'var(--primary)', fontWeight:'bold', fontSize: '0.9rem'}}>STUDENT LIST</div>
                         <button className="btn" style={{borderColor:'#0f0', color:'#0f0', minWidth:'100px', padding: '5px 10px'}} onClick={startAutoFetch}>
                             {isFetching ? `STOP (${fetchProgress})` : 'AUTO FETCH PWD'}
                         </button>
@@ -390,17 +422,20 @@ export default function ToolsModal({ user }) {
                                         <span className="master-name">{s.name}</span>
                                         <span className="master-matric">{s.matric}</span>
                                     </div>
-                                    <div className="master-actions" style={{flexDirection:'column', gap:'4px', alignItems:'flex-end'}}>
-                                        <input type="text" className="pwd-input" 
-                                            placeholder="Password..." value={s.password === 'Unknown' ? '' : (s.password || '')} 
+                                    <div className="master-actions" style={{flexDirection:'column', gap:'4px', alignItems:'center'}}>
+                                        <input type="text" className={`pwd-input ${s.password === 'Unknown' ? 'pwd-failed' : ''}`} 
+                                            placeholder={s.password === 'Unknown' ? "Failed ❌" : "Password..."} value={s.password === 'Unknown' ? '' : (s.password || '')} 
                                             onChange={(e) => handlePwdChange(s.matric, e.target.value)} 
+                                            disabled={actionLoading}
                                         />
-                                        <div style={{display:'flex', gap:'5px'}}>
+                                        <div style={{display:'flex', gap:'5px', width: '100%', justifyContent: 'center'}}>
                                             {s.valid ? (
-                                                <button className="btn" style={{borderColor:'#f00', color:'#f00', padding:'3px 8px'}} onClick={() => dropStudent(s.matric, s.password)}>DROP</button>
+                                                <button className="btn" disabled={actionLoading} style={{borderColor:'#f00', color:'#f00', padding:'3px 8px', opacity: actionLoading ? 0.5 : 1}} onClick={() => dropStudent(s.matric, s.password)}>
+                                                    DROP
+                                                </button>
                                             ) : (
-                                                <button className="btn" style={{borderColor: s.password === 'Unknown' ? '#555' : 'var(--accent)', color: s.password === 'Unknown' ? '#555' : 'var(--accent)', padding:'3px 8px'}} onClick={() => testPassword(s.matric, s.password)}>
-                                                    {s.password === 'Unknown' ? 'FAILED' : 'TEST'}
+                                                <button className="btn" disabled={actionLoading} style={{borderColor: s.password === 'Unknown' ? '#555' : 'var(--accent)', color: s.password === 'Unknown' ? '#555' : 'var(--accent)', padding:'3px 8px', opacity: actionLoading ? 0.5 : 1}} onClick={() => testPassword(s.matric, s.password)}>
+                                                    {s.password === 'Unknown' ? 'SKIP' : 'TEST'}
                                                 </button>
                                             )}
                                         </div>
