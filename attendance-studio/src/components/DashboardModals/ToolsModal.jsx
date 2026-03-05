@@ -40,6 +40,7 @@ export default function ToolsModal({ user }) {
     
     const [exemptTarget, setExemptTarget] = useState(null); 
     const [exemptReason, setExemptReason] = useState('');
+    const [sessionTab, setSessionTab] = useState('present');
 
     useEffect(() => {
         if (user?.courses) setLocalUserGroups(user.courses.map(c => String(c.gid)));
@@ -137,7 +138,7 @@ export default function ToolsModal({ user }) {
             if (res.needs_password) {
                 setShowSelfPrompt(action);
                 setSelfPwdPrompt('');
-                setSelfPwdTested(false); // Reset test state
+                setSelfPwdTested(false);
                 setActionLoading(false);
                 return;
             }
@@ -145,7 +146,6 @@ export default function ToolsModal({ user }) {
             if (res.status === 200 && res.response.includes('error":false')) {
                 showToast(`${action} Successful`, "success");
                 setShowSelfPrompt(false);
-                
                 if (action === 'ADD') {
                     setLocalUserGroups(prev => [...prev, String(activeGroup.id)]);
                     setActiveGroup(prev => ({...prev, students: (prev.students || 0) + 1}));
@@ -154,7 +154,13 @@ export default function ToolsModal({ user }) {
                     setActiveGroup(prev => ({...prev, students: Math.max(0, (prev.students || 1) - 1)}));
                 }
             } else {
-                showToast(res.response.substring(0,40), "error");
+                // CLEAN ERROR PARSING
+                try {
+                    const errorJson = JSON.parse(res.response);
+                    showToast(errorJson.message || "Action Failed", "error");
+                } catch {
+                    showToast("Action Failed: Server Error", "error");
+                }
             }
         } catch(e) { showToast(e.message, "error"); }
         setActionLoading(false);
@@ -281,7 +287,13 @@ export default function ToolsModal({ user }) {
                 setRoster(prev => prev.filter(s => s.matric !== matric));
                 setActiveGroup(prev => ({...prev, students: Math.max(0, (prev.students || 1) - 1)}));
             } else {
-                showToast(res.response.substring(0,30), "error");
+                // CLEAN ERROR PARSING
+                try {
+                    const errorJson = JSON.parse(res.response);
+                    showToast(errorJson.message || "Drop Failed", "error");
+                } catch {
+                    showToast("Drop Failed: Server Error", "error");
+                }
             }
         } catch(e) { showToast("Failed", "error"); }
         setActionLoading(false);
