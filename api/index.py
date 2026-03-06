@@ -685,8 +685,7 @@ def api_handler(path):
         try:
             log("Starting Class Discovery...")
             cfg = get_sys_config()
-            req_session = requests.Session()
-            core_api.configure_session(req_session, cfg['user'], cfg['pass'])
+            req_session = get_authorized_session() # <--- FIXED
             active_sem = core_api.get_active_semester(req_session)
             stored_sem = cfg.get('current_semester')
             
@@ -870,8 +869,7 @@ def api_handler(path):
         try:
             log("Starting Activity Sync...")
             cfg = get_sys_config()
-            req_session = requests.Session()
-            core_api.configure_session(req_session, cfg['user'], cfg['pass'])
+            req_session = get_authorized_session() # <--- FIXED
             
             curr = cfg['act_start_id']
             limit = cfg.get('act_scan_limit', 5000)
