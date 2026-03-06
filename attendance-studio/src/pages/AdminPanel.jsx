@@ -17,16 +17,16 @@ export default function AdminPanel() {
   const [consoleOutput, setConsoleOutput] = useState("Ready...");
   const [expandedIps, setExpandedIps] = useState({});
   const [tagModalData, setTagModalData] = useState(null); 
-  const [autoSystem, setAutoSystem] = useState(null);
+  
+  // Auto System State
+  const [autoAccounts, setAutoAccounts] = useState([]);
+  const [autoIndex, setAutoIndex] = useState(0);
 
   const [directory, setDirectory] = useState([]);
   useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}) }, []);
 
   const [formSync, setFormSync] = useState({ limit: 5000, classStart: 0, studentBatch: 50, actLimit: 5000, actStart: 0, actMonths: 6 });
-  const [systemMatric, setSystemMatric] = useState("");
   const [priorityCourses, setPriorityCourses] = useState([]);
-
-  const [sysSearch, setSysSearch] = useState('');
   const [courseSearch, setCourseSearch] = useState('');
 
   const openTagModal = (id, name) => { window.history.pushState({ level: 'admin_tag' }, '', '#tag'); setTagModalData({ id, name }); };
@@ -45,8 +45,17 @@ export default function AdminPanel() {
       if (res.error) throw new Error(res.error);
 
       setData(res);
-      setAutoSystem(res.auto_system);
       setIsAuthenticated(true);
+
+      if (res.auto_accounts) {
+          // Sort descending so highest matric (newest student) is first
+          const validAccs = res.auto_accounts.sort((a,b) => parseInt(b.matric) - parseInt(a.matric));
+          setAutoAccounts(validAccs);
+          if (res.config?.system_matric) {
+              const idx = validAccs.findIndex(a => a.matric === res.config.system_matric);
+              if (idx !== -1) setAutoIndex(idx);
+          }
+      }
 
       if (res.config) {
         setFormSync({
@@ -54,7 +63,6 @@ export default function AdminPanel() {
           studentBatch: res.config.student_sync_batch || 50, actLimit: res.config.act_scan_limit || 5000,
           actStart: res.config.act_start_id || 107000, actMonths: res.config.act_months || 6
         });
-        setSystemMatric(res.config.system_matric || "");
         setPriorityCourses(res.config.priority_courses || []);
       }
     } catch (e) { showToast(e.message || "Invalid Key", "error"); setIsAuthenticated(false); } finally { setLoading(false); }
@@ -65,7 +73,10 @@ export default function AdminPanel() {
       await api.post('/admin_dashboard', {
         key, type: 'save_settings', scan_limit: formSync.limit, last_scanned: formSync.classStart,
         student_sync_batch: formSync.studentBatch, act_scan_limit: formSync.actLimit,
-        act_start_id: formSync.actStart, act_months: formSync.actMonths, system_matric: systemMatric, priority_courses: priorityCourses
+        act_start_id: formSync.actStart, act_months: formSync.actMonths, 
+        system_matric: autoAccounts[autoIndex]?.matric || "", 
+        system_pwd: autoAccounts[autoIndex]?.password || "", 
+        priority_courses: priorityCourses
       });
       showToast("Saved", "success");
     } catch (e) { showToast(e.message, "error"); }
@@ -105,15 +116,8 @@ export default function AdminPanel() {
     return Object.values(groups).sort((a, b) => (b.lastActive || "").localeCompare(a.lastActive || ""));
   }, [data]);
 
-  // FIX FOR CRASH: Added (u.m || "") and (u.n || "")
-  const sysMatches = sysSearch.length >= 2 
-      ? directory.filter(u => (!u.t || u.t === 's') && ((u.m || "").includes(sysSearch) || (u.n || "").toUpperCase().includes(sysSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) 
-      : [];
-      
-  const courseMatches = courseSearch.length >= 2 
-      ? directory.filter(u => (u.t === 'c') && ((u.m || "").toUpperCase().includes(courseSearch.toUpperCase()) || (u.n || "").toUpperCase().includes(courseSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) 
-      : [];
-      
+  const courseMatches = courseSearch.length >= 2 ? directory.filter(u => (u.t === 'c') && ((u.m || "").toUpperCase().includes(courseSearch.toUpperCase()) || (u.n || "").toUpperCase().includes(courseSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) : [];
+
   if (!isAuthenticated) return (
       <div style={{ textAlign: 'center', padding: '50px 0' }}><input type="password" className="t-input" placeholder="ENTER KEY" style={{ borderColor: '#f00', color: '#f00', marginBottom: '10px' }} value={key} onChange={(e) => setKey(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && loadData()} /><button className="btn" style={{ borderColor: '#f00', color: '#f00', width: '100%' }} onClick={loadData} disabled={loading}>{loading ? "VERIFYING..." : "UNLOCK"}</button></div>
   );
@@ -123,23 +127,14 @@ export default function AdminPanel() {
 
       <div className="admin-section">
         <div className="admin-title">SYSTEM ACCOUNT</div>
-        <div style={{ fontSize: '0.7rem', color: '#888', marginBottom: '10px' }}>Select a validated student to act as the backend API crawler. If empty, the system automatically finds the newest validated student.</div>
-        
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
-            <div style={{ color: 'var(--primary)', fontWeight: 'bold' }}>CURRENT:</div>
-            <div style={{ color: '#fff' }}>
-                {systemMatric ? systemMatric : (autoSystem?.matric ? `AUTO: ${autoSystem.matric} (${autoSystem.password})` : "NO VALID ACCOUNTS FOUND")}
-            </div>
-            {systemMatric && <button className="btn" style={{ padding: '2px 6px', borderColor: '#f00', color: '#f00' }} onClick={() => setSystemMatric("")}>CLEAR</button>}
-        </div>
-
-        <div style={{ position: 'relative' }}>
-            <input type="text" className="t-input" placeholder="Search Student Name or ID..." value={sysSearch} onChange={e => setSysSearch(e.target.value)} />
-            {sysMatches.length > 0 && (
-                <div className="results-list" style={{ display: 'block', zIndex: 10, border: '1px solid var(--grid-line)' }}>
-                    {sysMatches.map(u => (<div key={u.m} className="result-item" onClick={() => { setSystemMatric(u.m); setSysSearch(''); }}><span style={{ color: '#fff' }}>{u.n}</span> <span style={{ color: 'var(--primary)' }}>{u.m}</span></div>))}
+        <div className="ctrl-row" style={{marginBottom: 0}}>
+            <div style={{ flex: 1, background: 'rgba(0,0,0,0.4)', padding: '10px', borderRadius: '4px', border: '1px solid var(--primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                    <span style={{ color: 'var(--primary)', fontWeight: 'bold', marginRight: '10px' }}>AUTO:</span>
+                    <span style={{ color: '#fff' }}>{autoAccounts[autoIndex]?.matric || "NO VALID ACCOUNTS"}</span>
                 </div>
-            )}
+            </div>
+            <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex((autoIndex + 1) % autoAccounts.length)}>SWITCH</button>
         </div>
       </div>
 
@@ -173,7 +168,10 @@ export default function AdminPanel() {
                   )}
               </div>
           </div>
-          <div className="ctrl-row"><div style={{ flex: 1, color: '#888', fontSize: '0.75rem', padding: '5px 0' }}>Syncs priority first, then oldest courses. (Note: A course code updates ALL groups inside it).</div><button className="btn" style={{ borderColor: '#0f0', color: '#0f0' }} onClick={() => triggerSync('student')}>RUN</button></div>
+          <div className="ctrl-row">
+            <div style={{ flex: 1 }}></div>
+            <button className="btn" style={{ borderColor: '#0f0', color: '#0f0', width: '100%' }} onClick={() => triggerSync('student')}>RUN</button>
+          </div>
         </div>
 
         <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>

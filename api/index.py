@@ -985,18 +985,18 @@ def api_handler(path):
             ip_meta = {}
             for d in db.collection('ip_metadata').stream(): ip_meta[d.id] = d.to_dict().get('name')
             
-            # --- NEW: EXPOSE AUTO-ACCOUNT TO ADMIN UI ---
-            auto_sys_matric, auto_sys_pwd = "", ""
-            docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(1).stream()
+            # --- FETCH MULTIPLE VALID ACCOUNTS FOR THE SWITCHER ---
+            auto_accounts = []
+            docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(50).stream()
             for d in docs: 
-                auto_sys_matric = d.id
-                auto_sys_pwd = d.to_dict().get('password')
-                break
+                p = d.to_dict().get('password')
+                if p and p != 'Unknown':
+                    auto_accounts.append({"matric": d.id, "password": p})
 
             return Response(json.dumps({
                 "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
                 "sync_history": sync_hist, "ip_meta": ip_meta,
-                "auto_system": {"matric": auto_sys_matric, "password": auto_sys_pwd}
+                "auto_accounts": auto_accounts
             }), headers=headers)
         
         elif req_type == 'save_settings':
