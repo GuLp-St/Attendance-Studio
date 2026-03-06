@@ -639,19 +639,20 @@ def api_handler(path):
                 is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower() or 'gugur' in resp.lower())
                 
                 if is_success:
-                    db.collection('students').document(m).set({"groups": firestore.ArrayRemove([cid]), "password": pwd}, merge=True)
+                    # FIX: Enforce int(cid) so it matches old database arrays
+                    db.collection('students').document(m).set({"groups": firestore.ArrayRemove([int(cid)]), "password": pwd}, merge=True)
                     db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
             else:
                 status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "P")
                 is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower())
                 
-                # If failed, try as Core (T)
                 if not is_success and ("error\":true" in resp.replace(" ", "").lower() or "taraf" in resp.lower() or "syarat" in resp.lower()):
                     status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "T")
                     is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower())
                 
                 if is_success:
-                    db.collection('students').document(m).set({"groups": firestore.ArrayUnion([cid]), "password": pwd}, merge=True)
+                    # FIX: Enforce int(cid)
+                    db.collection('students').document(m).set({"groups": firestore.ArrayUnion([int(cid)]), "password": pwd}, merge=True)
                     db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
             
             return jsonify({"status": status, "response": resp, "success": is_success})
@@ -828,11 +829,11 @@ def api_handler(path):
                 
                 for m in (current_matrics - previous_matrics):
                     if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
-                    updates_by_student[m]["add"].append(gid)
+                    updates_by_student[m]["add"].append(int(gid)) # FIX: Enforce INT
                     
                 for m in (previous_matrics - current_matrics):
                     if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
-                    updates_by_student[m]["remove"].append(gid)
+                    updates_by_student[m]["remove"].append(int(gid)) # FIX: Enforce INT
                     
                 course_batch.set(db.collection('courses').document(gid), {"enrolled_students": list(current_matrics), "last_student_sync": now_ts}, merge=True)
                 cb_count += 1

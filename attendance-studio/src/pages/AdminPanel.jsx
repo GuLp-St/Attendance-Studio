@@ -106,9 +106,14 @@ export default function AdminPanel() {
   }, [data]);
 
   // FIX FOR CRASH: Added (u.m || "") and (u.n || "")
-  const sysMatches = sysSearch.length >= 2 ? directory.filter(u => u.t === 's' && ((u.m || "").includes(sysSearch) || (u.n || "").toUpperCase().includes(sysSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) : [];
-  const courseMatches = courseSearch.length >= 2 ? directory.filter(u => u.t === 'c' && ((u.m || "").toUpperCase().includes(courseSearch.toUpperCase()) || (u.n || "").toUpperCase().includes(courseSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) : [];
-
+  const sysMatches = sysSearch.length >= 2 
+      ? directory.filter(u => (!u.t || u.t === 's') && ((u.m || "").includes(sysSearch) || (u.n || "").toUpperCase().includes(sysSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) 
+      : [];
+      
+  const courseMatches = courseSearch.length >= 2 
+      ? directory.filter(u => (u.t === 'c') && ((u.m || "").toUpperCase().includes(courseSearch.toUpperCase()) || (u.n || "").toUpperCase().includes(courseSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) 
+      : [];
+      
   if (!isAuthenticated) return (
       <div style={{ textAlign: 'center', padding: '50px 0' }}><input type="password" className="t-input" placeholder="ENTER KEY" style={{ borderColor: '#f00', color: '#f00', marginBottom: '10px' }} value={key} onChange={(e) => setKey(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && loadData()} /><button className="btn" style={{ borderColor: '#f00', color: '#f00', width: '100%' }} onClick={loadData} disabled={loading}>{loading ? "VERIFYING..." : "UNLOCK"}</button></div>
   );

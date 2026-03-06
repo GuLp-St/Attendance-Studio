@@ -122,6 +122,7 @@ export default function ToolsModal({ user }) {
             if (res.success) {
                 showToast(`${action} Successful`, "success");
                 setShowSelfPrompt(false);
+                setRoster(null); 
                 getDirectory(true).then(setDirectory);
                 
                 if (action === 'ADD') {
