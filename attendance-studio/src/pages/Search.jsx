@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
-import { api } from '../services/api';
-import { useAuth } from '../contexts/AuthContext';
+// --- START OF FILE Search.jsx ---
+
+import { useState, useEffect, useRef } from 'react'; // <--- Ensure useEffect is here too
 import { getDirectory } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import AdminPanel from './AdminPanel';
 
@@ -18,12 +19,10 @@ export default function Search() {
   const blurTimeout = useRef(null);
 
   // =========================================================================
-  // 1. ADMIN BACK BUTTON LOGIC (FIXED)
+  // 1. ADMIN BACK BUTTON LOGIC
   // =========================================================================
-  
   useEffect(() => {
       if (showAdmin) {
-          // Push Admin state
           window.history.pushState({ level: 'admin' }, '', '#admin');
       }
   }, [showAdmin]);
@@ -31,23 +30,15 @@ export default function Search() {
   useEffect(() => {
       const handlePopState = (e) => {
           if (!showAdmin) return;
-          
           const state = e.state;
-
-          // CRITICAL FIX:
-          // Only close Admin if we have returned to the ROOT state (null).
-          // If state is 'confirm' or 'admin_tag', we assume a child modal closed
-          // and we landed back on 'admin' (or similar), so we keep Admin OPEN.
           if (state === null) {
               setShowAdmin(false);
           }
       };
-
       window.addEventListener('popstate', handlePopState);
       return () => window.removeEventListener('popstate', handlePopState);
   }, [showAdmin]);
 
-  // Manual Close via X button
   const closeAdmin = () => {
       if (window.history.state?.level === 'admin') {
           window.history.back();
@@ -57,21 +48,27 @@ export default function Search() {
   };
 
   // =========================================================================
-  // 2. SEARCH LOGIC (Unchanged)
+  // 2. SEARCH LOGIC 
   // =========================================================================
   
+  // Fetch from the instant cache
   useEffect(() => { 
-      getDirectory().then(setDirectory); 
+      getDirectory().then(setDirectory).catch(() => {}); 
   }, []);
 
   const handleSearch = (val) => {
     setQuery(val);
     if (val.length < 2) { loadRecents(); return; }
     const cleanVal = val.toUpperCase().replace(/\s+/g, '');
+    
     const matches = directory.filter(u => {
+        // HIDE COURSES FROM LOGIN SCREEN
+        if (u.t === 'c') return false; 
+        
         const n = (u.n || "").toUpperCase().replace(/\s+/g, '');
         return n.includes(cleanVal) || u.m.includes(cleanVal);
     }).slice(0, 10);
+    
     setResults(matches);
   };
 
@@ -121,3 +118,5 @@ export default function Search() {
     </div>
   );
 }
+
+// --- END OF FILE Search.jsx ---
