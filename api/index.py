@@ -57,8 +57,7 @@ def get_sys_config():
     try:
         conf_doc = db.collection('system').document('config').get()
         conf = conf_doc.to_dict() if conf_doc.exists else {}
-    except:
-        conf = {}
+    except: conf = {}
     
     return {
         "start_id": int(conf.get("last_scanned_id", 100000)),
@@ -68,8 +67,10 @@ def get_sys_config():
         "act_start_id": int(conf.get("act_last_scanned_id", 107000)),
         "act_scan_limit": int(conf.get("act_scan_limit", 5000)),
         "act_months": int(conf.get("act_time_threshold", 6)),
-        "priority_courses": conf.get("priority_courses", []), 
-        "system_matric": conf.get("system_matric", "")
+        "priority_courses": conf.get("priority_courses", []),
+        "system_matric": conf.get("system_matric", ""),
+        "system_pwd": conf.get("system_pwd", ""),
+        "force_student_sync": conf.get("force_student_sync", False)
     }
     
 def get_authorized_session():
@@ -131,16 +132,13 @@ def create_notification(matric, type, title, status, details, mode):
 def save_sync_log(type, status, messages, items_count):
     try:
         db.collection('sync_history').add({
-            "timestamp": get_malaysia_time().isoformat(),
-            "type": type,
-            "status": status,
-            "log_text": "\n".join(messages),
-            "items_found": items_count
+            "timestamp": get_malaysia_time().isoformat(), "type": type, "status": status, "log_text": "\n".join(messages), "items_found": items_count
         })
-        docs = list(db.collection('sync_history').order_by('timestamp', direction=firestore.Query.DESCENDING).stream())
-        if len(docs) > 10:
+        # FIX: Keep exactly 5 logs of EACH type, instead of 10 total
+        docs = list(db.collection('sync_history').where(filter=FieldFilter("type", "==", type)).order_by('timestamp', direction=firestore.Query.DESCENDING).stream())
+        if len(docs) > 5:
             batch = db.batch()
-            for doc in docs[10:]: batch.delete(doc.reference)
+            for doc in docs[5:]: batch.delete(doc.reference)
             batch.commit()
     except: pass
 
@@ -757,14 +755,18 @@ def api_handler(path):
         log_buffer = []
         def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
         try:
-            log("Starting Student Sync (Quota Optimized)...")
+            log("Starting Student Sync...")
             cfg = get_sys_config()
             req_session = requests.Session()
-            core_api.configure_session(req_session, cfg['system_matric'] or '85699', 'dummy') # Triggers auto-auth inside core_api
-            req_session = get_authorized_session() # Overwrite with real auth
+            core_api.configure_session(req_session, cfg['system_matric'] or '85699', 'dummy') 
+            req_session = get_authorized_session() 
             
             active_sem = core_api.get_active_semester(req_session)
             batch_limit = cfg.get('student_sync_batch', 50)
+            
+            # --- THE NEW FORCE SYNC LOGIC ---
+            force_sync = cfg.get('force_student_sync', False)
+            if force_sync: log("FORCE HEAL ENABLED: Ignoring database memory.")
             
             target_courses = []
             seen_gids = set()
@@ -821,18 +823,24 @@ def api_handler(path):
             
             now_ts = int(datetime.now().timestamp())
             course_batch = db.batch(); cb_count = 0
+            
             for c in target_courses:
                 gid = c['id']
                 current_matrics = set(course_students.get(gid, []))
-                previous_matrics = set(c.get('enrolled_students', []))
+                
+                # --- APPLY THE CHECKBOX LOGIC HERE ---
+                if force_sync:
+                    previous_matrics = set() 
+                else:
+                    previous_matrics = set(c.get('enrolled_students', []))
                 
                 for m in (current_matrics - previous_matrics):
                     if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
-                    updates_by_student[m]["add"].append(int(gid)) # FIX: Enforce INT
+                    updates_by_student[m]["add"].append(str(gid)) # Safe String Cast
                     
                 for m in (previous_matrics - current_matrics):
                     if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
-                    updates_by_student[m]["remove"].append(int(gid)) # FIX: Enforce INT
+                    updates_by_student[m]["remove"].append(str(gid)) # Safe String Cast
                     
                 course_batch.set(db.collection('courses').document(gid), {"enrolled_students": list(current_matrics), "last_student_sync": now_ts}, merge=True)
                 cb_count += 1
@@ -1009,6 +1017,8 @@ def api_handler(path):
             # NEW: Save Priority Courses and System Account
             if 'priority_courses' in data: update["priority_courses"] = data['priority_courses']
             if 'system_matric' in data: update["system_matric"] = data['system_matric']
+            if 'system_pwd' in data: update["system_pwd"] = data['system_pwd']
+            if 'force_student_sync' in data: update["force_student_sync"] = data['force_student_sync'] 
             
             db.collection('system').document('config').set(update, merge=True)
             return jsonify({"status": "Settings Saved"})

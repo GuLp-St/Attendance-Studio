@@ -25,7 +25,9 @@ export default function AdminPanel() {
   const [directory, setDirectory] = useState([]);
   useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}) }, []);
 
-  const [formSync, setFormSync] = useState({ limit: 5000, classStart: 0, studentBatch: 50, actLimit: 5000, actStart: 0, actMonths: 6 });
+  const [formSync, setFormSync] = useState({ 
+      limit: 5000, classStart: 0, studentBatch: 50, actLimit: 5000, actStart: 0, actMonths: 6, forceStudentSync: false 
+  });
   const [priorityCourses, setPriorityCourses] = useState([]);
   const [courseSearch, setCourseSearch] = useState('');
 
@@ -48,7 +50,6 @@ export default function AdminPanel() {
       setIsAuthenticated(true);
 
       if (res.auto_accounts) {
-          // Sort descending so highest matric (newest student) is first
           const validAccs = res.auto_accounts.sort((a,b) => parseInt(b.matric) - parseInt(a.matric));
           setAutoAccounts(validAccs);
           if (res.config?.system_matric) {
@@ -61,7 +62,8 @@ export default function AdminPanel() {
         setFormSync({
           limit: res.config.scan_limit || 5000, classStart: res.config.start_id || 100000,
           studentBatch: res.config.student_sync_batch || 50, actLimit: res.config.act_scan_limit || 5000,
-          actStart: res.config.act_start_id || 107000, actMonths: res.config.act_months || 6
+          actStart: res.config.act_start_id || 107000, actMonths: res.config.act_months || 6,
+          forceStudentSync: res.config.force_student_sync || false
         });
         setPriorityCourses(res.config.priority_courses || []);
       }
@@ -76,7 +78,7 @@ export default function AdminPanel() {
         act_start_id: formSync.actStart, act_months: formSync.actMonths, 
         system_matric: autoAccounts[autoIndex]?.matric || "", 
         system_pwd: autoAccounts[autoIndex]?.password || "", 
-        priority_courses: priorityCourses
+        priority_courses: priorityCourses, force_student_sync: formSync.forceStudentSync
       });
       showToast("Saved", "success");
     } catch (e) { showToast(e.message, "error"); }
@@ -134,7 +136,10 @@ export default function AdminPanel() {
                     <span style={{ color: '#fff' }}>{autoAccounts[autoIndex]?.matric || "NO VALID ACCOUNTS"}</span>
                 </div>
             </div>
-            <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex((autoIndex + 1) % autoAccounts.length)}>SWITCH</button>
+            <div style={{ display: 'flex', gap: '5px'}}>
+                <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex(0)}>DEFAULT</button>
+                <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex((autoIndex + 1) % autoAccounts.length)}>SWITCH</button>
+            </div>
         </div>
       </div>
 
@@ -169,8 +174,12 @@ export default function AdminPanel() {
               </div>
           </div>
           <div className="ctrl-row">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#f00', cursor: 'pointer', fontSize: '0.75rem' }}>
+                <input type="checkbox" checked={formSync.forceStudentSync} onChange={e => setFormSync({...formSync, forceStudentSync: e.target.checked})} />
+                FORCE HEAL
+            </label>
             <div style={{ flex: 1 }}></div>
-            <button className="btn" style={{ borderColor: '#0f0', color: '#0f0', width: '100%' }} onClick={() => triggerSync('student')}>RUN</button>
+            <button className="btn" style={{ borderColor: '#0f0', color: '#0f0' }} onClick={() => triggerSync('student')}>RUN</button>
           </div>
         </div>
 
@@ -181,6 +190,21 @@ export default function AdminPanel() {
 
         <button className="btn" style={{ width: '100%', marginTop: '15px' }} onClick={saveSettings}>SAVE ALL SETTINGS</button>
         <textarea readOnly style={{ width: '100%', height: '100px', background: '#000', color: '#0f0', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginTop: '10px', boxSizing: 'border-box' }} value={consoleOutput} />
+
+        {/* --- SYNC HISTORY VISUALIZER RESTORED --- */}
+        <div style={{ borderTop: '1px solid #333', marginTop: '15px', paddingTop: '10px' }}>
+          <div className="admin-title" style={{ border: 'none', padding: 0, marginBottom: '5px' }}>SYNC HISTORY</div>
+          <div style={{ maxHeight: '120px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)' }}>
+            {data.sync_history?.map(h => (
+              <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#888', width: '80px' }}>{h.timestamp.substring(11, 19)}</span>
+                <span style={{ color: h.type === 'CLASS' ? 'var(--primary)' : h.type === 'STUDENT' ? '#0f0' : 'var(--accent)', fontWeight: 'bold' }}>{h.type}</span>
+                <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00' }}>{h.status} ({h.items_found})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
       </div>
 
       <div className="admin-section">
