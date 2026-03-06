@@ -10,41 +10,32 @@ export default function ToolsModal({ user }) {
     const { showToast } = useToast();
 
     const [view, setView] = useState(null); 
-    
     const [directory, setDirectory] = useState([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
-    
     const [selectedItem, setSelectedItem] = useState(null); 
     const [groupList, setGroupList] = useState(null); 
-    
     const [activeGroup, setActiveGroup] = useState(null); 
     const [hubSessions, setHubSessions] = useState(null);
     const [groupTimetable, setGroupTimetable] = useState('');
-    
     const [activeSession, setActiveSession] = useState(null);
     const [masterLogs, setMasterLogs] = useState(null); 
-    
     const [roster, setRoster] = useState(null); 
     
     const [isFetching, setIsFetching] = useState(false);
     const [actionLoading, setActionLoading] = useState(false);
-    const [attendanceLoadingId, setAttendanceLoadingId] = useState(null); // specific row loader
+    const [attendanceLoadingId, setAttendanceLoadingId] = useState(null);
     const [fetchProgress, setFetchProgress] = useState('');
     const fetchAbort = useRef(false);
 
-    // Self Prompts
     const [selfPwdPrompt, setSelfPwdPrompt] = useState('');
     const [showSelfPrompt, setShowSelfPrompt] = useState(false);
     const [selfPwdTested, setSelfPwdTested] = useState(false);
     const [localUserGroups, setLocalUserGroups] = useState([]); 
-    
     const [exemptTarget, setExemptTarget] = useState(null); 
     const [exemptReason, setExemptReason] = useState('');
 
-    useEffect(() => {
-        if (user?.courses) setLocalUserGroups(user.courses.map(c => String(c.gid)));
-    }, [user]);
+    useEffect(() => { if (user?.courses) setLocalUserGroups(user.courses.map(c => String(c.gid))); }, [user]);
 
     useEffect(() => {
         const handleHash = () => {
@@ -58,28 +49,22 @@ export default function ToolsModal({ user }) {
         };
         window.addEventListener('popstate', handleHash);
         window.addEventListener('hashchange', handleHash);
-        return () => {
-            window.removeEventListener('popstate', handleHash);
-            window.removeEventListener('hashchange', handleHash);
-        };
+        return () => { window.removeEventListener('popstate', handleHash); window.removeEventListener('hashchange', handleHash); };
     }, []);
 
     const navTo = (hashLevel) => { window.location.hash = hashLevel; };
 
-    // Fetch master directory instantly
-    useEffect(() => {
-        if (view === 'search') {
-            getDirectory().then(setDirectory).catch(()=>{});
-        }
-    }, [view]);
+    useEffect(() => { if (view === 'search') getDirectory().then(setDirectory).catch(()=>{}); }, [view]);
 
     const handleSearch = (val) => {
         setSearchQuery(val);
         if (val.length < 2) { setSearchResults([]); return; }
         const clean = val.toUpperCase().replace(/\s+/g, '');
         const matches = directory.filter(u => {
+            // FIX: Prevent null crash
             const n = (u.n || "").toUpperCase().replace(/\s+/g, '');
-            return n.includes(clean) || u.m.toUpperCase().includes(clean);
+            const m = (u.m || "").toUpperCase();
+            return n.includes(clean) || m.includes(clean);
         }).slice(0, 15);
         setSearchResults(matches);
     };
@@ -88,10 +73,7 @@ export default function ToolsModal({ user }) {
         setSelectedItem(item);
         setGroupList(null);
         navTo('#tools/groups');
-        try {
-            const res = await api.get(`/tools/details?q=${item.m}&t=${item.t}`);
-            setGroupList(res);
-        } catch(e) { showToast("Failed to fetch groups", "error"); }
+        try { const res = await api.get(`/tools/details?q=${item.m}&t=${item.t}`); setGroupList(res); } catch(e) { showToast("Failed to fetch groups", "error"); }
     };
 
     const selectGroup = async (g) => {
@@ -108,18 +90,13 @@ export default function ToolsModal({ user }) {
         } catch(e) {}
     };
 
-    // --- SELF TEST & ACTION LOGIC ---
     const handleSelfTest = async () => {
         if (!selfPwdPrompt) return;
         setActionLoading(true);
         try {
             const res = await api.post('/tools/validate', { matric: user.matric, password: selfPwdPrompt, auto: false, initiator: user.matric });
-            if (res.valid) {
-                showToast("Password Valid!", "success");
-                setSelfPwdTested(true);
-            } else {
-                showToast("Invalid Password", "error");
-            }
+            if (res.valid) { showToast("Password Valid!", "success"); setSelfPwdTested(true); } 
+            else { showToast("Invalid Password", "error"); }
         } catch (e) { showToast("Test Failed", "error"); }
         setActionLoading(false);
     };
@@ -141,11 +118,10 @@ export default function ToolsModal({ user }) {
                 return;
             }
 
-            if (res.status === 200 && res.response.includes('error":false')) {
+            // USE NEW CLEAN SUCCESS FLAG
+            if (res.success) {
                 showToast(`${action} Successful`, "success");
                 setShowSelfPrompt(false);
-                
-                // Force global directory to refresh in background
                 getDirectory(true).then(setDirectory);
                 
                 if (action === 'ADD') {
@@ -161,11 +137,10 @@ export default function ToolsModal({ user }) {
                     showToast(errorJson.message || "Action Failed", "error");
                 } catch { showToast("Action Failed", "error"); }
             }
-        } catch(e) { showToast(e.message, "error"); }
+        } catch(e) { showToast("Network Error", "error"); }
         setActionLoading(false);
     };
 
-    // --- SESSION LOGIC ---
     const [sessionTab, setSessionTab] = useState('present');
 
     const loadSession = async (session) => {
@@ -192,44 +167,30 @@ export default function ToolsModal({ user }) {
                 return;
             }
             
-            const present = [];
-            const absent = [];
+            const present = []; const absent = [];
             (currentRoster || []).forEach(student => {
                 const log = logs.find(l => l.matricNo === student.matric);
-                if (log && (log.status === 'P' || log.status === 'M' || log.status === 'L')) {
-                    present.push({ ...student, log_id: log.id, status: log.status });
-                } else {
-                    absent.push(student);
-                }
+                if (log && (log.status === 'P' || log.status === 'M' || log.status === 'L')) present.push({ ...student, log_id: log.id, status: log.status });
+                else absent.push(student);
             });
             setMasterLogs({ present, absent });
-        } catch(e) { 
-            setMasterLogs({ present: [], absent: [] });
-        }
+        } catch(e) { setMasterLogs({ present: [], absent: [] }); }
     };
 
     const handleAttendanceAction = async (type, targetMatric, targetLogId, reason = '') => {
         setAttendanceLoadingId(targetMatric);
         try {
             setExemptTarget(null); 
-            await api.post('/action', { 
-                type, matric: targetMatric, sid: activeSession.id, lid: targetLogId, gid: activeGroup.id, remark: reason 
-            });
+            await api.post('/action', { type, matric: targetMatric, sid: activeSession.id, lid: targetLogId, gid: activeGroup.id, remark: reason });
             showToast("Success", "success");
             await refreshSessionData(activeSession.id);
         } catch(e) { showToast(e.message, "error"); }
         setAttendanceLoadingId(null);
     };
 
-    // --- ROSTER LOGIC ---
     const loadRoster = async () => {
         navTo('#tools/roster');
-        if (!roster) {
-            try {
-                const res = await api.get(`/tools/roster?gid=${activeGroup.id}`);
-                setRoster(res);
-            } catch(e) {}
-        }
+        if (!roster) { try { const res = await api.get(`/tools/roster?gid=${activeGroup.id}`); setRoster(res); } catch(e) {} }
     };
 
     const handlePwdChange = (matric, val) => {
@@ -256,25 +217,19 @@ export default function ToolsModal({ user }) {
 
     const startAutoFetch = async () => {
         if (isFetching) { fetchAbort.current = true; return; }
-        setIsFetching(true);
-        fetchAbort.current = false;
+        setIsFetching(true); fetchAbort.current = false;
         const targets = roster.filter(s => !s.valid && s.password !== 'Unknown');
         let count = 0;
         for (let s of targets) {
             if (fetchAbort.current) break;
-            count++;
-            setFetchProgress(`${count} / ${targets.length}`);
+            count++; setFetchProgress(`${count} / ${targets.length}`);
             await testPassword(s.matric, '', true);
         }
-        setIsFetching(false);
-        setFetchProgress('');
+        setIsFetching(false); setFetchProgress('');
     };
 
     useEffect(() => {
-        if (view !== 'roster' && isFetching) {
-            fetchAbort.current = true;
-            setIsFetching(false);
-        }
+        if (view !== 'roster' && isFetching) { fetchAbort.current = true; setIsFetching(false); }
     }, [view, isFetching]);
 
     const dropStudent = async (matric, pwd) => {
@@ -283,11 +238,18 @@ export default function ToolsModal({ user }) {
             const res = await api.post('/tools/action', {
                 action: 'DROP', matric, password: pwd, code: activeGroup.code, cid: activeGroup.id, initiator: user.matric
             });
-            if (res.status === 200 && res.response.includes('error":false')) {
+            // USE NEW CLEAN SUCCESS FLAG
+            if (res.success) {
                 showToast("Dropped", "success");
                 setRoster(prev => prev.filter(s => s.matric !== matric));
                 setActiveGroup(prev => ({...prev, students: Math.max(0, (prev.students || 1) - 1)}));
-                getDirectory(true).then(setDirectory); // Update background directory
+                
+                // LINK SYNC: If user drops themselves from the Roster list, update the Hub button!
+                if (matric === user.matric) {
+                    setLocalUserGroups(prev => prev.filter(gid => gid !== String(activeGroup.id)));
+                }
+                
+                getDirectory(true).then(setDirectory); 
             } else {
                 try {
                     const err = JSON.parse(res.response);

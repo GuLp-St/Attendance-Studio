@@ -632,21 +632,29 @@ def api_handler(path):
             if not pwd or pwd == 'Unknown':
                 return jsonify({"needs_password": True})
 
+            is_success = False
+
             if action == "DROP":
                 status, resp = core_api.drop_course(m, pwd, code, cid, sem)
-                if status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or "error\":false" in resp.lower()):
+                is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower() or 'gugur' in resp.lower())
+                
+                if is_success:
                     db.collection('students').document(m).set({"groups": firestore.ArrayRemove([cid]), "password": pwd}, merge=True)
-                    db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True) # Force Sync
+                    db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
             else:
                 status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "P")
-                if "error\":true" in resp.lower() or "taraf" in resp.lower() or "syarat" in resp.lower():
-                    status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "T")
+                is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower())
                 
-                if status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or "error\":false" in resp.lower()):
+                # If failed, try as Core (T)
+                if not is_success and ("error\":true" in resp.replace(" ", "").lower() or "taraf" in resp.lower() or "syarat" in resp.lower()):
+                    status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "T")
+                    is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower())
+                
+                if is_success:
                     db.collection('students').document(m).set({"groups": firestore.ArrayUnion([cid]), "password": pwd}, merge=True)
-                    db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True) # Force Sync
+                    db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
             
-            return jsonify({"status": status, "response": resp})
+            return jsonify({"status": status, "response": resp, "success": is_success})
         except Exception as e: return jsonify({"error": str(e)}), 500
         
     elif path == '/tools/timetable':
@@ -975,7 +983,20 @@ def api_handler(path):
             banned = [d.id for d in db.collection('banned_ips').stream()]
             ip_meta = {}
             for d in db.collection('ip_metadata').stream(): ip_meta[d.id] = d.to_dict().get('name')
-            return Response(json.dumps({"config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, "sync_history": sync_hist, "ip_meta": ip_meta}), headers=headers)
+            
+            # --- NEW: EXPOSE AUTO-ACCOUNT TO ADMIN UI ---
+            auto_sys_matric, auto_sys_pwd = "", ""
+            docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(1).stream()
+            for d in docs: 
+                auto_sys_matric = d.id
+                auto_sys_pwd = d.to_dict().get('password')
+                break
+
+            return Response(json.dumps({
+                "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
+                "sync_history": sync_hist, "ip_meta": ip_meta,
+                "auto_system": {"matric": auto_sys_matric, "password": auto_sys_pwd}
+            }), headers=headers)
         
         elif req_type == 'save_settings':
             update = {}

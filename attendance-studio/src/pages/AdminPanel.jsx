@@ -10,66 +10,33 @@ export default function AdminPanel() {
   const { showToast } = useToast();
   const { confirm } = useConfirm();
 
-  // =========================================================================
-  // 1. STATE MANAGEMENT
-  // =========================================================================
-
   const [key, setKey] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(false);
-  
   const [data, setData] = useState(null); 
   const [consoleOutput, setConsoleOutput] = useState("Ready...");
   const [expandedIps, setExpandedIps] = useState({});
   const [tagModalData, setTagModalData] = useState(null); 
+  const [autoSystem, setAutoSystem] = useState(null);
 
-  // Directory for Autocomplete
   const [directory, setDirectory] = useState([]);
-  useEffect(() => { 
-      getDirectory().then(setDirectory).catch(()=>{});
-  }, []);
+  useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}) }, []);
 
-  // Settings State
-  const [formSync, setFormSync] = useState({ 
-      limit: 5000, 
-      classStart: 0, 
-      studentBatch: 50, 
-      actLimit: 5000, 
-      actStart: 0, 
-      actMonths: 6 
-  });
-  
+  const [formSync, setFormSync] = useState({ limit: 5000, classStart: 0, studentBatch: 50, actLimit: 5000, actStart: 0, actMonths: 6 });
   const [systemMatric, setSystemMatric] = useState("");
   const [priorityCourses, setPriorityCourses] = useState([]);
 
-  // Search States
   const [sysSearch, setSysSearch] = useState('');
   const [courseSearch, setCourseSearch] = useState('');
 
-  // =========================================================================
-  // 2. MODAL & HISTORY MANAGEMENT
-  // =========================================================================
-
-  const openTagModal = (id, name) => {
-    window.history.pushState({ level: 'admin_tag' }, '', '#tag');
-    setTagModalData({ id, name });
-  };
-  
+  const openTagModal = (id, name) => { window.history.pushState({ level: 'admin_tag' }, '', '#tag'); setTagModalData({ id, name }); };
   const closeTagModal = () => window.history.back();
 
   useEffect(() => {
-    const handlePopState = (e) => {
-      if (tagModalData && (!e.state || e.state.level !== 'admin_tag')) {
-          setTagModalData(null);
-      }
-    };
+    const handlePopState = (e) => { if (tagModalData && (!e.state || e.state.level !== 'admin_tag')) setTagModalData(null); };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, [tagModalData]);
-
-  // =========================================================================
-  // 3. API ACTIONS
-  // =========================================================================
 
   const loadData = async () => {
     setLoading(true);
@@ -78,48 +45,30 @@ export default function AdminPanel() {
       if (res.error) throw new Error(res.error);
 
       setData(res);
+      setAutoSystem(res.auto_system);
       setIsAuthenticated(true);
 
       if (res.config) {
         setFormSync({
-          limit: res.config.scan_limit || 5000,
-          classStart: res.config.start_id || 100000,
-          studentBatch: res.config.student_sync_batch || 50,
-          actLimit: res.config.act_scan_limit || 5000,
-          actStart: res.config.act_start_id || 107000,
-          actMonths: res.config.act_months || 6
+          limit: res.config.scan_limit || 5000, classStart: res.config.start_id || 100000,
+          studentBatch: res.config.student_sync_batch || 50, actLimit: res.config.act_scan_limit || 5000,
+          actStart: res.config.act_start_id || 107000, actMonths: res.config.act_months || 6
         });
         setSystemMatric(res.config.system_matric || "");
         setPriorityCourses(res.config.priority_courses || []);
       }
-    } catch (e) {
-      showToast(e.message || "Invalid Key", "error");
-      setIsAuthenticated(false);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { showToast(e.message || "Invalid Key", "error"); setIsAuthenticated(false); } finally { setLoading(false); }
   };
 
   const saveSettings = async () => {
     try {
-      const payload = {
-        key, 
-        type: 'save_settings',
-        scan_limit: formSync.limit, 
-        last_scanned: formSync.classStart,
-        student_sync_batch: formSync.studentBatch, 
-        act_scan_limit: formSync.actLimit,
-        act_start_id: formSync.actStart, 
-        act_months: formSync.actMonths,
-        system_matric: systemMatric, 
-        priority_courses: priorityCourses
-      };
-      
-      const res = await api.post('/admin_dashboard', payload);
-      showToast(res.status, "success");
-    } catch (e) { 
-        showToast(e.message, "error"); 
-    }
+      await api.post('/admin_dashboard', {
+        key, type: 'save_settings', scan_limit: formSync.limit, last_scanned: formSync.classStart,
+        student_sync_batch: formSync.studentBatch, act_scan_limit: formSync.actLimit,
+        act_start_id: formSync.actStart, act_months: formSync.actMonths, system_matric: systemMatric, priority_courses: priorityCourses
+      });
+      showToast("Saved", "success");
+    } catch (e) { showToast(e.message, "error"); }
   };
 
   const triggerSync = async (type) => {
@@ -127,258 +76,112 @@ export default function AdminPanel() {
     setConsoleOutput("Initializing Sync...");
     try {
       let endpoint = type === 'class' ? '/admin_sync_class' : type === 'student' ? '/admin_sync_student' : '/admin_sync_activity';
-      const response = await fetch(`/api${endpoint}?key=${key}`);
-      const text = await response.text();
-      setConsoleOutput(text);
-      loadData();
-    } catch (e) { 
-        setConsoleOutput("Error: " + e.message); 
-    }
+      const text = await (await fetch(`/api${endpoint}?key=${key}`)).text();
+      setConsoleOutput(text); loadData();
+    } catch (e) { setConsoleOutput("Error: " + e.message); }
   };
 
-  const handleDeviceDelete = async (id) => {
-    if (!await confirm("Delete ALL logs & Unban this device?")) return;
-    try { 
-        await api.post('/admin_dashboard', { key, type: 'delete_device_logs', target_id: id }); 
-        loadData(); 
-        showToast("Cleared", "success"); 
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const handleIpAction = async (ip, action) => {
-    if (action === 'ban' && !await confirm(`BAN IP: ${ip}?`)) return;
-    try { 
-        await api.post('/admin_dashboard', { key, type: 'ban_ip', ip, action }); 
-        loadData(); 
-        showToast(`IP ${action}ned`, "success"); 
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const saveIpTag = async () => {
-    if (!tagModalData) return;
-    try { 
-        await api.post('/admin_dashboard', { key, type: 'set_ip_name', ip: tagModalData.id, name: tagModalData.name }); 
-        closeTagModal(); 
-        loadData(); 
-        showToast("Saved", "success"); 
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  // =========================================================================
-  // 4. DATA PROCESSING
-  // =========================================================================
+  const handleJobAction = async (action, jobId = null) => { if (!await confirm("Delete?")) return; try { await api.post('/admin_dashboard', { key, type: action, job_id: jobId }); loadData(); showToast("Updated", "success"); } catch (e) {} };
+  const handleDeviceDelete = async (id) => { if (!await confirm("Delete logs & Unban?")) return; try { await api.post('/admin_dashboard', { key, type: 'delete_device_logs', target_id: id }); loadData(); showToast("Cleared", "success"); } catch (e) {} };
+  const handleIpAction = async (ip, action) => { if (!await confirm(`BAN IP: ${ip}?`)) return; try { await api.post('/admin_dashboard', { key, type: 'ban_ip', ip, action }); loadData(); showToast(`IP ${action}ned`, "success"); } catch (e) {} };
+  const saveIpTag = async () => { if (!tagModalData) return; try { await api.post('/admin_dashboard', { key, type: 'set_ip_name', ip: tagModalData.id, name: tagModalData.name }); closeTagModal(); loadData(); showToast("Saved", "success"); } catch (e) {} };
 
   const networkGroups = useMemo(() => {
     if (!data) return [];
     const groups = {};
-    
     data.logs.forEach(l => {
       const id = l.device_id && l.device_id !== 'unknown' ? l.device_id : l.ip;
-      
-      if (!groups[id]) {
-          groups[id] = { id, logs: [], banned: false, name: '', recentIdentity: 'Unknown User', lastActive: '', lastIdentityTime: '' };
-      }
-      
+      if (!groups[id]) groups[id] = { id, logs: [], banned: false, name: '', recentIdentity: 'Unknown User', lastActive: '', lastIdentityTime: '' };
       groups[id].logs.push(l);
-      
-      if (l.timestamp > groups[id].lastActive) {
-          groups[id].lastActive = l.timestamp;
-      }
-      
+      if (l.timestamp > groups[id].lastActive) groups[id].lastActive = l.timestamp;
       if (l.matric && l.matric !== 'undefined' && l.matric !== 'null') {
-          if (l.timestamp > groups[id].lastIdentityTime) { 
-              groups[id].recentIdentity = `User: ${l.matric}`; 
-              groups[id].lastIdentityTime = l.timestamp; 
-          }
+          if (l.timestamp > groups[id].lastIdentityTime) { groups[id].recentIdentity = `User: ${l.matric}`; groups[id].lastIdentityTime = l.timestamp; }
       } else if (l.action === 'TARGET_SEARCH' && groups[id].recentIdentity === 'Unknown User') {
-          if (l.timestamp > groups[id].lastIdentityTime) { 
-              groups[id].recentIdentity = `Searched: ${l.details}`; 
-          }
+          if (l.timestamp > groups[id].lastIdentityTime) { groups[id].recentIdentity = `Searched: ${l.details}`; }
       }
     });
-    
-    data.banned_ips.forEach(ip => { 
-        if (!groups[ip]) groups[ip] = { id: ip, logs: [], banned: true, name: '', recentIdentity: 'Banned', lastActive: '9999' }; 
-        groups[ip].banned = true; 
-    });
-    
-    Object.keys(data.ip_meta || {}).forEach(k => { 
-        if (groups[k]) groups[k].name = data.ip_meta[k]; 
-    });
-    
+    data.banned_ips.forEach(ip => { if (!groups[ip]) groups[ip] = { id: ip, logs: [], banned: true, name: '', recentIdentity: 'Banned', lastActive: '9999' }; groups[ip].banned = true; });
+    Object.keys(data.ip_meta || {}).forEach(k => { if (groups[k]) groups[k].name = data.ip_meta[k]; });
     return Object.values(groups).sort((a, b) => (b.lastActive || "").localeCompare(a.lastActive || ""));
   }, [data]);
 
-  // =========================================================================
-  // 5. AUTOCOMPLETE FILTERS
-  // =========================================================================
-  const sysMatches = sysSearch.length >= 2 
-      ? directory.filter(u => u.t === 's' && (u.m.includes(sysSearch) || u.n.toUpperCase().includes(sysSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) 
-      : [];
-      
-  const courseMatches = courseSearch.length >= 2 
-      ? directory.filter(u => u.t === 'c' && (u.m.toUpperCase().includes(courseSearch.toUpperCase()) || u.n.toUpperCase().includes(courseSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) 
-      : [];
+  // FIX FOR CRASH: Added (u.m || "") and (u.n || "")
+  const sysMatches = sysSearch.length >= 2 ? directory.filter(u => u.t === 's' && ((u.m || "").includes(sysSearch) || (u.n || "").toUpperCase().includes(sysSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) : [];
+  const courseMatches = courseSearch.length >= 2 ? directory.filter(u => u.t === 'c' && ((u.m || "").toUpperCase().includes(courseSearch.toUpperCase()) || (u.n || "").toUpperCase().includes(courseSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) : [];
 
-  // =========================================================================
-  // RENDER
-  // =========================================================================
-
-  if (!isAuthenticated) {
-    return (
-      <div style={{ textAlign: 'center', padding: '50px 0' }}>
-        <input 
-            type="password" 
-            className="t-input" 
-            placeholder="ENTER KEY" 
-            style={{ borderColor: '#f00', color: '#f00', marginBottom: '10px' }} 
-            value={key} 
-            onChange={(e) => setKey(e.target.value)} 
-            onKeyDown={(e) => e.key === 'Enter' && loadData()} 
-        />
-        <button 
-            className="btn" 
-            style={{ borderColor: '#f00', color: '#f00', width: '100%' }} 
-            onClick={loadData} 
-            disabled={loading}
-        >
-            {loading ? "VERIFYING..." : "UNLOCK"}
-        </button>
-      </div>
-    );
-  }
+  if (!isAuthenticated) return (
+      <div style={{ textAlign: 'center', padding: '50px 0' }}><input type="password" className="t-input" placeholder="ENTER KEY" style={{ borderColor: '#f00', color: '#f00', marginBottom: '10px' }} value={key} onChange={(e) => setKey(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && loadData()} /><button className="btn" style={{ borderColor: '#f00', color: '#f00', width: '100%' }} onClick={loadData} disabled={loading}>{loading ? "VERIFYING..." : "UNLOCK"}</button></div>
+  );
 
   return (
     <div className="admin-grid">
 
-      {/* --- SYSTEM ACCOUNT --- */}
       <div className="admin-section">
         <div className="admin-title">SYSTEM ACCOUNT</div>
-        <div style={{ fontSize: '0.7rem', color: '#888', marginBottom: '10px' }}>
-            Select a validated student to act as the backend API crawler. If empty, the system automatically finds the newest validated student.
-        </div>
+        <div style={{ fontSize: '0.7rem', color: '#888', marginBottom: '10px' }}>Select a validated student to act as the backend API crawler. If empty, the system automatically finds the newest validated student.</div>
         
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
             <div style={{ color: 'var(--primary)', fontWeight: 'bold' }}>CURRENT:</div>
-            <div style={{ color: '#fff' }}>{systemMatric || "AUTO-SELECT"}</div>
-            {systemMatric && (
-                <button className="btn" style={{ padding: '2px 6px', borderColor: '#f00', color: '#f00' }} onClick={() => setSystemMatric("")}>
-                    CLEAR
-                </button>
-            )}
+            <div style={{ color: '#fff' }}>
+                {systemMatric ? systemMatric : (autoSystem?.matric ? `AUTO: ${autoSystem.matric} (${autoSystem.password})` : "NO VALID ACCOUNTS FOUND")}
+            </div>
+            {systemMatric && <button className="btn" style={{ padding: '2px 6px', borderColor: '#f00', color: '#f00' }} onClick={() => setSystemMatric("")}>CLEAR</button>}
         </div>
 
         <div style={{ position: 'relative' }}>
-            <input 
-                type="text" 
-                className="t-input" 
-                placeholder="Search Student Name or ID..." 
-                value={sysSearch} 
-                onChange={e => setSysSearch(e.target.value)} 
-            />
+            <input type="text" className="t-input" placeholder="Search Student Name or ID..." value={sysSearch} onChange={e => setSysSearch(e.target.value)} />
             {sysMatches.length > 0 && (
                 <div className="results-list" style={{ display: 'block', zIndex: 10, border: '1px solid var(--grid-line)' }}>
-                    {sysMatches.map(u => (
-                        <div key={u.m} className="result-item" onClick={() => { setSystemMatric(u.m); setSysSearch(''); }}>
-                            <span style={{ color: '#fff' }}>{u.n}</span> 
-                            <span style={{ color: 'var(--primary)' }}>{u.m}</span>
-                        </div>
-                    ))}
+                    {sysMatches.map(u => (<div key={u.m} className="result-item" onClick={() => { setSystemMatric(u.m); setSysSearch(''); }}><span style={{ color: '#fff' }}>{u.n}</span> <span style={{ color: 'var(--primary)' }}>{u.m}</span></div>))}
                 </div>
             )}
         </div>
       </div>
 
-      {/* --- SYNC MANAGER --- */}
       <div className="admin-section">
         <div className="admin-title">SYNC MANAGER</div>
-
         <div className="admin-config-grid">
-          <div>
-              <label>CLASS LIMIT</label>
-              <input type="number" className="t-input" value={formSync.limit} onChange={e => setFormSync({ ...formSync, limit: e.target.value })} />
-          </div>
-          <div>
-              <label>ACT LIMIT</label>
-              <input type="number" className="t-input" value={formSync.actLimit} onChange={e => setFormSync({ ...formSync, actLimit: e.target.value })} />
-          </div>
-          <div>
-              <label>STUDENT BATCH</label>
-              <input type="number" className="t-input" value={formSync.studentBatch} onChange={e => setFormSync({ ...formSync, studentBatch: e.target.value })} />
-          </div>
+          <div><label>CLASS LIMIT</label><input type="number" className="t-input" value={formSync.limit} onChange={e => setFormSync({ ...formSync, limit: e.target.value })} /></div>
+          <div><label>ACT LIMIT</label><input type="number" className="t-input" value={formSync.actLimit} onChange={e => setFormSync({ ...formSync, actLimit: e.target.value })} /></div>
+          <div><label>STUDENT BATCH</label><input type="number" className="t-input" value={formSync.studentBatch} onChange={e => setFormSync({ ...formSync, studentBatch: e.target.value })} /></div>
         </div>
 
-        {/* CLASS SYNC */}
         <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
           <div style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 'bold', marginBottom: '8px' }}>CLASS SYNC (DISCOVERY)</div>
-          <div className="ctrl-row">
-            <input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID" value={formSync.classStart} onChange={e => setFormSync({ ...formSync, classStart: e.target.value })} />
-            <button className="btn" onClick={() => triggerSync('class')}>RUN</button>
-          </div>
+          <div className="ctrl-row"><input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID" value={formSync.classStart} onChange={e => setFormSync({ ...formSync, classStart: e.target.value })} /><button className="btn" onClick={() => triggerSync('class')}>RUN</button></div>
         </div>
 
-        {/* STUDENT SYNC & PRIORITY */}
         <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
           <div style={{ fontSize: '0.7rem', color: '#0f0', fontWeight: 'bold', marginBottom: '8px' }}>STUDENT SYNC (FILL DB)</div>
-          
           <div style={{ background: 'rgba(0,0,0,0.3)', padding: '10px', borderRadius: '4px', marginBottom: '10px' }}>
               <div style={{ fontSize: '0.65rem', color: '#aaa', marginBottom: '5px' }}>PRIORITY COURSES</div>
-              
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '10px' }}>
                   {priorityCourses.length === 0 && <span style={{ color: '#555', fontSize: '0.7rem' }}>None Set</span>}
-                  {priorityCourses.map(c => (
-                      <div key={c} style={{ background: 'rgba(0,255,0,0.1)', border: '1px solid #0f0', color: '#0f0', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                          {c} 
-                          <span style={{ cursor: 'pointer', color: '#f00' }} onClick={() => setPriorityCourses(prev => prev.filter(x => x !== c))}>✕</span>
-                      </div>
-                  ))}
+                  {priorityCourses.map(c => (<div key={c} style={{ background: 'rgba(0,255,0,0.1)', border: '1px solid #0f0', color: '#0f0', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '5px' }}>{c} <span style={{ cursor: 'pointer', color: '#f00' }} onClick={() => setPriorityCourses(prev => prev.filter(x => x !== c))}>✕</span></div>))}
               </div>
-              
               <div style={{ position: 'relative' }}>
                   <input type="text" className="t-input" placeholder="Add Priority Course Code..." value={courseSearch} onChange={e => setCourseSearch(e.target.value)} style={{ padding: '6px', fontSize: '0.8rem' }} />
                   {courseMatches.length > 0 && (
                       <div className="results-list" style={{ display: 'block', zIndex: 10, border: '1px solid #0f0' }}>
-                          {courseMatches.map(u => (
-                              <div key={u.m} className="result-item" onClick={() => { if(!priorityCourses.includes(u.m)) setPriorityCourses(prev => [...prev, u.m]); setCourseSearch(''); }}>
-                                  <span style={{ color: '#0f0' }}>{u.n}</span> 
-                                  <span style={{ color: '#fff' }}>{u.m}</span>
-                              </div>
-                          ))}
+                          {courseMatches.map(u => (<div key={u.m} className="result-item" onClick={() => { if(!priorityCourses.includes(u.m)) setPriorityCourses(prev => [...prev, u.m]); setCourseSearch(''); }}><span style={{ color: '#0f0' }}>{u.n}</span> <span style={{ color: '#fff' }}>{u.m}</span></div>))}
                       </div>
                   )}
               </div>
           </div>
-
-          <div className="ctrl-row">
-            <div style={{ flex: 1, color: '#888', fontSize: '0.75rem', padding: '5px 0' }}>Syncs priority first, then oldest courses.</div>
-            <button className="btn" style={{ borderColor: '#0f0', color: '#0f0' }} onClick={() => triggerSync('student')}>RUN</button>
-          </div>
+          <div className="ctrl-row"><div style={{ flex: 1, color: '#888', fontSize: '0.75rem', padding: '5px 0' }}>Syncs priority first, then oldest courses. (Note: A course code updates ALL groups inside it).</div><button className="btn" style={{ borderColor: '#0f0', color: '#0f0' }} onClick={() => triggerSync('student')}>RUN</button></div>
         </div>
 
-        {/* ACTIVITY SYNC */}
         <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
           <div style={{ fontSize: '0.7rem', color: 'var(--accent)', fontWeight: 'bold', marginBottom: '8px' }}>ACTIVITY SYNC</div>
-          <div className="ctrl-row">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: '0 0 auto' }}>
-                <label>MTH:</label>
-                <input type="number" className="t-input" style={{ width: '50px' }} value={formSync.actMonths} onChange={e => setFormSync({ ...formSync, actMonths: e.target.value })} />
-            </div>
-            <input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID" value={formSync.actStart} onChange={e => setFormSync({ ...formSync, actStart: e.target.value })} />
-            <button className="btn" style={{ '--accent': '1' }} onClick={() => triggerSync('activity')}>RUN</button>
-          </div>
+          <div className="ctrl-row"><div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: '0 0 auto' }}><label>MTH:</label><input type="number" className="t-input" style={{ width: '50px' }} value={formSync.actMonths} onChange={e => setFormSync({ ...formSync, actMonths: e.target.value })} /></div><input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID" value={formSync.actStart} onChange={e => setFormSync({ ...formSync, actStart: e.target.value })} /><button className="btn" style={{ '--accent': '1' }} onClick={() => triggerSync('activity')}>RUN</button></div>
         </div>
 
         <button className="btn" style={{ width: '100%', marginTop: '15px' }} onClick={saveSettings}>SAVE ALL SETTINGS</button>
         <textarea readOnly style={{ width: '100%', height: '100px', background: '#000', color: '#0f0', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginTop: '10px', boxSizing: 'border-box' }} value={consoleOutput} />
       </div>
 
-      {/* --- NETWORK ACTIVITY --- */}
       <div className="admin-section">
-        <div className="admin-title">
-            <span>NETWORK ACTIVITY</span>
-            <button onClick={loadData} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.7rem' }}>REFRESH</button>
-        </div>
-        
+        <div className="admin-title"><span>NETWORK ACTIVITY</span><button onClick={loadData} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.7rem' }}>REFRESH</button></div>
         <div style={{ maxHeight: '350px', overflowY: 'auto', border: '1px solid #333' }}>
           {networkGroups.map(group => {
             const isExpanded = expandedIps[group.id];
@@ -386,36 +189,10 @@ export default function AdminPanel() {
             return (
               <div key={group.id} className="ip-group">
                 <div className="ip-header" onClick={() => setExpandedIps(prev => ({ ...prev, [group.id]: !prev[group.id] }))}>
-                  <div>
-                      <span style={{ color, marginRight: '5px', fontSize: '1.2rem' }}>●</span>
-                      <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span className="ip-addr-text">{group.id}</span>
-                          <div style={{ fontSize: '0.7rem', color: '#888' }}>
-                              {group.name ? <span style={{ color: 'var(--primary)', marginRight: '5px' }}>({group.name})</span> : null}
-                              {group.recentIdentity}
-                          </div>
-                      </div>
-                  </div>
-                  <div className="ip-actions" onClick={e => e.stopPropagation()}>
-                      <button className="btn" style={{ color: '#888', padding: '4px 8px', minWidth: 'auto' }} onClick={() => openTagModal(group.id, group.name || '')}>TAG</button>
-                      <button className="btn" style={{ color: '#f00', padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleDeviceDelete(group.id)}>DEL</button>
-                      <button className="btn" style={{ color: color, padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleIpAction(group.id, group.banned ? 'unban' : 'ban')}>{group.banned ? 'UNBAN' : 'BAN'}</button>
-                  </div>
+                  <div><span style={{ color, marginRight: '5px', fontSize: '1.2rem' }}>●</span><div style={{ display: 'flex', flexDirection: 'column' }}><span className="ip-addr-text">{group.id}</span><div style={{ fontSize: '0.7rem', color: '#888' }}>{group.name ? <span style={{ color: 'var(--primary)', marginRight: '5px' }}>({group.name})</span> : null}{group.recentIdentity}</div></div></div>
+                  <div className="ip-actions" onClick={e => e.stopPropagation()}><button className="btn" style={{ color: '#888', padding: '4px 8px', minWidth: 'auto' }} onClick={() => openTagModal(group.id, group.name || '')}>TAG</button><button className="btn" style={{ color: '#f00', padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleDeviceDelete(group.id)}>DEL</button><button className="btn" style={{ color: color, padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleIpAction(group.id, group.banned ? 'unban' : 'ban')}>{group.banned ? 'UNBAN' : 'BAN'}</button></div>
                 </div>
-                {isExpanded && (
-                  <div className="ip-logs" style={{ display: 'block' }}>
-                    {group.logs.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No recent logs</div>}
-                    {group.logs.map(l => (
-                      <div key={l.id} className="log-row">
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span>{l.timestamp.substring(11, 19)}</span>
-                              <span style={{ color: '#fff' }}>{l.matric || '-'}</span>
-                          </div>
-                          <div style={{ color: '#ccc' }}>{l.action} {l.details || ''}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                {isExpanded && (<div className="ip-logs" style={{ display: 'block' }}>{group.logs.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No recent logs</div>}{group.logs.map(l => (<div key={l.id} className="log-row"><div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{l.timestamp.substring(11, 19)}</span><span style={{ color: '#fff' }}>{l.matric || '-'}</span></div><div style={{ color: '#ccc' }}>{l.action} {l.details || ''}</div></div>))}</div>)}
               </div>
             );
           })}
@@ -423,14 +200,11 @@ export default function AdminPanel() {
       </div>
 
       <Modal title="TAG DEVICE / IP" isOpen={!!tagModalData} onClose={closeTagModal} maxWidth="300px">
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ marginBottom: '15px', color: '#888', fontFamily: 'monospace', fontSize: '0.8rem', wordBreak: 'break-all' }}>{tagModalData?.id}</div>
-          <input type="text" className="t-input" placeholder="Nickname" style={{ width: '100%', marginBottom: '15px' }} value={tagModalData?.name || ''} onChange={(e) => setTagModalData({ ...tagModalData, name: e.target.value })} />
-          <button className="btn" style={{ width: '100%' }} onClick={saveIpTag}>SAVE TAG</button>
-        </div>
+        <div style={{ textAlign: 'center' }}><div style={{ marginBottom: '15px', color: '#888', fontFamily: 'monospace', fontSize: '0.8rem', wordBreak: 'break-all' }}>{tagModalData?.id}</div><input type="text" className="t-input" placeholder="Nickname" style={{ width: '100%', marginBottom: '15px' }} value={tagModalData?.name || ''} onChange={(e) => setTagModalData({ ...tagModalData, name: e.target.value })} /><button className="btn" style={{ width: '100%' }} onClick={saveIpTag}>SAVE TAG</button></div>
       </Modal>
 
     </div>
   );
 }
+
 // --- END OF FILE AdminPanel.jsx ---
