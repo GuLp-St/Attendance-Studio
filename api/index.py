@@ -24,6 +24,18 @@ import base64
 # ==========================================
 app = Flask(__name__)
 
+from werkzeug.exceptions import HTTPException
+@app.errorhandler(Exception)
+def handle_exception(e):
+    if isinstance(e, HTTPException):
+        return e.get_response()
+    
+    import traceback
+    traceback.print_exc()
+    if "Quota exceeded" in str(e):
+        return jsonify({"error": "Firebase Quota Exceeded. Please check your Google Cloud Console."}), 429
+    return jsonify({"error": "Internal Server Error", "details": str(e)}), 500
+
 if not firebase_admin._apps:
     cred_content = os.environ.get('FIREBASE_CREDENTIALS')
     if cred_content:
@@ -1140,19 +1152,31 @@ def api_handler(path):
                 if rb_count >= 400: rem_batch.commit(); rem_batch = db.batch(); rb_count = 0
             if rb_count > 0: rem_batch.commit()
             
-            # --- VALID_DIRECTORY PRUNING ---
+            # --- VALID_DIRECTORY PRUNING (OPTIMIZED) ---
             log("Identifying departed students for directory cleanup...")
-            active_m = set(student_names.keys())
-            vd_docs = db.collection('valid_directory').stream()
             vd_batch = db.batch(); vdb_count = 0; pruned = 0
-            for vdoc in vd_docs:
-                vm = vdoc.id
-                if vm not in active_m:
-                    # Check if actually in students
-                    if not db.collection('students').document(vm).get().exists:
-                        vd_batch.delete(vdoc.reference)
+            
+            # ONLY check students who have had courses removed during THIS run
+            students_to_verify = [m for m, diff in updates_by_student.items() if diff["remove"]]
+            if students_to_verify:
+                # Fetch only these students to see if they have any remaining courses
+                refs = [db.collection('students').document(m) for m in students_to_verify]
+                # Firestore get_all costs 1 read per document, which is extremely cheap here (usually 0-5)
+                # compared to the 30,000 reads streaming the whole directory would cost.
+                docs = db.get_all(refs)
+                for doc in docs:
+                    if doc.exists:
+                        d_dict = doc.to_dict()
+                        groups = d_dict.get('groups', [])
+                        # If the student dropped the course and now has 0 registered courses, purge them!
+                        if not groups or len(groups) == 0:
+                            db.collection('students').document(doc.id).delete()
+                            vd_batch.delete(db.collection('valid_directory').document(doc.id))
+                            vdb_count += 1; pruned += 1
+                    else:
+                        vd_batch.delete(db.collection('valid_directory').document(doc.id))
                         vdb_count += 1; pruned += 1
-                if vdb_count >= 400: vd_batch.commit(); vd_batch = db.batch(); vdb_count = 0
+                        
             if vdb_count > 0: vd_batch.commit()
             log(f"Pruned {pruned} departed accounts from Valid Directory.")
 
@@ -1292,11 +1316,13 @@ def api_handler(path):
                 
                 # --- FETCH MULTIPLE VALID ACCOUNTS FOR THE SWITCHER ---
                 auto_accounts = []
-                docs = db.collection('students').limit(200).stream()
+                docs = db.collection('valid_directory').order_by('__name__', direction=firestore.Query.DESCENDING).limit(300).stream()
                 for d in docs: 
                     p = d.to_dict().get('password')
-                    if p and p != 'Unknown':
+                    tt_ready = d.to_dict().get('timetable_ready', False)
+                    if p and p != 'Unknown' and tt_ready is True:
                         auto_accounts.append({"matric": d.id, "password": p})
+                        if len(auto_accounts) >= 50: break
 
                 return Response(json.dumps({
                     "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
