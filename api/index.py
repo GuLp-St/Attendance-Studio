@@ -83,16 +83,23 @@ def get_authorized_session():
         if doc.exists: pwd = doc.to_dict().get('password')
         
     if not pwd or pwd == "Unknown":
-        docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(20).stream()
+        docs = db.collection('valid_directory').where(filter=FieldFilter("timetable_ready", "==", True)).limit(5).stream()
         for d in docs:
-            p = d.to_dict().get('password')
-            if p and p != "Unknown":
-                sys_m = d.id
-                pwd = p
-                break
+            sys_m = d.id
+            pwd = d.to_dict().get('password')
+            if sys_m and pwd: break
+            
+        if not sys_m or not pwd:
+            docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(20).stream()
+            for d in docs:
+                p = d.to_dict().get('password')
+                if p and p != "Unknown":
+                    sys_m = d.id
+                    pwd = p
+                    break
                 
     if not sys_m or not pwd:
-        raise Exception("CRITICAL: No valid system credentials found in database. The system needs at least one student password saved.")
+        raise Exception("CRITICAL: No valid system credentials found in database.")
         
     s = requests.Session()
     core_api.configure_session(s, sys_m, pwd)
@@ -261,28 +268,34 @@ def api_handler(path):
                     if j.to_dict().get('status') == 'pending': active_autoscan.add(j.to_dict().get('gid'))
             except: pass
 
+            active_auto_register = []
+            try:
+                for j in db.collection('auto_register_jobs').where(filter=FieldFilter("matric", "==", matric)).stream():
+                    active_auto_register.append(str(j.to_dict().get('gid')))
+            except: pass
+
             courses = {}
             raw_timetable = []
 
-            with ThreadPoolExecutor(max_workers=8) as ex:
-                f_info = {ex.submit(core_api.get_group_info, gid, req_session): gid for gid in group_ids}
-                for f in as_completed(f_info):
-                    gid = f_info[f]
-                    if res := f.result(): 
-                        res['autoscan_active'] = (gid in active_autoscan)
-                        res['gid'] = gid
-                        res['sessions'] = None
-                        courses[gid] = res
+            def fetch_group(gid):
+                info = core_api.get_group_info(gid, req_session)
+                timetable_slots = core_api.get_timetable(gid, req_session)
+                return gid, info, timetable_slots
 
             with ThreadPoolExecutor(max_workers=8) as ex:
-                f_time = {ex.submit(core_api.get_timetable, gid, req_session): gid for gid in group_ids}
-                for f in as_completed(f_time):
-                    gid = f_time[f]
-                    slots = f.result()
-                    if slots and isinstance(slots, list) and gid in courses:
-                        for s in slots:
-                            if isinstance(s, dict):
-                                raw_timetable.append({"day": s.get('KETERANGAN_HARI'), "start": s.get('MASA_MULA'), "end": s.get('MASA_TAMAT'), "loc": s.get('LOKASI'), "code": courses[gid]['code'], "name": courses[gid]['name'], "group": courses[gid]['group'], "gid": gid})
+                futures = {ex.submit(fetch_group, gid): gid for gid in group_ids}
+                for f in as_completed(futures):
+                    gid, info, slots = f.result()
+                    if info: 
+                        info['autoscan_active'] = (gid in active_autoscan)
+                        info['gid'] = gid
+                        info['sessions'] = None
+                        courses[gid] = info
+                        if slots and isinstance(slots, list):
+                            for s in slots:
+                                if isinstance(s, dict):
+                                    raw_timetable.append({"day": s.get('KETERANGAN_HARI'), "start": s.get('MASA_MULA'), "end": s.get('MASA_TAMAT'), "loc": s.get('LOKASI'), "code": info['code'], "name": info['name'], "group": info['group'], "gid": gid})
+
             
             final_courses = list(courses.values())
             final_courses.sort(key=lambda x: x['code'])
@@ -291,7 +304,8 @@ def api_handler(path):
                 "name": user_data['name'], 
                 "courses": final_courses, 
                 "timetable": consolidate_timetable(raw_timetable), 
-                "following": following_ids
+                "following": following_ids,
+                "auto_register": active_auto_register
             }), headers=headers)
         except Exception as e:
             traceback.print_exc()
@@ -401,11 +415,23 @@ def api_handler(path):
             elif d['type'] == 'unfollow_org':
                 db.collection('students').document(d['matric']).update({'following': firestore.ArrayRemove([d['sid']])})
                 msg = "Unfollowed"
+            elif d['type'] == 'start_auto_register':
+                jid = f"{d['matric']}_{d['gid']}"
+                db.collection('auto_register_jobs').document(jid).set({
+                    "matric": d['matric'], "gid": str(d['gid']),
+                    "createdAt": get_malaysia_time().isoformat(), "status": "pending"
+                })
+                msg = "Auto Register Activated."
+            elif d['type'] == 'stop_auto_register':
+                jid = f"{d['matric']}_{d['gid']}"
+                db.collection('auto_register_jobs').document(jid).delete()
+                msg = "Auto Register Deactivated."
         except Exception as e: msg = str(e)
         return jsonify({"msg": msg})
 
     elif path == '/cron':
         try:
+            start_time = time.time()
             req_session = get_authorized_session()
             now_my = get_malaysia_time()
             today_str = now_my.strftime('%Y-%m-%d')
@@ -506,12 +532,65 @@ def api_handler(path):
                 return "Invalid Type"
 
             with ThreadPoolExecutor(max_workers=5) as ex:
-                f_map = {ex.submit(process_autoscan_job, j): j for j in jobs}
+                f_map = {}
+                for j in jobs:
+                    if time.time() - start_time > 45: break
+                    f_map[ex.submit(process_autoscan_job, j)] = j
                 for f in as_completed(f_map):
                     try: results.append(f.result())
                     except Exception as e: results.append(f"Error: {str(e)}")
 
-            return Response(f"Jobs: {len(jobs)} | Processed: {len(results)}", headers=headers)
+            # === AUTO REGISTER JOBS ===
+            ar_jobs = list(db.collection('auto_register_jobs').stream())
+
+            def process_auto_register_job(job):
+                d = job.to_dict()
+                matric, gid = d['matric'], d['gid']
+                job_time = datetime.fromisoformat(d['createdAt'])
+                if (now_my - job_time).total_seconds() > 86400 * 7:
+                    create_notification(matric, 'class', f'GID:{gid}', 'FAILED', 'Auto Register Expired (7d)', 'auto')
+                    job.reference.delete()
+                    return "AR Expired"
+                try:
+                    course_doc = db.collection('courses').document(str(gid)).get()
+                    code, group = ('Unknown', '') if not course_doc.exists else (course_doc.to_dict().get('code', 'Unknown'), course_doc.to_dict().get('group', ''))
+                    stud_doc = db.collection('students').document(matric).get()
+                    pwd = ''
+                    if stud_doc.exists:
+                        pwd = stud_doc.to_dict().get('password', '')
+                    if not pwd:
+                        return "AR Pending (No Password)"
+                        
+                    sem = get_sys_config().get('current_semester', '2025/2026-2')
+                    status_c, resp_c = core_api.register_course(matric, pwd, code, str(gid), sem, group, "P")
+                    is_success = status_c == 200 and ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
+                    
+                    if not is_success and ("error\":true" in resp_c.replace(" ", "").lower() or "taraf" in resp_c.lower() or "syarat" in resp_c.lower()):
+                        status_c, resp_c = core_api.register_course(matric, pwd, code, str(gid), sem, group, "T")
+                        is_success = status_c == 200 and ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
+
+                    status = 'SUCCESS' if is_success else 'FAILED'
+                    create_notification(matric, 'class', f'{code} {group}', status, f'Auto Register: {str(resp_c)[:80]}', 'auto')
+                    
+                    if is_success:
+                        db.collection('students').document(matric).set({"groups": firestore.ArrayUnion([str(gid)])}, merge=True)
+                        db.collection('courses').document(str(gid)).set({'last_student_sync': 0}, merge=True)
+                        job.reference.delete()
+                        
+                    return f"AR {status}"
+                except Exception as e:
+                    return f"AR Error: {str(e)}"
+
+            with ThreadPoolExecutor(max_workers=5) as ex:
+                ar_map = {}
+                for j in ar_jobs:
+                    if time.time() - start_time > 45: break
+                    ar_map[ex.submit(process_auto_register_job, j)] = j
+                for f in as_completed(ar_map):
+                    try: results.append(f.result())
+                    except Exception as e: results.append(f"AR Error: {str(e)}")
+
+            return Response(f"Jobs: {len(jobs)} | AR Jobs: {len(ar_jobs)} | Processed: {len(results)}", headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/notifications':
@@ -532,6 +611,166 @@ def api_handler(path):
             data = core_api.get_student_biodata(args.get('matric'), req_session)
             if data: return Response(json.dumps(data), headers=headers)
             else: return jsonify({"error": "No Data"}), 404
+        except Exception as e: return jsonify({"error": str(e)}), 500
+
+    elif path == '/cron_verify':
+        try:
+            cfg_doc = db.collection('system').document('config').get()
+            cfg = cfg_doc.to_dict() if cfg_doc.exists else {}
+            curr_id = cfg.get("verify_start_id", "")
+            
+            students_ref = db.collection('students')
+            if curr_id:
+                docs = students_ref.where(filter=FieldFilter("password", ">", "")).order_by('__name__').start_after([curr_id]).limit(10).stream()
+            else:
+                docs = students_ref.where(filter=FieldFilter("password", ">", "")).order_by('__name__').limit(10).stream()
+            
+            docs = list(docs)
+            if not docs and curr_id:
+                db.collection('system').document('config').set({"verify_start_id": ""}, merge=True)
+                return Response("Reset verify pointer.", headers=headers)
+                
+            results = []
+            last_id = curr_id
+            start_time = time.time()
+            active_sem = cfg.get('current_semester', '2025/2026-2')
+            
+            for d in docs:
+                if time.time() - start_time > 45: break
+                last_id = d.id
+                m = d.id
+                data = d.to_dict()
+                pwd = data.get('password')
+                if not pwd or pwd == 'Unknown': continue
+                
+                bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
+                if not bio:
+                    db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
+                    results.append(f"{m}: Invalid")
+                    continue
+                
+                prog = bio.get('namaProgram', 'Unknown')
+                transcript = core_api.spc_fetch(f"api/v1/result/transcript/{m}", m, pwd)
+                cgpa = 0.0
+                if transcript and 'cgpa' in transcript:
+                    cgpa = float(transcript['cgpa'])
+                    
+                # Timetable Ready Validation
+                tt_check = core_api.spc_fetch(f"api/v1/course/student/{m}?kodSesiSem={active_sem}", m, pwd)
+                is_timetableable = True if tt_check is not None else False
+                
+                db.collection('students').document(m).set({"cgpa": cgpa, "namaProgram": prog, "password": pwd}, merge=True)
+                name = bio.get('nama', data.get('name', 'Unknown'))
+                
+                db.collection('valid_directory').document(m).set({
+                    "matric": m, "name": name, "cgpa": cgpa, "programme": prog, "password": pwd, 
+                    "timetable_ready": is_timetableable,
+                    "last_verified": get_malaysia_time().isoformat()
+                })
+                results.append(f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}")
+            
+            if last_id: db.collection('system').document('config').set({"verify_start_id": last_id}, merge=True)
+            return Response(json.dumps({"processed": len(results), "details": results}), headers=headers)
+        except Exception as e: return jsonify({"error": str(e)}), 500
+
+    elif path == '/directory_v2' and request.method == 'POST':
+        page = int(args.get('page', 1))
+        limit = min(int(args.get('limit', 10)), 50)
+        sort_by = args.get('sort_by', 'name')
+        order = args.get('order', 'asc')
+        search_q = args.get('q', '').strip().upper()
+        req_body = request.get_json(silent=True) or {}
+        
+        try:
+            docs = db.collection('valid_directory').stream()
+            all_valid = [d.to_dict() for d in docs]
+            
+            if search_q:
+                all_valid = [x for x in all_valid if search_q in x.get('name', '').upper() or search_q in x.get('matric','')]
+            
+            prog_filter = req_body.get('programmes', [])
+            if prog_filter and len(prog_filter) > 0:
+                all_valid = [x for x in all_valid if x.get('programme') in prog_filter]
+                
+            if sort_by == 'cgpa':
+                prog_groups = {}
+                for v in all_valid:
+                    p = v.get('programme', 'Unknown')
+                    if p not in prog_groups: prog_groups[p] = []
+                    prog_groups[p].append(v)
+                
+                for p, group in prog_groups.items():
+                    group.sort(key=lambda x: x.get('cgpa', 0), reverse=True)
+                    total = len(group)
+                    for idx, v in enumerate(group):
+                        rank = idx + 1
+                        pct = (rank / total) * 100 if total > 0 else 0
+                        v['rank'] = rank
+                        v['top_pct'] = round(pct)
+            else:
+                for v in all_valid:
+                    v['rank'] = 0
+                    v['top_pct'] = 0
+            
+            rev = (order == 'desc')
+            if sort_by == 'cgpa':
+                all_valid.sort(key=lambda x: x.get('cgpa', 0), reverse=rev)
+            elif sort_by == 'matric':
+                all_valid.sort(key=lambda x: x.get('matric', ''), reverse=rev)
+            else:
+                all_valid.sort(key=lambda x: x.get('name', ''), reverse=rev)
+                
+            total_matches = len(all_valid)
+            start_idx = (page - 1) * limit
+            end_idx = start_idx + limit
+            paged = all_valid[start_idx:end_idx]
+            
+            prog_counts = {}
+            for x in all_valid:
+                p = x.get('programme', 'Unknown')
+                prog_counts[p] = prog_counts.get(p, 0) + 1
+                
+            res_data = {"total": total_matches, "results": paged, "programmes": prog_counts}
+            
+            req_matric = args.get('matric')
+            if req_matric and sort_by == 'cgpa':
+                # Force visibility of own row at bottom if out of scope
+                user_found = next((x for x in paged if x.get('matric') == req_matric), None)
+                if not user_found:
+                    owner_row = next((x for x in all_valid if x.get('matric') == req_matric), None)
+                    if owner_row:
+                        owner_row['is_appended_owner'] = True
+                        paged.append(owner_row)
+            
+            return Response(json.dumps(res_data), headers=headers)
+        except Exception as e: return jsonify({"error": str(e)}), 500
+
+    elif path == '/student_details_proxy':
+        m, pwd = args.get('matric'), args.get('password')
+        if not pwd:
+            doc = db.collection('students').document(m).get()
+            pwd = doc.to_dict().get('password') if doc.exists else None
+        
+        if not pwd or pwd == 'Unknown':
+            return jsonify({"error": "No valid password"}), 401
+            
+        try:
+            results = {}
+            with ThreadPoolExecutor(max_workers=7) as ex:
+                futures = {
+                    'biodata': ex.submit(core_api.spc_fetch, f"api/v1/biodata/personal-v2/{m}", m, pwd),
+                    'attendance': ex.submit(core_api.spc_fetch, f"api/v1/activity/list-activity-attendance?matricNo={m}", m, pwd),
+                    'activities': ex.submit(core_api.spc_fetch, f"api/v1/activity/list?matricNo={m}", m, pwd),
+                    'sponsor': ex.submit(core_api.spc_fetch, f"api/finance/list-sponsor/{m}", m, pwd),
+                    'debt': ex.submit(core_api.spc_fetch, f"api/finance/list-debt/{m}", m, pwd),
+                    'transcript': ex.submit(core_api.spc_fetch, f"api/v1/result/transcript/{m}", m, pwd),
+                    'carry_mark': ex.submit(core_api.spc_fetch, f"api/v1/course/carry-mark/{m}?kodSesiSem={get_sys_config().get('current_semester', '2025/2026-2')}", m, pwd)
+                }
+                for key, f in futures.items():
+                    try: results[key] = f.result()
+                    except: results[key] = None
+                    
+            return Response(json.dumps(results), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     # ==========================================
@@ -559,7 +798,30 @@ def api_handler(path):
             return Response(json.dumps(res), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
+    elif path == '/tools/timetable':
+        gid = args.get('gid')
+        try:
+            req_s = get_authorized_session()
+            slots = core_api.get_timetable(gid, req_s)
+            if not slots or not isinstance(slots, list):
+                return Response(json.dumps({"timetable": "No Timetable"}), headers=headers)
+            # Build a compact textual timetable summary
+            day_map = {}
+            for s in slots:
+                if not isinstance(s, dict): continue
+                day = s.get('KETERANGAN_HARI', '')
+                start = s.get('MASA_MULA', '')
+                end = s.get('MASA_TAMAT', '')
+                loc = s.get('LOKASI', '')
+                key = (day, start, end, loc)
+                day_map[key] = True
+            parts = [f"{d} {st}-{en} | {lc}" for (d, st, en, lc) in sorted(day_map.keys())]
+            summary = " | ".join(parts) if parts else "No Timetable"
+            return Response(json.dumps({"timetable": summary}), headers=headers)
+        except Exception as e: return jsonify({"error": str(e)}), 500
+
     elif path == '/tools/session_master':
+
         sid = args.get('sid')
         try:
             req_s = get_authorized_session()
@@ -637,8 +899,8 @@ def api_handler(path):
                 is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower() or 'gugur' in resp.lower())
                 
                 if is_success:
-                    # FIX: Enforce int(cid) so it matches old database arrays
-                    db.collection('students').document(m).set({"groups": firestore.ArrayRemove([int(cid)]), "password": pwd}, merge=True)
+                    # FIX: Remove BOTH int and str to clean up old DB state to use strictly string moving onward
+                    db.collection('students').document(m).set({"groups": firestore.ArrayRemove([int(cid), str(cid)]), "password": pwd}, merge=True)
                     db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
             else:
                 status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "P")
@@ -649,8 +911,8 @@ def api_handler(path):
                     is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower())
                 
                 if is_success:
-                    # FIX: Enforce int(cid)
-                    db.collection('students').document(m).set({"groups": firestore.ArrayUnion([int(cid)]), "password": pwd}, merge=True)
+                    # FIX: Enforce str(cid)
+                    db.collection('students').document(m).set({"groups": firestore.ArrayUnion([str(cid)]), "password": pwd}, merge=True)
                     db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
             
             return jsonify({"status": status, "response": resp, "success": is_success})
@@ -702,7 +964,11 @@ def api_handler(path):
             discovered = []
             
             log(f"Scanning from {curr} to {curr + limit}...")
+            start_time = time.time()
             for i in range(curr, curr + limit, 100):
+                if time.time() - start_time > 45: 
+                    log("Timeout reached. Stopping scan early.")
+                    break
                 end = min(i + 100, curr + limit)
                 with ThreadPoolExecutor(max_workers=10) as ex:
                     futures = {ex.submit(core_api.get_group_info, j, req_session): j for j in range(i, end)}
@@ -806,8 +1072,13 @@ def api_handler(path):
             
             course_students = {}
             student_names = {}
+            start_time = time.time()
             with ThreadPoolExecutor(max_workers=8) as ex:
-                futures = {ex.submit(core_api.get_students, c['id'], req_session): c['id'] for c in target_courses}
+                futures = {}
+                for c in target_courses:
+                    if time.time() - start_time > 40: break
+                    futures[ex.submit(core_api.get_students, c['id'], req_session)] = c['id']
+                    
                 for f in as_completed(futures):
                     gid = futures[f]
                     matrics = []
@@ -862,6 +1133,22 @@ def api_handler(path):
                     rb_count += 1
                 if rb_count >= 400: rem_batch.commit(); rem_batch = db.batch(); rb_count = 0
             if rb_count > 0: rem_batch.commit()
+            
+            # --- VALID_DIRECTORY PRUNING ---
+            log("Identifying departed students for directory cleanup...")
+            active_m = set(student_names.keys())
+            vd_docs = db.collection('valid_directory').stream()
+            vd_batch = db.batch(); vdb_count = 0; pruned = 0
+            for vdoc in vd_docs:
+                vm = vdoc.id
+                if vm not in active_m:
+                    # Check if actually in students
+                    if not db.collection('students').document(vm).get().exists:
+                        vd_batch.delete(vdoc.reference)
+                        vdb_count += 1; pruned += 1
+                if vdb_count >= 400: vd_batch.commit(); vd_batch = db.batch(); vdb_count = 0
+            if vdb_count > 0: vd_batch.commit()
+            log(f"Pruned {pruned} departed accounts from Valid Directory.")
 
             save_sync_log("STUDENT", "SUCCESS", log_buffer, len(target_courses))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
@@ -883,8 +1170,12 @@ def api_handler(path):
             limit = cfg.get('act_scan_limit', 5000)
             highest_valid_id = curr
             organizers = set()
+            start_time = time.time()
             
             for i in range(curr, curr + limit, 100):
+                if time.time() - start_time > 45: 
+                    log("Timeout reached. Stopping scan early.")
+                    break
                 end = min(i + 100, curr + limit)
                 with ThreadPoolExecutor(max_workers=20) as ex:
                     futures = {ex.submit(core_api.get_activity_details, j, req_session): j for j in range(i, end)}

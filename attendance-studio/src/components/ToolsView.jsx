@@ -1,23 +1,25 @@
-// --- START OF FILE ToolsModal.jsx ---
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Skeleton from './Skeleton';
+import { api, getDirectory } from '../services/api';
+import { useToast } from '../contexts/ToastContext';
+import { useConfirm } from '../contexts/ConfirmContext';
 
-import React, { useState, useEffect, useRef } from 'react';
-import Modal from '../Modal';
-import Skeleton from '../Skeleton';
-import { api, getDirectory } from '../../services/api';
-import { useToast } from '../../contexts/ToastContext';
-
-export default function ToolsModal({ user }) {
+export default function ToolsView({ user, isVisible, onDeepNavChange }) {
     const { showToast } = useToast();
+    const { confirm } = useConfirm();
 
-    const [view, setView] = useState(null); 
+    const [view, setView] = useState('search'); 
+    const viewRef = useRef('search');
+    
     const [directory, setDirectory] = useState([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
+    
     const [selectedItem, setSelectedItem] = useState(null); 
     const [groupList, setGroupList] = useState(null); 
     const [activeGroup, setActiveGroup] = useState(null); 
     const [hubSessions, setHubSessions] = useState(null);
-    const [groupTimetable, setGroupTimetable] = useState('');
+    const [hubTimetable, setHubTimetable] = useState(null);
     const [activeSession, setActiveSession] = useState(null);
     const [masterLogs, setMasterLogs] = useState(null); 
     const [roster, setRoster] = useState(null); 
@@ -34,34 +36,77 @@ export default function ToolsModal({ user }) {
     const [localUserGroups, setLocalUserGroups] = useState([]); 
     const [exemptTarget, setExemptTarget] = useState(null); 
     const [exemptReason, setExemptReason] = useState('');
+    const [sessionTab, setSessionTab] = useState('present');
 
-    useEffect(() => { if (user?.courses) setLocalUserGroups(user.courses.map(c => String(c.gid))); }, [user]);
+    useEffect(() => { 
+        if (user?.courses) setLocalUserGroups(user.courses.map(c => String(c.gid))); 
+    }, [user]);
+
+    useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}); }, []);
+
+    // ---- HASH-BASED BROWSER BACK SUPPORT ----
+    // When we navigate deep (groups/hub/session/roster), push a tools-specific hash.
+    // The Dashboard's own hash listener only reacts to #dashboard — we add #dashboard/tools
+    // as an intermediate level that only ToolsView consumes.
+
+    const setViewWithNavigation = useCallback((newView, groupListArg) => {
+        viewRef.current = newView;
+        setView(newView);
+        if (newView !== 'search') {
+            // Push into browser history so the back button works
+            window.history.pushState({ toolsView: newView }, '', '#dashboard/tools');
+        } else {
+            // Going back to search — restore the dashboard hash without pushing
+            window.history.replaceState({}, '', '#dashboard');
+        }
+        onDeepNavChange?.(newView !== 'search');
+    }, [onDeepNavChange]);
+
+    const handleBack = useCallback(() => {
+        const cur = viewRef.current;
+        let next = 'search';
+        if (cur === 'roster' || cur === 'session') next = 'hub';
+        else if (cur === 'hub') next = groupList ? 'groups' : 'search';
+        else if (cur === 'groups') next = 'search';
+        
+        viewRef.current = next;
+        setView(next);
+        onDeepNavChange?.(next !== 'search');
+    }, [groupList, onDeepNavChange]);
 
     useEffect(() => {
-        const handleHash = () => {
-            const h = window.location.hash;
-            if (h === '#tools') setView('search');
-            else if (h === '#tools/groups') setView('groups');
-            else if (h === '#tools/hub') setView('hub');
-            else if (h === '#tools/session') setView('session');
-            else if (h === '#tools/roster') setView('roster');
-            else setView(null);
+        if (!isVisible) return;
+
+        const onPopState = (e) => {
+            const hash = window.location.hash;
+            // If the hash went back from #dashboard/tools to #dashboard
+            // and we're deep in tools, intercept and go back one level
+            if (hash === '#dashboard' && viewRef.current !== 'search') {
+                handleBack();
+                // Re-push #dashboard/tools if we're still not at root
+                if (viewRef.current !== 'search') {
+                    window.history.pushState({ toolsView: viewRef.current }, '', '#dashboard/tools');
+                }
+            }
+            // If hash is empty or something else while in tools deep, also handle
         };
-        window.addEventListener('popstate', handleHash);
-        window.addEventListener('hashchange', handleHash);
-        return () => { window.removeEventListener('popstate', handleHash); window.removeEventListener('hashchange', handleHash); };
-    }, []);
 
-    const navTo = (hashLevel) => { window.location.hash = hashLevel; };
+        window.addEventListener('popstate', onPopState);
+        return () => window.removeEventListener('popstate', onPopState);
+    }, [isVisible, handleBack]);
 
-    useEffect(() => { if (view === 'search') getDirectory().then(setDirectory).catch(()=>{}); }, [view]);
+    // When ToolsView is hidden (tab switch), cleanup hash
+    useEffect(() => {
+        if (!isVisible && viewRef.current !== 'search') {
+            // Don't mess with hash when switching tabs
+        }
+    }, [isVisible]);
 
     const handleSearch = (val) => {
         setSearchQuery(val);
         if (val.length < 2) { setSearchResults([]); return; }
         const clean = val.toUpperCase().replace(/\s+/g, '');
         const matches = directory.filter(u => {
-            // FIX: Prevent null crash
             const n = (u.n || "").toUpperCase().replace(/\s+/g, '');
             const m = (u.m || "").toUpperCase();
             return n.includes(clean) || m.includes(clean);
@@ -70,24 +115,47 @@ export default function ToolsModal({ user }) {
     };
 
     const selectSearchItem = async (item) => {
+        setSearchQuery('');
+        setSearchResults([]);
         setSelectedItem(item);
         setGroupList(null);
-        navTo('#tools/groups');
-        try { const res = await api.get(`/tools/details?q=${item.m}&t=${item.t}`); setGroupList(res); } catch(e) { showToast("Failed to fetch groups", "error"); }
+        setViewWithNavigation('groups');
+        try { 
+            const res = await api.get(`/tools/details?q=${item.m}&t=${item.t}`); 
+            setGroupList(res); 
+        } catch(e) { 
+            showToast("Failed to fetch groups", "error"); 
+        }
     };
 
     const selectGroup = async (g) => {
-        setActiveGroup(g);
+        setActiveGroup({ ...g, students: g.students !== undefined ? g.students : '...' });
         setHubSessions(null);
-        setGroupTimetable('Loading timetable...');
+        setHubTimetable(null);
         setRoster(null); 
         setShowSelfPrompt(false);
-        navTo('#tools/hub');
+        setViewWithNavigation('hub');
+
+        if (g.students === undefined && g.code) {
+            try {
+                const detailsRes = await api.get(`/tools/details?q=${g.code.split(' ')[0]}&t=c`);
+                const fullGroup = detailsRes?.find(gr => gr.id === g.id);
+                if (fullGroup) setActiveGroup(fullGroup);
+                else setActiveGroup(prev => ({...prev, students: '?'}));
+            } catch(e) { setActiveGroup(prev => ({...prev, students: '?'})); }
+        }
+
         try {
-            api.get(`/tools/timetable?gid=${g.id}`).then(r => setGroupTimetable(r.timetable));
-            const res = await api.get(`/course_details?gid=${g.id}&matric=${user.matric}`);
-            setHubSessions(res);
-        } catch(e) {}
+            const [sessRes, ttRes] = await Promise.all([
+                api.get(`/course_details?gid=${g.id}&matric=${user.matric}`),
+                api.get(`/tools/timetable?gid=${g.id}`)
+            ]);
+            setHubSessions(sessRes);
+            setHubTimetable(ttRes?.timetable || 'No Timetable');
+        } catch(e) {
+            setHubSessions([]);
+            setHubTimetable('No Timetable');
+        }
     };
 
     const handleSelfTest = async () => {
@@ -102,6 +170,9 @@ export default function ToolsModal({ user }) {
     };
 
     const handleSelfAction = async (action, submitPwd = false) => {
+        if (action === 'DROP' && !submitPwd) {
+            if (!await confirm(`Are you sure you want to drop yourself from ${activeGroup?.code}?`)) return;
+        }
         const pwdToUse = submitPwd ? selfPwdPrompt : "";
         setActionLoading(true);
         try {
@@ -118,7 +189,6 @@ export default function ToolsModal({ user }) {
                 return;
             }
 
-            // USE NEW CLEAN SUCCESS FLAG
             if (res.success) {
                 showToast(`${action} Successful`, "success");
                 setShowSelfPrompt(false);
@@ -142,13 +212,12 @@ export default function ToolsModal({ user }) {
         setActionLoading(false);
     };
 
-    const [sessionTab, setSessionTab] = useState('present');
-
     const loadSession = async (session) => {
         setActiveSession(session);
         setMasterLogs(null);
         setExemptTarget(null);
-        navTo('#tools/session');
+        setSessionTab('present');
+        setViewWithNavigation('session');
         refreshSessionData(session.id);
     };
 
@@ -179,6 +248,9 @@ export default function ToolsModal({ user }) {
     };
 
     const handleAttendanceAction = async (type, targetMatric, targetLogId, reason = '') => {
+        if (type === 'delete') {
+            if (!await confirm(`Remove attendance for ${targetMatric}?`)) return;
+        }
         setAttendanceLoadingId(targetMatric);
         try {
             setExemptTarget(null); 
@@ -190,8 +262,13 @@ export default function ToolsModal({ user }) {
     };
 
     const loadRoster = async () => {
-        navTo('#tools/roster');
-        if (!roster) { try { const res = await api.get(`/tools/roster?gid=${activeGroup.id}`); setRoster(res); } catch(e) {} }
+        setViewWithNavigation('roster');
+        if (!roster) { 
+            try { 
+                const res = await api.get(`/tools/roster?gid=${activeGroup.id}`); 
+                setRoster(res); 
+            } catch(e) {} 
+        }
     };
 
     const handlePwdChange = (matric, val) => {
@@ -234,22 +311,19 @@ export default function ToolsModal({ user }) {
     }, [view, isFetching]);
 
     const dropStudent = async (matric, pwd) => {
+        if (!await confirm(`Drop ${matric} from ${activeGroup?.code}?`)) return;
         setActionLoading(true);
         try {
             const res = await api.post('/tools/action', {
                 action: 'DROP', matric, password: pwd, code: activeGroup.code, cid: activeGroup.id, initiator: user.matric
             });
-            // USE NEW CLEAN SUCCESS FLAG
             if (res.success) {
                 showToast("Dropped", "success");
                 setRoster(prev => prev.filter(s => s.matric !== matric));
                 setActiveGroup(prev => ({...prev, students: Math.max(0, (prev.students || 1) - 1)}));
-                
-                // LINK SYNC: If user drops themselves from the Roster list, update the Hub button!
                 if (matric === user.matric) {
                     setLocalUserGroups(prev => prev.filter(gid => gid !== String(activeGroup.id)));
                 }
-                
                 getDirectory(true).then(setDirectory); 
             } else {
                 try {
@@ -261,29 +335,92 @@ export default function ToolsModal({ user }) {
         setActionLoading(false);
     };
 
-    if (!view) return null;
     const isUserEnrolled = activeGroup ? localUserGroups.includes(String(activeGroup.id)) : false;
 
+    const activateAutoRegister = async () => {
+        setActionLoading(true);
+        try {
+            const res = await api.post('/action', { type: 'start_auto_register', matric: user.matric, gid: activeGroup.id });
+            showToast(res.msg || "Auto Register Activated", "success");
+        } catch(e) { showToast("Error connecting", "error"); }
+        setActionLoading(false);
+    };
+
     return (
-        <Modal title="MASTER TOOLS" isOpen={!!view} onClose={() => window.history.back()} maxWidth="450px">
+        <div style={{ marginTop: '10px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             
+            {view !== 'search' && (
+                <div style={{ textAlign: 'center', marginBottom: '20px', width: '100%' }}>
+                    <button 
+                        className="btn" 
+                        style={{ borderColor: 'var(--accent)', color: 'var(--accent)', padding: '8px 25px', fontWeight: 'bold' }} 
+                        onClick={handleBack}
+                    >
+                        {'◄ GO BACK'}
+                    </button>
+                </div>
+            )}
+
             {view === 'search' && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: '10px' }}>
-                    <div style={{width: '100%', maxWidth: '350px', position: 'relative', marginTop: '10px'}}>
-                        <input type="text" className="t-input" placeholder="SEARCH DATABASE..." 
-                            value={searchQuery} onChange={(e) => handleSearch(e.target.value)} 
-                            style={{width: '100%', padding: '12px', textAlign: 'center', background: '#000'}}/>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: '10px', width: '100%' }}>
+                    <div style={{width: '100%', maxWidth: '400px'}}>
+                        {/* Search input with OVERLAY dropdown */}
+                        <div style={{ position: 'relative', width: '100%' }}>
+                            <input type="text" className="t-input" placeholder="COURSE NAME/CODE or STUDENT NAME/MATRIC" 
+                                value={searchQuery} onChange={(e) => handleSearch(e.target.value)} 
+                                style={{width: '100%', padding: '12px', paddingRight: '40px', paddingLeft: '40px', textAlign: 'center', background: 'rgba(255,255,255,0.05)', color: '#fff'}}/>
+                            {searchQuery && (
+                                <span 
+                                    onClick={() => { setSearchQuery(''); setSearchResults([]); }} 
+                                    style={{ position: 'absolute', right: '15px', top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', color: '#888', fontWeight: 'bold', zIndex: 20 }}>
+                                    ✕
+                                </span>
+                            )}
+                            {/* Absolute overlay dropdown - does not push content */}
+                            {searchResults.length > 0 && (
+                                <div style={{ 
+                                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+                                    background: '#0a0a0a', border: '1px solid var(--primary)',
+                                    maxHeight: '50vh', overflowY: 'auto', borderRadius: '0 0 4px 4px',
+                                    boxShadow: '0 10px 30px rgba(0,0,0,0.9)'
+                                }}>
+                                    {searchResults.map(u => (
+                                        <div key={u.m} className="result-item" onClick={() => selectSearchItem(u)}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                                <span style={{ color: u.t === 'c' ? '#0f0' : '#fff' }}>{u.n}</span>
+                                                <span style={{ color: 'var(--primary)', fontSize: '0.8em' }}>{u.m}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                         
-                        {searchResults.length > 0 && (
-                            <div className="results-list" style={{ display: 'block', maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--grid-line)', position: 'relative', marginTop: '5px' }}>
-                                {searchResults.map(u => (
-                                    <div key={u.m} className="result-item" onClick={() => selectSearchItem(u)}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                            <span style={{ color: u.t === 'c' ? '#0f0' : '#fff' }}>{u.n}</span>
-                                            <span style={{ color: 'var(--primary)', fontSize: '0.8em' }}>{u.m}</span>
+                        {/* Registered courses list */}
+                        {user?.courses?.length > 0 && (
+                            <div style={{ marginTop: '30px' }}>
+                                <div style={{ color: 'var(--primary)', marginBottom: '15px', textAlign: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                    YOUR REGISTERED COURSES
+                                </div>
+                                {user.courses.map(g => (
+                                    <div key={g.gid} className="course-card" style={{padding: '12px', marginBottom:'10px', display:'block', minHeight: 'auto', borderColor: 'var(--grid-line)'}} 
+                                        onClick={() => selectGroup({ id: g.gid, code: g.code, group: g.group, name: g.name })}>
+                                        <div style={{display:'flex', justifyContent:'space-between', alignItems: 'center'}}>
+                                            <span className="cc-code" style={{color:'#fff', marginBottom:0, fontSize: '0.9rem'}}>{g.code} {g.group}</span>
+                                            <span style={{color:'var(--accent)', fontSize:'0.7rem'}}>ID: {g.gid}</span>
+                                        </div>
+                                        <div className="cc-group" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '5px' }}>
+                                            <span style={{fontSize: '0.75rem', color: '#aaa'}}>{g.name}</span>
+                                            <span style={{color: 'var(--primary)'}}>Manage {'>'}</span>
                                         </div>
                                     </div>
                                 ))}
+                            </div>
+                        )}
+                        
+                        {searchResults.length === 0 && !searchQuery && (!user?.courses || user.courses.length === 0) && (
+                            <div style={{ marginTop: '30px', textAlign: 'center', color: '#555', fontSize: '0.8rem' }}>
+                                Use the search bar to find and register for courses.
                             </div>
                         )}
                     </div>
@@ -291,9 +428,9 @@ export default function ToolsModal({ user }) {
             )}
 
             {view === 'groups' && (
-                <div>
+                <div style={{ width: '100%', maxWidth: '400px' }}>
                     <div style={{color:'var(--primary)', marginBottom:'15px', textAlign:'center', fontSize: '0.9rem'}}>{selectedItem?.n}</div>
-                    {!groupList ? <><Skeleton/><Skeleton/></> : groupList.length === 0 ? <div style={{textAlign:'center'}}>NO GROUPS</div> : 
+                    {!groupList ? <><Skeleton/><Skeleton/></> : groupList.length === 0 ? <div style={{textAlign:'center', color: '#888'}}>NO GROUPS</div> : 
                         groupList.map(g => (
                             <div key={g.id} className="course-card" style={{padding: '10px 12px', marginBottom:'8px', display:'block', minHeight: 'auto'}} onClick={() => selectGroup(g)}>
                                 <div style={{display:'flex', justifyContent:'space-between'}}>
@@ -311,56 +448,65 @@ export default function ToolsModal({ user }) {
             )}
 
             {view === 'hub' && activeGroup && (
-                <div>
+                <div style={{ width: '100%', maxWidth: '400px' }}>
                     <div className="tools-hub-header">
-                        <div className="hub-title">{activeGroup.code} {activeGroup.group}</div>
-                        <div className="hub-meta">{activeGroup.name} | ID: {activeGroup.id}</div>
-                        <div style={{fontSize: '0.7rem', color: '#888', marginBottom: '15px', textTransform:'uppercase'}}>{groupTimetable}</div>
+                        <div className="hub-title" style={{ fontSize: '1.2rem', marginBottom: '5px'}}>{activeGroup.code} {activeGroup.group}</div>
+                        <div className="hub-meta" style={{ marginBottom: '5px'}}>{activeGroup.name} | ID: {activeGroup.id}</div>
+                        
+                        {/* Timetable text line */}
+                        <div style={{ fontSize: '0.72rem', color: 'var(--primary)', marginBottom: '15px', padding: '5px 8px', background: 'rgba(0,243,255,0.05)', borderRadius: '4px' }}>
+                            {hubTimetable === null ? <span style={{ color: '#555' }}>Loading...</span> : <span>📅 {hubTimetable}</span>}
+                        </div>
                         
                         {!showSelfPrompt ? (
                             <div style={{display:'flex', gap:'10px', justifyContent:'center'}}>
                                 {isUserEnrolled ? (
-                                    <button className="btn" disabled={actionLoading} style={{borderColor:'#f00', color:'#f00', padding: '6px 12px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction('DROP')}>
+                                    <button className="btn" disabled={actionLoading} style={{borderColor:'#f00', color:'#f00', padding: '8px 16px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction('DROP')}>
                                         {actionLoading ? 'PROCESSING...' : 'DROP SELF'}
                                     </button>
                                 ) : (
-                                    <button className="btn" disabled={actionLoading} style={{borderColor:'#0f0', color:'#0f0', padding: '6px 12px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction('ADD')}>
-                                        {actionLoading ? 'PROCESSING...' : 'REGISTER SELF'}
-                                    </button>
+                                    <>
+                                        <button className="btn" disabled={actionLoading} style={{borderColor:'#0f0', color:'#0f0', padding: '8px 16px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction('ADD')}>
+                                            {actionLoading ? 'PROCESSING...' : 'REGISTER SELF'}
+                                        </button>
+                                        <button className="btn" disabled={actionLoading} style={{borderColor:'var(--primary)', color:'var(--primary)', padding: '8px 16px', opacity: actionLoading ? 0.5 : 1}} onClick={activateAutoRegister}>
+                                            AUTO REG
+                                        </button>
+                                    </>
                                 )}
                             </div>
                         ) : (
                             <div style={{display:'flex', gap:'8px', justifyContent:'center', alignItems: 'center'}}>
-                                <input type="text" placeholder="UNIMAS Password" value={selfPwdPrompt} onChange={e=>{setSelfPwdPrompt(e.target.value); setSelfPwdTested(false);}} className="t-input" style={{width:'140px', padding:'4px'}} disabled={actionLoading}/>
+                                <input type="text" placeholder="UNIMAS Password" value={selfPwdPrompt} onChange={e=>{setSelfPwdPrompt(e.target.value); setSelfPwdTested(false);}} className="t-input" style={{width:'140px', padding:'6px'}} disabled={actionLoading}/>
                                 
                                 {!selfPwdTested ? (
-                                    <button className="btn" disabled={actionLoading || !selfPwdPrompt} style={{borderColor: 'var(--accent)', color: 'var(--accent)', padding: '4px 10px', opacity: actionLoading ? 0.5 : 1}} onClick={handleSelfTest}>
+                                    <button className="btn" disabled={actionLoading || !selfPwdPrompt} style={{borderColor: 'var(--accent)', color: 'var(--accent)', padding: '6px 12px', opacity: actionLoading ? 0.5 : 1}} onClick={handleSelfTest}>
                                         {actionLoading ? 'WAIT' : 'TEST'}
                                     </button>
                                 ) : (
-                                    <button className="btn" disabled={actionLoading} style={{borderColor: showSelfPrompt==='DROP'?'#f00':'#0f0', padding: '4px 10px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction(showSelfPrompt, true)}>
+                                    <button className="btn" disabled={actionLoading} style={{borderColor: showSelfPrompt==='DROP'?'#f00':'#0f0', padding: '6px 12px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction(showSelfPrompt, true)}>
                                         {actionLoading ? '...' : showSelfPrompt}
                                     </button>
                                 )}
                                 
-                                <button className="btn" style={{padding: '4px 10px'}} onClick={()=>{setShowSelfPrompt(false); setSelfPwdTested(false);}} disabled={actionLoading}>X</button>
+                                <button className="btn" style={{padding: '6px 12px'}} onClick={()=>{setShowSelfPrompt(false); setSelfPwdTested(false);}} disabled={actionLoading}>X</button>
                             </div>
                         )}
                         
-                        <div style={{marginTop:'15px', fontSize:'0.8rem', color:'var(--primary)', cursor:'pointer', textDecoration:'underline'}} onClick={loadRoster}>
+                        <div style={{marginTop:'20px', fontSize:'0.8rem', color:'var(--primary)', cursor:'pointer', textDecoration:'underline'}} onClick={loadRoster}>
                             View Enrolled Students - {activeGroup.students || 0} Students
                         </div>
                     </div>
 
-                    <div style={{fontSize:'0.75rem', color:'#888', marginBottom:'8px'}}>SESSION LOGS</div>
-                    {!hubSessions ? <><Skeleton type="session-row"/><Skeleton type="session-row"/></> : hubSessions.length === 0 ? <div style={{textAlign:'center', fontSize: '0.8rem'}}>NO SESSIONS</div> :
+                    <div style={{fontSize:'0.75rem', color:'#888', marginBottom:'10px', marginTop: '20px'}}>SESSION LOGS</div>
+                    {!hubSessions ? <><Skeleton type="session-row"/><Skeleton type="session-row"/></> : hubSessions.length === 0 ? <div style={{textAlign:'center', fontSize: '0.8rem', color: '#555', padding: '20px'}}>NO SESSIONS YET</div> :
                         hubSessions.map(s => (
-                            <div key={s.id} className="course-card" style={{padding: '10px 12px', marginBottom:'8px', display:'block', borderColor:'var(--grid-line)', minHeight: 'auto'}} onClick={() => loadSession(s)}>
+                            <div key={s.id} className="course-card" style={{padding: '12px', marginBottom:'10px', display:'block', borderColor:'var(--grid-line)', minHeight: 'auto'}} onClick={() => loadSession(s)}>
                                 <div style={{display:'flex', justifyContent:'space-between'}}>
-                                    <span style={{color:'#fff', fontWeight:'bold', fontSize:'0.85rem'}}>{s.date}</span>
-                                    <span style={{color:'var(--text-dim)', fontSize:'0.75rem'}}>{s.start} - {s.end}</span>
+                                    <span style={{color:'#fff', fontWeight:'bold', fontSize:'0.9rem'}}>{s.date}</span>
+                                    <span style={{color:'var(--text-dim)', fontSize:'0.8rem'}}>{s.start} - {s.end}</span>
                                 </div>
-                                <div style={{fontSize:'0.7rem', color:'#aaa', marginTop:'4px', display: 'flex', justifyContent: 'space-between'}}>
+                                <div style={{fontSize:'0.75rem', color:'#aaa', marginTop:'8px', display: 'flex', justifyContent: 'space-between'}}>
                                     <span>{s.location}</span>
                                     <span style={{color: 'var(--primary)'}}>Manage Attendance {'>'}</span>
                                 </div>
@@ -371,20 +517,20 @@ export default function ToolsModal({ user }) {
             )}
 
             {view === 'session' && activeSession && (
-                <div>
-                    <div style={{textAlign:'center', marginBottom:'10px', color:'var(--primary)', fontSize: '0.85rem'}}>{activeSession.date} ({activeSession.start})</div>
-                    <div className="tools-tabs">
+                <div style={{ width: '100%', maxWidth: '400px' }}>
+                    <div style={{textAlign:'center', marginBottom:'15px', color:'var(--primary)', fontSize: '0.9rem', fontWeight: 'bold'}}>{activeSession.date} ({activeSession.start})</div>
+                    <div className="tools-tabs" style={{ marginBottom: '15px' }}>
                         <div className={`tools-tab ${sessionTab === 'present' ? 'active' : ''}`} onClick={()=>setSessionTab('present')}>PRESENT ({masterLogs?.present?.length || 0})</div>
                         <div className={`tools-tab ${sessionTab === 'absent' ? 'active' : ''}`} onClick={()=>setSessionTab('absent')}>ABSENT ({masterLogs?.absent?.length || 0})</div>
                     </div>
                     
                     {exemptTarget && (
-                        <div style={{ background: 'rgba(0,0,0,0.9)', padding: '12px', border: '1px solid var(--accent)', borderRadius: '4px', marginBottom: '10px', textAlign: 'center' }}>
-                            <div style={{ color: 'var(--accent)', fontSize: '0.75rem', marginBottom: '8px' }}>Exempt Reason for {exemptTarget.matric}:</div>
-                            <input type="text" className="t-input" value={exemptReason} onChange={e => setExemptReason(e.target.value)} placeholder="Reason (Optional)..." style={{ width: '100%', marginBottom: '10px', padding: '6px' }}/>
-                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                                <button className="btn" style={{ borderColor: 'var(--accent)', color: 'var(--accent)', padding: '5px 10px' }} onClick={() => handleAttendanceAction('exempt', exemptTarget.matric, null, exemptReason)}>CONFIRM</button>
-                                <button className="btn" style={{ padding: '5px 10px' }} onClick={() => setExemptTarget(null)}>CANCEL</button>
+                        <div style={{ background: 'rgba(0,0,0,0.9)', padding: '15px', border: '1px solid var(--accent)', borderRadius: '4px', marginBottom: '15px', textAlign: 'center' }}>
+                            <div style={{ color: 'var(--accent)', fontSize: '0.8rem', marginBottom: '10px' }}>Exempt Reason for {exemptTarget.matric}:</div>
+                            <input type="text" className="t-input" value={exemptReason} onChange={e => setExemptReason(e.target.value)} placeholder="Reason (Optional)..." style={{ width: '100%', marginBottom: '15px', padding: '8px' }}/>
+                            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+                                <button className="btn" style={{ borderColor: 'var(--accent)', color: 'var(--accent)', padding: '6px 15px' }} onClick={() => handleAttendanceAction('exempt', exemptTarget.matric, null, exemptReason)}>CONFIRM</button>
+                                <button className="btn" style={{ padding: '6px 15px' }} onClick={() => setExemptTarget(null)}>CANCEL</button>
                             </div>
                         </div>
                     )}
@@ -400,7 +546,7 @@ export default function ToolsModal({ user }) {
                                     </div>
                                     <div className="master-actions">
                                         {sessionTab === 'present' ? (
-                                            <button className="btn" disabled={attendanceLoadingId === s.matric} style={{borderColor:'#f00', color:'#f00', padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('delete', s.matric, s.log_id)}>
+                                            <button className="btn" disabled={attendanceLoadingId === s.matric} style={{borderColor:'#f00', color:'#f00', padding:'4px 10px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('delete', s.matric, s.log_id)}>
                                                 {attendanceLoadingId === s.matric ? 'WAIT' : 'DEL'}
                                             </button>
                                         ) : (
@@ -425,15 +571,15 @@ export default function ToolsModal({ user }) {
             )}
 
             {view === 'roster' && (
-                <div>
-                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px', borderBottom:'1px solid var(--grid-line)', paddingBottom:'8px'}}>
+                <div style={{ width: '100%', maxWidth: '400px' }}>
+                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'15px', borderBottom:'1px solid var(--grid-line)', paddingBottom:'10px'}}>
                         <div style={{color:'var(--primary)', fontWeight:'bold', fontSize: '0.9rem'}}>STUDENT LIST</div>
-                        <button className="btn" style={{borderColor:'#0f0', color:'#0f0', minWidth:'100px', padding: '5px 10px'}} onClick={startAutoFetch}>
+                        <button className="btn" style={{borderColor:'#0f0', color:'#0f0', minWidth:'110px', padding: '6px 12px'}} onClick={startAutoFetch}>
                             {isFetching ? `STOP (${fetchProgress})` : 'AUTO FETCH PWD'}
                         </button>
                     </div>
 
-                    {!roster ? <><Skeleton type="session-row"/><Skeleton type="session-row"/></> : roster.length === 0 ? <div style={{textAlign:'center', fontSize: '0.8rem'}}>EMPTY CLASS</div> : (
+                    {!roster ? <><Skeleton type="session-row"/><Skeleton type="session-row"/></> : roster.length === 0 ? <div style={{textAlign:'center', fontSize: '0.8rem', color: '#888', padding: '20px'}}>EMPTY CLASS</div> : (
                         <div style={{maxHeight:'60vh', overflowY:'auto'}}>
                             {roster.map(s => (
                                 <div key={s.matric} className="master-row">
@@ -442,7 +588,7 @@ export default function ToolsModal({ user }) {
                                         <span className="master-name">{s.name}</span>
                                         <span className="master-matric">{s.matric}</span>
                                     </div>
-                                    <div className="master-actions" style={{flexDirection:'column', gap:'4px', alignItems:'center'}}>
+                                    <div className="master-actions" style={{flexDirection:'column', gap:'5px', alignItems:'center'}}>
                                         <input type="text" className={`pwd-input ${s.password === 'Unknown' ? 'pwd-failed' : ''}`} 
                                             placeholder={s.password === 'Unknown' ? "Failed ❌" : "Password..."} value={s.password === 'Unknown' ? '' : (s.password || '')} 
                                             onChange={(e) => handlePwdChange(s.matric, e.target.value)} 
@@ -450,11 +596,11 @@ export default function ToolsModal({ user }) {
                                         />
                                         <div style={{display:'flex', gap:'5px', width: '100%', justifyContent: 'center'}}>
                                             {s.valid ? (
-                                                <button className="btn" disabled={actionLoading} style={{borderColor:'#f00', color:'#f00', padding:'3px 8px', opacity: actionLoading ? 0.5 : 1}} onClick={() => dropStudent(s.matric, s.password)}>
+                                                <button className="btn" disabled={actionLoading} style={{borderColor:'#f00', color:'#f00', padding:'4px 10px', opacity: actionLoading ? 0.5 : 1}} onClick={() => dropStudent(s.matric, s.password)}>
                                                     {actionLoading ? '...' : 'DROP'}
                                                 </button>
                                             ) : (
-                                                <button className="btn" disabled={actionLoading} style={{borderColor: s.password === 'Unknown' ? '#555' : 'var(--accent)', color: s.password === 'Unknown' ? '#555' : 'var(--accent)', padding:'3px 8px', opacity: actionLoading ? 0.5 : 1}} onClick={() => testPassword(s.matric, s.password)}>
+                                                <button className="btn" disabled={actionLoading} style={{borderColor: s.password === 'Unknown' ? '#555' : 'var(--accent)', color: s.password === 'Unknown' ? '#555' : 'var(--accent)', padding:'4px 10px', opacity: actionLoading ? 0.5 : 1}} onClick={() => testPassword(s.matric, s.password)}>
                                                     {s.password === 'Unknown' ? 'SKIP' : (actionLoading ? 'WAIT' : 'TEST')}
                                                 </button>
                                             )}
@@ -466,9 +612,6 @@ export default function ToolsModal({ user }) {
                     )}
                 </div>
             )}
-            
-        </Modal>
+        </div>
     );
 }
-
-// --- END OF FILE ToolsModal.jsx ---

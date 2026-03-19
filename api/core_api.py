@@ -355,3 +355,22 @@ def delete_activity_log(log_id, s):
         if r.status_code == 200: return "Deleted"
         return f"Failed: {r.text}"
     except Exception as e: return str(e)
+
+# ==========================================
+#  STUDENTPORTALCLOUD APIS (NEW DIRECTORY)
+# ==========================================
+
+def spc_fetch(endpoint, matric, password, method='GET'):
+    try:
+        s = requests.Session()
+        encoded = base64.b64encode(f"{matric}:{password}".encode()).decode()
+        s.headers.update({
+            'Authorization': f'Basic {encoded}',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0'
+        })
+        url = f"https://samarahan.unimas.my/studentportalcloud/{endpoint}"
+        r = s.request(method, url, timeout=10)
+        if r.status_code == 200: return r.json()
+    except: pass
+    return None

@@ -90,14 +90,24 @@ export default function Search() {
   return (
     <div className="search-container">
       <div className="search-box">
-        <input 
-            type="text" className="search-input" placeholder="SEARCH DATABASE..." 
-            value={query} onChange={(e) => handleSearch(e.target.value)}
-            onFocus={() => { if(!query) loadRecents(); }} onBlur={handleBlur} disabled={loading} 
-        />
+        <div style={{ position: 'relative', width: '100%' }}>
+            <input 
+                type="text" className="search-input" placeholder="SEARCH DATABASE..." 
+                style={{ width: '100%', paddingRight: '40px' }}
+                value={query} onChange={(e) => handleSearch(e.target.value)}
+                onFocus={() => { if(!query) loadRecents(); }} onBlur={handleBlur} disabled={loading} 
+            />
+            {query && (
+                <span 
+                    onClick={() => { setQuery(''); setResults([]); }} 
+                    style={{ position: 'absolute', right: '15px', top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', color: '#888', fontWeight: 'bold', zIndex: 10 }}>
+                    ✕
+                </span>
+            )}
+        </div>
         
         {results.length > 0 && (
-          <div className="results-list" style={{ display: 'block' }}>
+          <div className="results-list" style={{ display: 'block', position: 'absolute', width: '100%', left: 0, top: '100%', zIndex: 20 }}>
             {results[0].isRecent && <div style={{padding:'10px 15px', fontSize:'0.7rem', color:'var(--accent)', borderBottom:'1px solid var(--grid-line)'}}>RECENT SEARCHES</div>}
             {results.map(u => (
               <div key={u.m} className="result-item" onClick={() => login(u.m, u.n)}>

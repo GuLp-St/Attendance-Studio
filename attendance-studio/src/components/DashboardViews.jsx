@@ -50,7 +50,7 @@ const getStats = (sessions) => {
 // COMPONENTS
 // ============================================================================
 
-export const DashboardHeader = memo(function DashboardHeader({ user, onLoadProfile, onLogout, onTarget, onOpenManager, notifCount }) {
+export const DashboardHeader = memo(function DashboardHeader({ user, onLoadProfile, onLogout, onOpenManager, notifCount }) {
     return (
         <div className="nav-header">
             <div onClick={onLoadProfile} style={{cursor: 'pointer', position: 'relative', display: 'inline-block'}}>
@@ -65,8 +65,6 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLoadProfi
                     {notifCount > 0 && <div className="notif-badge">{notifCount}</div>}
                 </button>
 
-                <button className="target-btn" onClick={onTarget}>TARGET</button>
-                <button className="target-btn" style={{ borderColor: '#0f0', color: '#0f0' }} onClick={() => window.location.hash = '#tools'}>TOOLS</button>
                 <button className="back-btn" onClick={onLogout}>LOGOUT</button>
             </div>
         </div>
@@ -76,7 +74,7 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLoadProfi
 export const TimetableView = memo(function TimetableView({ timetable, onClassClick }) {
     const days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
     
-    if (timetable.length === 0) return <div style={{textAlign:'center', color:'#555'}}>NO DATA</div>;
+    if (!timetable || timetable.length === 0) return <div style={{textAlign:'center', color:'#555'}}>NO DATA</div>;
 
     return (
         <div className="timetable-grid">
@@ -147,13 +145,9 @@ export const ClassList = memo(function ClassList({ courses, onSelect, loading })
     );
 });
 
-export const ActivityList = memo(function ActivityList({ following, organizerDetails, onSelect, onAdd }) {
+export const ActivityList = memo(function ActivityList({ following, organizerDetails, onSelect }) {
     return (
         <div className="course-grid">
-            <button className="btn" style={{ gridColumn: '1 / -1', borderStyle: 'dashed', padding: '15px', color: '#888' }} onClick={onAdd}>
-                + ADD ACTIVITY SOURCE
-            </button>
-            
             {following?.length === 0 && <div style={{gridColumn:'1/-1', textAlign:'center', color:'#555', padding:'20px'}}>NO ACTIVITIES FOLLOWED</div>}
 
             {following?.map(oid => {

@@ -4,8 +4,6 @@ import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import { api } from '../services/api';
 import Modal from '../components/Modal';
-import OrgSearchModal from '../components/DashboardModals/OrgSearchModal';
-import ToolsModal from '../components/DashboardModals/ToolsModal';
 
 // UI Components
 import { 
@@ -15,13 +13,17 @@ import {
     ActivityList 
 } from '../components/DashboardViews';
 
+import ClassView from '../components/ClassView';
+import ActivityView from '../components/ActivityView';
+import OrgSearchView from '../components/OrgSearchView';
+import ToolsView from '../components/ToolsView';
+import DirectoryView from '../components/DirectoryView';
+import Skeleton from '../components/Skeleton';
+
 // Modal Components
-import ClassModal from '../components/DashboardModals/ClassModal';
-import ActivityModal from '../components/DashboardModals/ActivityModal';
 import ProfileModal from '../components/DashboardModals/ProfileModal';
-import TargetModal from '../components/DashboardModals/TargetModal';
 import PromptModal from '../components/DashboardModals/PromptModal';
-import AutoscanManagerModal from '../components/DashboardModals/AutoscanManagerModal';
+import ScheduledManagerModal from '../components/DashboardModals/ScheduledManagerModal';
 
 export default function Dashboard() {
   const { user, setUser, logout } = useAuth();
@@ -41,20 +43,17 @@ export default function Dashboard() {
   // Modal Data State
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [selectedOrg, setSelectedOrg] = useState(null);
+  const [orgPreview, setOrgPreview] = useState(null); // Preview for unfollowed orgs from search
   const [courseSessions, setCourseSessions] = useState(null);
   const [profileData, setProfileData] = useState(null);
-  const [targetResult, setTargetResult] = useState(null);
   
   // Modal Visibility State
   const [showOrgSearch, setShowOrgSearch] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
-  const [showTarget, setShowTarget] = useState(false);
   const [showAutoscanMode, setShowAutoscanMode] = useState(false);
   const [showAutoscanManager, setShowAutoscanManager] = useState(false);
   
   // Action State
-  const [targetId, setTargetId] = useState('');
-  const [targetType, setTargetType] = useState('class');
   const [pendingAutoscan, setPendingAutoscan] = useState(null);
   const [promptConfig, setPromptConfig] = useState(null); // { sid, gid }
 
@@ -110,15 +109,19 @@ export default function Dashboard() {
               // Close L3
               setSelectedCourse(null);
               setSelectedOrg(null);
+              setOrgPreview(null);
               setShowProfile(false);
-              setShowTarget(false);
               setShowOrgSearch(false);
               setShowAutoscanManager(false);
+          }
+          // ToolsView deep navigation - handled internally by ToolsView, just ignore here
+          else if (hash === '#dashboard/tools') {
+              // ToolsView's own popstate listener handles this back-nav
           }
           // LEVEL 1: Exit (Hash is empty or different)
           else {
               // If we are not in a "safe" hash (like #confirm used by ConfirmContext), logout.
-              if (hash !== '#confirm' && !hash.startsWith('#tools')) {
+              if (hash !== '#confirm') {
                   logoutRef.current();
               }
           }
@@ -206,6 +209,10 @@ export default function Dashboard() {
   
   const handleAction = async (type, sid, gid, isOrg = false, remark = "") => {
     try {
+        // Confirm before deleting attendance
+        if (type === 'delete') {
+            if (!await confirm(`Remove this attendance record?`)) return;
+        }
         setLoadingDetail(true); // Trigger Skeleton
         
         // Map 'sid' to 'lid' because backend expects 'lid' for deletions
@@ -219,9 +226,7 @@ export default function Dashboard() {
         );
         
         // Refresh Data Context
-        if (targetResult) {
-            await fetchTarget();
-        } else if (isOrg && selectedOrg) {
+        if (isOrg && selectedOrg) {
             const newData = await api.get(`/organizer_details?oid=${gid}&matric=${user.matric}`);
             setUser(prev => {
                 if (!prev) return null;
@@ -281,15 +286,6 @@ export default function Dashboard() {
       } catch (e) {}
   };
 
-  const fetchTarget = async () => {
-      if (!targetId) return;
-      try {
-          const res = await api.get(`/target_details?matric=${user.matric}&sid=${targetId}&type=${targetType}`);
-          if (res.error) showToast(res.error, "error"); 
-          else setTargetResult(res);
-      } catch (e) { showToast(e.message, "error"); }
-  };
-
   const openCourseModal = (c) => {
       openLevel3(setSelectedCourse, c); 
       setCourseSessions(c.sessions || null);
@@ -298,11 +294,6 @@ export default function Dashboard() {
 
   const openOrgModal = (details) => {
        openLevel3(setSelectedOrg, details);
-  };
-
-  const openTargetSearch = () => {
-      setTargetResult(null);
-      openLevel3(setShowTarget, true);
   };
 
   const openOrgSearch = () => {
@@ -319,11 +310,23 @@ export default function Dashboard() {
       try {
           await api.post('/action', { type: 'follow_org', sid: oid, matric: user.matric });
           closeCurrentLevel(); 
+          setOrgPreview(null);
           if (!user.following.includes(oid)) {
                setUser(prev => prev ? { ...prev, following: [...prev.following, oid] } : null);
           }
           showToast("Followed", "success");
       } catch (e) { showToast(e.message, 'error'); }
+  };
+
+  // Show a preview (like ActivityView) when user picks from search - before actually following
+  const previewOrg = async (oid, orgName) => {
+      openLevel3(setOrgPreview, { id: oid, name: orgName, activities: [], isPreview: true });
+      try {
+          const data = await api.get(`/organizer_details?oid=${oid}&matric=${user.matric}`);
+          if (!data.error) {
+              setOrgPreview(prev => prev ? { ...prev, ...data, isPreview: true } : prev);
+          }
+      } catch(e) {}
   };
 
   const unfollowOrg = async (oid) => {
@@ -397,7 +400,6 @@ export default function Dashboard() {
           user={user} 
           onLoadProfile={loadProfile} 
           onLogout={logout} 
-          onTarget={openTargetSearch} 
           onOpenManager={loadManager} 
           notifCount={notifications.length}
       />
@@ -414,7 +416,7 @@ export default function Dashboard() {
           <TimetableView timetable={user.timetable} onClassClick={openCourseByGid} />
       )}
 
-      <div style={{ display: 'flex', gap: '10px', marginTop: '20px', marginBottom: '15px' }}>
+      <div style={{ display: 'flex', gap: '6px', marginTop: '20px', marginBottom: '15px', flexWrap: 'wrap' }}>
         <button 
             className="btn" 
             style={activeTab === 'modules' ? { flex: 1, borderColor: 'var(--primary)', color: 'var(--primary)', background: 'rgba(0,243,255,0.1)' } : { flex: 1 }} 
@@ -429,56 +431,123 @@ export default function Dashboard() {
         >
             ACTIVITIES
         </button>
+        <button 
+            className="btn" 
+            style={activeTab === 'tools' ? { flex: 1, borderColor: '#0f0', color: '#0f0', background: 'rgba(0,255,0,0.1)' } : { flex: 1 }} 
+            onClick={() => setActiveTab('tools')}
+        >
+            TOOLS
+        </button>
+        <button 
+            className="btn" 
+            style={activeTab === 'directory' ? { flex: 1, borderColor: '#ff6', color: '#ff6', background: 'rgba(255,255,0,0.05)' } : { flex: 1 }} 
+            onClick={() => setActiveTab('directory')}
+        >
+            DIRECTORY
+        </button>
       </div>
 
-      {/* MAIN LISTS */}
-      {activeTab === 'modules' ? (
-          <ClassList 
-              courses={user.courses} 
-              onSelect={openCourseModal} 
-              loading={!user.courses.length && user.courses !== undefined}
+      {/* MAIN LISTS - WITH STATE RETENTION VIA DISPLAY NONE */}
+      
+      {/* 1. CLASSES TAB */}
+      <div style={{ display: activeTab === 'modules' ? 'block' : 'none' }}>
+          {selectedCourse ? (
+              <ClassView 
+                  course={selectedCourse} 
+                  sessions={courseSessions} 
+                  onClose={closeCurrentLevel}
+                  isLoading={loadingDetail} 
+                  onAction={handleAction} 
+                  onExempt={openExemptPrompt} 
+                  onAutoscan={initAutoscan} 
+                  onCancelAutoscan={cancelAutoscan} 
+              />
+          ) : (
+              <ClassList 
+                  courses={user.courses} 
+                  onSelect={openCourseModal} 
+                  loading={!user.courses.length && user.courses !== undefined}
+              />
+          )}
+      </div>
+
+      {/* 2. ACTIVITIES TAB */}
+      <div style={{ display: activeTab === 'org' ? 'block' : 'none' }}>
+          {selectedOrg ? (
+              <ActivityView 
+                  org={selectedOrg} 
+                  onClose={closeCurrentLevel}
+                  isLoading={loadingDetail} 
+                  onAction={handleAction} 
+                  onAutoscan={initAutoscan} 
+                  onCancelAutoscan={cancelAutoscan} 
+                  onUnfollow={unfollowOrg} 
+              />
+          ) : orgPreview ? (
+              /* Preview of an unfollowed org - show ActivityView with a FOLLOW button */
+              <div style={{ maxWidth: '450px', margin: '0 auto', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ textAlign: 'center', marginBottom: '20px', width: '100%' }}>
+                      <button className="btn" style={{ borderColor: 'var(--accent)', color: 'var(--accent)', padding: '8px 25px', fontWeight: 'bold' }} onClick={closeCurrentLevel}>
+                          {'◄ GO BACK'}
+                      </button>
+                  </div>
+                  <div style={{ fontSize: '1rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '15px', textAlign: 'center' }}>{orgPreview?.name || 'ACTIVITY'}</div>
+                  <button 
+                      className="btn" 
+                      style={{ width: '100%', marginBottom: '15px', borderColor: '#0f0', color: '#0f0', padding: '12px', fontWeight: 'bold' }} 
+                      onClick={() => followOrg(orgPreview.id)}
+                  >
+                      ＋ FOLLOW THIS SOURCE
+                  </button>
+                  {/* Show events preview */}
+                  <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: '10px' }}>RECENT EVENTS</div>
+                  {orgPreview.isPreview && !orgPreview.activities?.length ? (
+                      <><Skeleton type="session-row" /><Skeleton type="session-row" /></>
+                  ) : orgPreview.activities?.length > 0 ? (
+                      orgPreview.activities.map(act => (
+                          <div key={act.id} style={{ padding: '10px 12px', marginBottom: '8px', border: '1px solid var(--grid-line)', borderRadius: '4px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                  <span style={{ color: '#fff', fontSize: '0.85rem', fontWeight: 'bold' }}>{act.name}</span>
+                                  <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{act.date}</span>
+                              </div>
+                          </div>
+                      ))
+                  ) : (
+                      <div style={{ textAlign: 'center', padding: '20px', color: '#555' }}>NO EVENTS</div>
+                  )}
+              </div>
+          ) : (
+              <>
+                  <OrgSearchView onPreview={previewOrg} />
+                  <ActivityList 
+                      following={user.following} 
+                      organizerDetails={user.organizerDetails} 
+                      onSelect={openOrgModal} 
+                  />
+              </>
+          )}
+      </div>
+
+      {/* 3. TOOLS TAB */}
+      <div style={{ display: activeTab === 'tools' ? 'block' : 'none' }}>
+          <ToolsView 
+              user={user} 
+              isVisible={activeTab === 'tools'} 
+              onDeepNavChange={(isDeep) => {
+                  // When ToolsView goes deep, ensure hash is set so back button works
+                  // (ToolsView handles the pushState itself)
+              }}
           />
-      ) : (
-          <ActivityList 
-              following={user.following} 
-              organizerDetails={user.organizerDetails} 
-              onSelect={openOrgModal} 
-              onAdd={openOrgSearch} 
-          />
-      )}
+      </div>
 
-      {/* ================= MODALS ================= */}
+      {/* 4. DIRECTORY TAB */}
+      <div style={{ display: activeTab === 'directory' ? 'block' : 'none' }}>
+          <DirectoryView user={user} />
+      </div>
 
-      {/* 1. CLASS DETAILS */}
-      {!!selectedCourse && (
-        <ClassModal 
-            isOpen={!!selectedCourse} 
-            onClose={closeCurrentLevel} 
-            course={selectedCourse} 
-            sessions={courseSessions} 
-            isLoading={loadingDetail} 
-            onAction={handleAction} 
-            onExempt={openExemptPrompt} 
-            onAutoscan={initAutoscan} 
-            onCancelAutoscan={cancelAutoscan} 
-        />
-      )}
+      {/* ================= REMAINING OVERLAY MODALS ================= */}
 
-      {/* 2. ACTIVITY DETAILS */}
-      {!!selectedOrg && (
-        <ActivityModal 
-            isOpen={!!selectedOrg} 
-            onClose={closeCurrentLevel} 
-            org={selectedOrg} 
-            isLoading={loadingDetail} 
-            onAction={handleAction} 
-            onAutoscan={initAutoscan} 
-            onCancelAutoscan={cancelAutoscan} 
-            onUnfollow={unfollowOrg} 
-        />
-      )}
-
-      {/* 3. PROFILE */}
+      {/* PROFILE */}
       <ProfileModal 
           isOpen={showProfile} 
           onClose={closeCurrentLevel} 
@@ -486,8 +555,8 @@ export default function Dashboard() {
           profileData={profileData} 
       />
       
-      {/* 4. NEW: Autoscan Manager with Notifications */}
-      <AutoscanManagerModal 
+      {/* SCHEDULED MANAGER - Autoscan + Auto Register + Logs */}
+      <ScheduledManagerModal 
           isOpen={showAutoscanManager} 
           onClose={closeCurrentLevel} 
           user={user} 
@@ -496,29 +565,7 @@ export default function Dashboard() {
           onCancelJob={cancelAutoscan} 
       />
 
-      {/* 5. MANUAL TARGET */}
-      <TargetModal 
-          isOpen={showTarget} 
-          onClose={closeCurrentLevel} 
-          result={targetResult} 
-          id={targetId} 
-          type={targetType} 
-          onIdChange={e => setTargetId(e.target.value)} 
-          onTypeChange={e => setTargetType(e.target.value)} 
-          onSearch={fetchTarget} 
-          onAction={handleAction} 
-          onExempt={openExemptPrompt} 
-          onClear={() => setTargetResult(null)} 
-      />
-      
-      {/* 6. ADD ACTIVITY SOURCE */}
-      <OrgSearchModal 
-          isOpen={showOrgSearch} 
-          onClose={closeCurrentLevel} 
-          onFollow={followOrg} 
-      />
-      
-      {/* 7. AUTOSCAN MODE SELECTOR */}
+      {/* AUTOSCAN MODE SELECTOR */}
       <Modal title="SELECT MODE" isOpen={showAutoscanMode} onClose={closeCurrentLevel} maxWidth="400px">
           <div style={{textAlign:'center'}}>
               <div style={{marginBottom:'20px', fontSize:'0.8rem', color:'#ccc'}}>Choose trigger mode.</div>
@@ -547,9 +594,6 @@ export default function Dashboard() {
           onClose={closeCurrentLevel} 
           onSubmit={handleExemptSubmit} 
       />
-
-      {/* --- 9. MASTER TOOLS --- */}
-      <ToolsModal user={user} />
       
     </div>
   );
