@@ -1271,130 +1271,133 @@ def api_handler(path):
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/admin_dashboard' and request.method == 'POST':
-        data = request.get_json()
-        if data.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
-        req_type = data.get('type')
-        cfg = get_sys_config()
-        if req_type == 'get_data':
-            logs = []
-            for l in db.collection('system_logs').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(100).stream():
-                ld = l.to_dict(); ld['id'] = l.id; logs.append(ld)
-            sync_hist = []
-            for h in db.collection('sync_history').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(20).stream():
-                hd = h.to_dict(); hd['id'] = h.id; sync_hist.append(hd)
-            jobs = []
-            for j in db.collection('autoscan_jobs').stream():
-                jd = j.to_dict(); jd['id'] = j.id; jobs.append(jd)
-            banned = [d.id for d in db.collection('banned_ips').stream()]
-            ip_meta = {}
-            for d in db.collection('ip_metadata').stream(): ip_meta[d.id] = d.to_dict().get('name')
-            
-            # --- FETCH MULTIPLE VALID ACCOUNTS FOR THE SWITCHER ---
-            auto_accounts = []
-            docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(50).stream()
-            for d in docs: 
-                p = d.to_dict().get('password')
-                if p and p != 'Unknown':
-                    auto_accounts.append({"matric": d.id, "password": p})
+        try:
+            data = request.get_json()
+            if data.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+            req_type = data.get('type')
+            cfg = get_sys_config()
+            if req_type == 'get_data':
+                logs = []
+                for l in db.collection('system_logs').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(100).stream():
+                    ld = l.to_dict(); ld['id'] = l.id; logs.append(ld)
+                sync_hist = []
+                for h in db.collection('sync_history').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(20).stream():
+                    hd = h.to_dict(); hd['id'] = h.id; sync_hist.append(hd)
+                jobs = []
+                for j in db.collection('autoscan_jobs').stream():
+                    jd = j.to_dict(); jd['id'] = j.id; jobs.append(jd)
+                banned = [d.id for d in db.collection('banned_ips').stream()]
+                ip_meta = {}
+                for d in db.collection('ip_metadata').stream(): ip_meta[d.id] = d.to_dict().get('name')
+                
+                # --- FETCH MULTIPLE VALID ACCOUNTS FOR THE SWITCHER ---
+                auto_accounts = []
+                docs = db.collection('students').limit(200).stream()
+                for d in docs: 
+                    p = d.to_dict().get('password')
+                    if p and p != 'Unknown':
+                        auto_accounts.append({"matric": d.id, "password": p})
 
-            return Response(json.dumps({
-                "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
-                "sync_history": sync_hist, "ip_meta": ip_meta,
-                "auto_accounts": auto_accounts
-            }), headers=headers)
-        
-        elif req_type == 'save_settings':
-            update = {}
-            if data.get('scan_limit'): update["scan_limit"] = int(data['scan_limit'])
-            if data.get('last_scanned') is not None: update["last_scanned_id"] = int(data['last_scanned'])
-            if data.get('student_sync_batch'): update["student_sync_batch"] = int(data['student_sync_batch'])
-            if data.get('act_scan_limit'): update["act_scan_limit"] = int(data['act_scan_limit'])
-            if data.get('act_start_id') is not None: update["act_last_scanned_id"] = int(data['act_start_id'])
-            if data.get('act_months'): update["act_time_threshold"] = int(data['act_months'])
+                return Response(json.dumps({
+                    "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
+                    "sync_history": sync_hist, "ip_meta": ip_meta,
+                    "auto_accounts": auto_accounts
+                }), headers=headers)
             
-            # NEW: Save Priority Courses and System Account
-            if 'priority_courses' in data: update["priority_courses"] = data['priority_courses']
-            if 'system_matric' in data: update["system_matric"] = data['system_matric']
-            if 'system_pwd' in data: update["system_pwd"] = data['system_pwd']
-            if 'force_student_sync' in data: update["force_student_sync"] = data['force_student_sync'] 
-            
-            db.collection('system').document('config').set(update, merge=True)
-            return jsonify({"status": "Settings Saved"})
-            
-        elif req_type == 'delete_all_jobs':
-            batch = db.batch(); count = 0
-            for j in db.collection('autoscan_jobs').stream():
-                batch.delete(j.reference); count += 1
-                if count >= 400: batch.commit(); batch = db.batch(); count = 0
-            if count > 0: batch.commit()
-            return jsonify({"status": f"Deleted {count} jobs"})
-            
-        elif req_type == 'delete_single_job':
-            db.collection('autoscan_jobs').document(data.get('job_id')).delete()
-            return jsonify({"status": "Deleted"})
-            
-        elif req_type == 'trigger_jobs':
-            job_category = data.get('job_category', 'autoscan')
-            out_logs = [f"--- MANUAL TRIGGER: {job_category.upper()} ---"]
-            req_session = get_authorized_session()
-            now_my = get_malaysia_time()
-            today_str = now_my.strftime('%Y-%m-%d')
-            
-            if job_category == 'autoscan':
-                jobs = list(db.collection('autoscan_jobs').stream())
-                out_logs.append(f"Found {len(jobs)} active autoscan jobs.")
-                for j in jobs:
-                    d = j.to_dict(); matric = d['matric']; target = d.get('gid', '')
-                    t = d.get('job_type', 'class')
-                    if t == 'class':
-                        res = core_api.scan_qr(target, matric, req_session)
-                        out_logs.append(f"[{matric}] Class {target}: {res[:60]}")
-                    else:
-                        r1 = core_api.scan_activity_qr(target, matric, 'i')
-                        out_logs.append(f"[{matric}] Act {target} CI: {r1[:60]}")
-            else:
-                jobs = list(db.collection('auto_register_jobs').stream())
-                out_logs.append(f"Found {len(jobs)} auto-register jobs.")
-                sem = cfg.get('current_semester', '2025/2026-2')
-                for j in jobs:
-                    d = j.to_dict(); matric = d['matric']; gid = d['gid']
-                    stud = db.collection('students').document(matric).get()
-                    if stud.exists:
-                        pwd = stud.to_dict().get('password')
-                        course = db.collection('courses').document(str(gid)).get()
-                        code = course.to_dict().get('code', 'Unknown') if course.exists else 'Unknown'
-                        grp = course.to_dict().get('group', '') if course.exists else ''
-                        if pwd and pwd != 'Unknown':
-                            st, rp = core_api.register_course(matric, pwd, code, str(gid), sem, grp, "P")
-                            out_logs.append(f"[{matric}] AR {code} {grp}: {rp[:60]}")
+            elif req_type == 'save_settings':
+                update = {}
+                if data.get('scan_limit'): update["scan_limit"] = int(data['scan_limit'])
+                if data.get('last_scanned') is not None: update["last_scanned_id"] = int(data['last_scanned'])
+                if data.get('student_sync_batch'): update["student_sync_batch"] = int(data['student_sync_batch'])
+                if data.get('act_scan_limit'): update["act_scan_limit"] = int(data['act_scan_limit'])
+                if data.get('act_start_id') is not None: update["act_last_scanned_id"] = int(data['act_start_id'])
+                if data.get('act_months'): update["act_time_threshold"] = int(data['act_months'])
+                
+                if 'priority_courses' in data: update["priority_courses"] = data['priority_courses']
+                if 'system_matric' in data: update["system_matric"] = data['system_matric']
+                if 'system_pwd' in data: update["system_pwd"] = data['system_pwd']
+                if 'force_student_sync' in data: update["force_student_sync"] = data['force_student_sync'] 
+                
+                db.collection('system').document('config').set(update, merge=True)
+                return jsonify({"status": "Settings Saved"})
+                
+            elif req_type == 'delete_all_jobs':
+                batch = db.batch(); count = 0
+                for j in db.collection('autoscan_jobs').stream():
+                    batch.delete(j.reference); count += 1
+                    if count >= 400: batch.commit(); batch = db.batch(); count = 0
+                if count > 0: batch.commit()
+                return jsonify({"status": f"Deleted {count} jobs"})
+                
+            elif req_type == 'delete_single_job':
+                db.collection('autoscan_jobs').document(data.get('job_id')).delete()
+                return jsonify({"status": "Deleted"})
+                
+            elif req_type == 'trigger_jobs':
+                job_category = data.get('job_category', 'autoscan')
+                out_logs = [f"--- MANUAL TRIGGER: {job_category.upper()} ---"]
+                req_session = get_authorized_session()
+                now_my = get_malaysia_time()
+                today_str = now_my.strftime('%Y-%m-%d')
+                
+                if job_category == 'autoscan':
+                    jobs = list(db.collection('autoscan_jobs').stream())
+                    out_logs.append(f"Found {len(jobs)} active autoscan jobs.")
+                    for j in jobs:
+                        d = j.to_dict(); matric = d['matric']; target = d.get('gid', '')
+                        t = d.get('job_type', 'class')
+                        if t == 'class':
+                            res = core_api.scan_qr(target, matric, req_session)
+                            out_logs.append(f"[{matric}] Class {target}: {res[:60]}")
                         else:
-                            out_logs.append(f"[{matric}] AR {code}: No Password")
+                            r1 = core_api.scan_activity_qr(target, matric, 'i')
+                            out_logs.append(f"[{matric}] Act {target} CI: {r1[:60]}")
+                else:
+                    jobs = list(db.collection('auto_register_jobs').stream())
+                    out_logs.append(f"Found {len(jobs)} auto-register jobs.")
+                    sem = cfg.get('current_semester', '2025/2026-2')
+                    for j in jobs:
+                        d = j.to_dict(); matric = d['matric']; gid = d['gid']
+                        stud = db.collection('students').document(matric).get()
+                        if stud.exists:
+                            pwd = stud.to_dict().get('password')
+                            course = db.collection('courses').document(str(gid)).get()
+                            code = course.to_dict().get('code', 'Unknown') if course.exists else 'Unknown'
+                            grp = course.to_dict().get('group', '') if course.exists else ''
+                            if pwd and pwd != 'Unknown':
+                                st, rp = core_api.register_course(matric, pwd, code, str(gid), sem, grp, "P")
+                                out_logs.append(f"[{matric}] AR {code} {grp}: {rp[:60]}")
+                            else:
+                                out_logs.append(f"[{matric}] AR {code}: No Password")
+                
+                return jsonify({"log": "\n".join(out_logs)})
+                
+            elif req_type == 'ban_ip':
+                ip, act = data.get('ip'), data.get('action')
+                if act == 'ban': db.collection('banned_ips').document(ip).set({"banned_at": get_malaysia_time().isoformat()})
+                else: db.collection('banned_ips').document(ip).delete()
+                return jsonify({"status": "ok"})
+                
+            elif req_type == 'set_ip_name':
+                db.collection('ip_metadata').document(data.get('ip')).set({"name": data.get('name')}, merge=True)
+                return jsonify({"status": "Saved"})
             
-            return jsonify({"log": "\n".join(out_logs)})
-            
-        elif req_type == 'ban_ip':
-            ip, act = data.get('ip'), data.get('action')
-            if act == 'ban': db.collection('banned_ips').document(ip).set({"banned_at": get_malaysia_time().isoformat()})
-            else: db.collection('banned_ips').document(ip).delete()
-            return jsonify({"status": "ok"})
-            
-        elif req_type == 'set_ip_name':
-            db.collection('ip_metadata').document(data.get('ip')).set({"name": data.get('name')}, merge=True)
-            return jsonify({"status": "Saved"})
-        
-        elif req_type == 'delete_device_logs':
-            target_id = data.get('target_id')
-            db.collection('banned_ips').document(target_id).delete()
-            logs_ref = db.collection('system_logs')
-            batch = db.batch(); cnt = 0
-            for doc in logs_ref.where(filter=FieldFilter("device_id", "==", target_id)).stream():
-                batch.delete(doc.reference); cnt += 1
-                if cnt >= 400: batch.commit(); batch = db.batch(); cnt = 0
-            for doc in logs_ref.where(filter=FieldFilter("ip", "==", target_id)).stream():
-                batch.delete(doc.reference); cnt += 1
-                if cnt >= 400: batch.commit(); batch = db.batch(); cnt = 0
-            if cnt > 0: batch.commit()
-            return jsonify({"status": "Device logs cleared & unbanned"})
+            elif req_type == 'delete_device_logs':
+                target_id = data.get('target_id')
+                db.collection('banned_ips').document(target_id).delete()
+                logs_ref = db.collection('system_logs')
+                batch = db.batch(); cnt = 0
+                for doc in logs_ref.where(filter=FieldFilter("device_id", "==", target_id)).stream():
+                    batch.delete(doc.reference); cnt += 1
+                    if cnt >= 400: batch.commit(); batch = db.batch(); cnt = 0
+                for doc in logs_ref.where(filter=FieldFilter("ip", "==", target_id)).stream():
+                    batch.delete(doc.reference); cnt += 1
+                    if cnt >= 400: batch.commit(); batch = db.batch(); cnt = 0
+                if cnt > 0: batch.commit()
+                return jsonify({"status": "Device logs cleared & unbanned"})
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
 
     return jsonify({"error": "Endpoint Not Found"}), 404
 
