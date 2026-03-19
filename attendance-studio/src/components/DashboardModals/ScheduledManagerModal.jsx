@@ -4,7 +4,7 @@ import { api } from '../../services/api';
 import { useToast } from '../../contexts/ToastContext';
 import { useConfirm } from '../../contexts/ConfirmContext';
 
-export default function ScheduledManagerModal({ isOpen, onClose, user, notifications, onDismissNotif, onCancelJob }) {
+export default function ScheduledManagerModal({ isOpen, onClose, user, notifications, onDismissNotif, onCancelJob, onCancelAutoReg }) {
     const { showToast } = useToast();
     const { confirm } = useConfirm();
     const [tab, setTab] = useState('jobs');
@@ -31,6 +31,7 @@ export default function ScheduledManagerModal({ isOpen, onClose, user, notificat
         try {
             await api.post('/action', { type: 'stop_auto_register', gid: String(gid), matric: user.matric });
             showToast("Auto Register stopped", "success");
+            if (onCancelAutoReg) onCancelAutoReg(gid);
         } catch (e) { showToast(e.message, "error"); }
         setArLoading(null);
     };

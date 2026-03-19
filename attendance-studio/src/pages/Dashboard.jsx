@@ -390,6 +390,19 @@ export default function Dashboard() {
       closeCurrentLevel();
   };
 
+  const handleUpdateAutoReg = (gid, isActive) => {
+      setUser(prev => {
+          if (!prev) return null;
+          let newAr = prev.auto_register || [];
+          if (isActive) {
+              if (!newAr.includes(String(gid))) newAr = [...newAr, String(gid)];
+          } else {
+              newAr = newAr.filter(id => String(id) !== String(gid));
+          }
+          return { ...prev, auto_register: newAr };
+      });
+  };
+
   // =========================================================================
   // 5. RENDER
   // =========================================================================
@@ -533,6 +546,7 @@ export default function Dashboard() {
           <ToolsView 
               user={user} 
               isVisible={activeTab === 'tools'} 
+              onUpdateAutoReg={handleUpdateAutoReg}
               onDeepNavChange={(isDeep) => {
                   // When ToolsView goes deep, ensure hash is set so back button works
                   // (ToolsView handles the pushState itself)
@@ -562,7 +576,8 @@ export default function Dashboard() {
           user={user} 
           notifications={notifications} 
           onDismissNotif={dismissNotification} 
-          onCancelJob={cancelAutoscan} 
+          onCancelJob={cancelAutoscan}
+          onCancelAutoReg={(gid) => handleUpdateAutoReg(gid, false)}
       />
 
       {/* AUTOSCAN MODE SELECTOR */}

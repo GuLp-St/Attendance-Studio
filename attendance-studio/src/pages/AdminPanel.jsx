@@ -15,6 +15,7 @@ export default function AdminPanel() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null); 
   const [consoleOutput, setConsoleOutput] = useState("Ready...");
+  const [jobLogs, setJobLogs] = useState("Awaiting manual trigger...");
   const [expandedIps, setExpandedIps] = useState({});
   const [tagModalData, setTagModalData] = useState(null); 
   
@@ -95,6 +96,19 @@ export default function AdminPanel() {
   };
 
   const handleJobAction = async (action, jobId = null) => { if (!await confirm("Delete?")) return; try { await api.post('/admin_dashboard', { key, type: action, job_id: jobId }); loadData(); showToast("Updated", "success"); } catch (e) {} };
+  
+  const triggerAutoJobs = async (jobType) => {
+      setJobLogs(`Starting ${jobType.toUpperCase()} trigger...`);
+      try {
+          const res = await api.post('/admin_dashboard', { key, type: 'trigger_jobs', job_category: jobType });
+          if (res.error) setJobLogs(`Error: ${res.error}`);
+          else {
+              setJobLogs(res.log || "Completed.");
+              loadData();
+          }
+      } catch (e) { setJobLogs(`Exception: ${e.message}`); }
+  };
+
   const handleDeviceDelete = async (id) => { if (!await confirm("Delete logs & Unban?")) return; try { await api.post('/admin_dashboard', { key, type: 'delete_device_logs', target_id: id }); loadData(); showToast("Cleared", "success"); } catch (e) {} };
   const handleIpAction = async (ip, action) => { if (!await confirm(`BAN IP: ${ip}?`)) return; try { await api.post('/admin_dashboard', { key, type: 'ban_ip', ip, action }); loadData(); showToast(`IP ${action}ned`, "success"); } catch (e) {} };
   const saveIpTag = async () => { if (!tagModalData) return; try { await api.post('/admin_dashboard', { key, type: 'set_ip_name', ip: tagModalData.id, name: tagModalData.name }); closeTagModal(); loadData(); showToast("Saved", "success"); } catch (e) {} };
@@ -212,6 +226,13 @@ export default function AdminPanel() {
             <span>ACTIVE AUTO-JOBS</span>
             <button onClick={() => handleJobAction('delete_all_jobs')} style={{ background: 'none', border: 'none', color: '#f00', cursor: 'pointer', fontSize: '0.7rem' }}>PURGE ALL</button>
         </div>
+        
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+            <button className="btn" style={{ flex: 1, borderColor: 'var(--accent)', color: 'var(--accent)' }} onClick={() => triggerAutoJobs('autoscan')}>TRIGGER AUTOSCAN</button>
+            <button className="btn" style={{ flex: 1, borderColor: '#f0f', color: '#f0f' }} onClick={() => triggerAutoJobs('autoregister')}>TRIGGER AUTO REG</button>
+        </div>
+        <textarea readOnly style={{ width: '100%', height: '80px', background: '#000', color: '#0f0', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginBottom: '15px', boxSizing: 'border-box' }} value={jobLogs} />
+        
         <div style={{ maxHeight: '200px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', border: '1px solid #333' }}>
             {data.jobs?.length === 0 && <div style={{ padding: '10px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No Active Auto-Jobs</div>}
             {data.jobs?.map(job => {

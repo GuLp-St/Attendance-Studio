@@ -635,19 +635,11 @@ def api_handler(path):
             start_time = time.time()
             active_sem = cfg.get('current_semester', '2025/2026-2')
             
-            for d in docs:
-                if time.time() - start_time > 45: break
-                last_id = d.id
-                m = d.id
-                data = d.to_dict()
-                pwd = data.get('password')
-                if not pwd or pwd == 'Unknown': continue
-                
+            def verify_student(m, data, pwd, active_sem):
                 bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
                 if not bio:
                     db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
-                    results.append(f"{m}: Invalid")
-                    continue
+                    return f"{m}: Invalid"
                 
                 prog = bio.get('namaProgram', 'Unknown')
                 transcript = core_api.spc_fetch(f"api/v1/result/transcript/{m}", m, pwd)
@@ -655,7 +647,6 @@ def api_handler(path):
                 if transcript and 'cgpa' in transcript:
                     cgpa = float(transcript['cgpa'])
                     
-                # Timetable Ready Validation
                 tt_check = core_api.spc_fetch(f"api/v1/course/student/{m}?kodSesiSem={active_sem}", m, pwd)
                 is_timetableable = True if tt_check is not None else False
                 
@@ -667,7 +658,22 @@ def api_handler(path):
                     "timetable_ready": is_timetableable,
                     "last_verified": get_malaysia_time().isoformat()
                 })
-                results.append(f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}")
+                return f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}"
+
+            with ThreadPoolExecutor(max_workers=10) as ex:
+                futures = {}
+                for d in docs:
+                    if time.time() - start_time > 45: break
+                    last_id = d.id
+                    m = d.id
+                    data = d.to_dict()
+                    pwd = data.get('password')
+                    if not pwd or pwd == 'Unknown': continue
+                    futures[ex.submit(verify_student, m, data, pwd, active_sem)] = m
+                    
+                for f in as_completed(futures):
+                    try: results.append(f.result())
+                    except Exception as e: results.append(f"{futures[f]}: Error - {str(e)}")
             
             if last_id: db.collection('system').document('config').set({"verify_start_id": last_id}, merge=True)
             return Response(json.dumps({"processed": len(results), "details": results}), headers=headers)
@@ -1203,6 +1209,7 @@ def api_handler(path):
                 name = f"Organizer {org_id}"
                 if bio: name = bio.get('NAMAPELAJAR') or bio.get('namaPelajar') or bio.get('Name') or name
                 db.collection('organizers').document(str(org_id)).set({"id": str(org_id), "name": name, "last_active": latest.isoformat(), "activities": top10})
+                log(f"Synced {name} - Updated {len(top10)} recent activities")
                 
             all_orgs = db.collection('organizers').stream()
             full_dir = []
@@ -1325,6 +1332,45 @@ def api_handler(path):
         elif req_type == 'delete_single_job':
             db.collection('autoscan_jobs').document(data.get('job_id')).delete()
             return jsonify({"status": "Deleted"})
+            
+        elif req_type == 'trigger_jobs':
+            job_category = data.get('job_category', 'autoscan')
+            out_logs = [f"--- MANUAL TRIGGER: {job_category.upper()} ---"]
+            req_session = get_authorized_session()
+            now_my = get_malaysia_time()
+            today_str = now_my.strftime('%Y-%m-%d')
+            
+            if job_category == 'autoscan':
+                jobs = list(db.collection('autoscan_jobs').stream())
+                out_logs.append(f"Found {len(jobs)} active autoscan jobs.")
+                for j in jobs:
+                    d = j.to_dict(); matric = d['matric']; target = d.get('gid', '')
+                    t = d.get('job_type', 'class')
+                    if t == 'class':
+                        res = core_api.scan_qr(target, matric, req_session)
+                        out_logs.append(f"[{matric}] Class {target}: {res[:60]}")
+                    else:
+                        r1 = core_api.scan_activity_qr(target, matric, 'i')
+                        out_logs.append(f"[{matric}] Act {target} CI: {r1[:60]}")
+            else:
+                jobs = list(db.collection('auto_register_jobs').stream())
+                out_logs.append(f"Found {len(jobs)} auto-register jobs.")
+                sem = cfg.get('current_semester', '2025/2026-2')
+                for j in jobs:
+                    d = j.to_dict(); matric = d['matric']; gid = d['gid']
+                    stud = db.collection('students').document(matric).get()
+                    if stud.exists:
+                        pwd = stud.to_dict().get('password')
+                        course = db.collection('courses').document(str(gid)).get()
+                        code = course.to_dict().get('code', 'Unknown') if course.exists else 'Unknown'
+                        grp = course.to_dict().get('group', '') if course.exists else ''
+                        if pwd and pwd != 'Unknown':
+                            st, rp = core_api.register_course(matric, pwd, code, str(gid), sem, grp, "P")
+                            out_logs.append(f"[{matric}] AR {code} {grp}: {rp[:60]}")
+                        else:
+                            out_logs.append(f"[{matric}] AR {code}: No Password")
+            
+            return jsonify({"log": "\n".join(out_logs)})
             
         elif req_type == 'ban_ip':
             ip, act = data.get('ip'), data.get('action')

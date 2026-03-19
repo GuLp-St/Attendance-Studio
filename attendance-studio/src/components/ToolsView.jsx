@@ -4,7 +4,7 @@ import { api, getDirectory } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 
-export default function ToolsView({ user, isVisible, onDeepNavChange }) {
+export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAutoReg }) {
     const { showToast } = useToast();
     const { confirm } = useConfirm();
 
@@ -347,10 +347,12 @@ export default function ToolsView({ user, isVisible, onDeepNavChange }) {
                 const res = await api.post('/action', { type: 'stop_auto_register', matric: user.matric, gid: activeGroup.id });
                 showToast(res.msg || "Auto Register Deactivated", "success");
                 setLocalAutoReg(prev => prev.filter(gid => gid !== String(activeGroup.id)));
+                if (onUpdateAutoReg) onUpdateAutoReg(activeGroup.id, false);
             } else {
                 const res = await api.post('/action', { type: 'start_auto_register', matric: user.matric, gid: activeGroup.id });
                 showToast(res.msg || "Auto Register Activated", "success");
                 setLocalAutoReg(prev => [...prev, String(activeGroup.id)]);
+                if (onUpdateAutoReg) onUpdateAutoReg(activeGroup.id, true);
             }
         } catch(e) { showToast("Error connecting", "error"); }
         setActionLoading(false);
