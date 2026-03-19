@@ -621,9 +621,9 @@ def api_handler(path):
             
             students_ref = db.collection('students')
             if curr_id:
-                docs = students_ref.order_by(firestore.FieldPath.document_id()).start_after({firestore.FieldPath.document_id(): curr_id}).limit(100).stream()
+                docs = students_ref.order_by('__name__').start_after([curr_id]).limit(100).stream()
             else:
-                docs = students_ref.order_by(firestore.FieldPath.document_id()).limit(100).stream()
+                docs = students_ref.order_by('__name__').limit(100).stream()
             
             docs = list(docs)
             if not docs and curr_id:

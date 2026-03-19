@@ -208,6 +208,30 @@ export default function AdminPanel() {
       </div>
 
       <div className="admin-section">
+        <div className="admin-title">
+            <span>ACTIVE AUTO-JOBS</span>
+            <button onClick={() => handleJobAction('delete_all_jobs')} style={{ background: 'none', border: 'none', color: '#f00', cursor: 'pointer', fontSize: '0.7rem' }}>PURGE ALL</button>
+        </div>
+        <div style={{ maxHeight: '200px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', border: '1px solid #333' }}>
+            {data.jobs?.length === 0 && <div style={{ padding: '10px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No Active Auto-Jobs</div>}
+            {data.jobs?.map(job => {
+                const isReg = job.type === 'register';
+                const title = isReg ? `AUTO-REGISTER (${job.code || job.group_id || 'Course'})` : `AUTOSCAN (${job.target || job.code || 'Activity/Class'})`;
+                const userDesc = job.matric || job.id.split('_')[0];
+                return (
+                    <div key={job.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px', borderBottom: '1px solid #333', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <span style={{ color: isReg ? '#f0f' : 'var(--accent)', fontWeight: 'bold', fontSize: '0.8rem' }}>{title}</span>
+                            <span style={{ fontSize: '0.7rem', color: '#fff' }}>User: {userDesc}</span>
+                        </div>
+                        <button className="btn" style={{ color: '#f00', padding: '4px 10px', height: '28px', minWidth: 'auto', borderColor: '#f00' }} onClick={() => handleJobAction('delete_single_job', job.id)}>DEL</button>
+                    </div>
+                );
+            })}
+        </div>
+      </div>
+
+      <div className="admin-section">
         <div className="admin-title"><span>NETWORK ACTIVITY</span><button onClick={loadData} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.7rem' }}>REFRESH</button></div>
         <div style={{ maxHeight: '350px', overflowY: 'auto', border: '1px solid #333' }}>
           {networkGroups.map(group => {

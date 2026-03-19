@@ -34,12 +34,14 @@ export default function ToolsView({ user, isVisible, onDeepNavChange }) {
     const [showSelfPrompt, setShowSelfPrompt] = useState(false);
     const [selfPwdTested, setSelfPwdTested] = useState(false);
     const [localUserGroups, setLocalUserGroups] = useState([]); 
+    const [localAutoReg, setLocalAutoReg] = useState([]); 
     const [exemptTarget, setExemptTarget] = useState(null); 
     const [exemptReason, setExemptReason] = useState('');
     const [sessionTab, setSessionTab] = useState('present');
 
     useEffect(() => { 
         if (user?.courses) setLocalUserGroups(user.courses.map(c => String(c.gid))); 
+        if (user?.auto_register) setLocalAutoReg(user.auto_register.map(gi => String(gi)));
     }, [user]);
 
     useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}); }, []);
@@ -336,12 +338,20 @@ export default function ToolsView({ user, isVisible, onDeepNavChange }) {
     };
 
     const isUserEnrolled = activeGroup ? localUserGroups.includes(String(activeGroup.id)) : false;
+    const isAutoRegActive = activeGroup ? localAutoReg.includes(String(activeGroup.id)) : false;
 
-    const activateAutoRegister = async () => {
+    const toggleAutoRegister = async () => {
         setActionLoading(true);
         try {
-            const res = await api.post('/action', { type: 'start_auto_register', matric: user.matric, gid: activeGroup.id });
-            showToast(res.msg || "Auto Register Activated", "success");
+            if (isAutoRegActive) {
+                const res = await api.post('/action', { type: 'stop_auto_register', matric: user.matric, gid: activeGroup.id });
+                showToast(res.msg || "Auto Register Deactivated", "success");
+                setLocalAutoReg(prev => prev.filter(gid => gid !== String(activeGroup.id)));
+            } else {
+                const res = await api.post('/action', { type: 'start_auto_register', matric: user.matric, gid: activeGroup.id });
+                showToast(res.msg || "Auto Register Activated", "success");
+                setLocalAutoReg(prev => [...prev, String(activeGroup.id)]);
+            }
         } catch(e) { showToast("Error connecting", "error"); }
         setActionLoading(false);
     };
@@ -469,8 +479,8 @@ export default function ToolsView({ user, isVisible, onDeepNavChange }) {
                                         <button className="btn" disabled={actionLoading} style={{borderColor:'#0f0', color:'#0f0', padding: '8px 16px', opacity: actionLoading ? 0.5 : 1}} onClick={()=>handleSelfAction('ADD')}>
                                             {actionLoading ? 'PROCESSING...' : 'REGISTER SELF'}
                                         </button>
-                                        <button className="btn" disabled={actionLoading} style={{borderColor:'var(--primary)', color:'var(--primary)', padding: '8px 16px', opacity: actionLoading ? 0.5 : 1}} onClick={activateAutoRegister}>
-                                            AUTO REG
+                                        <button className="btn" disabled={actionLoading} style={{borderColor: isAutoRegActive ? '#f00' : 'var(--primary)', color: isAutoRegActive ? '#f00' : 'var(--primary)', padding: '8px 16px', opacity: actionLoading ? 0.5 : 1}} onClick={toggleAutoRegister}>
+                                            {isAutoRegActive ? 'DEACTIVATE' : 'AUTO REG'}
                                         </button>
                                     </>
                                 )}
