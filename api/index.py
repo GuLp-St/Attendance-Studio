@@ -117,6 +117,38 @@ def get_authorized_session():
     core_api.configure_session(s, sys_m, pwd)
     return s
 
+def verify_and_save_student(matric, data, pwd, active_sem):
+    try:
+        is_val = core_api.validate_login(matric, pwd)
+        if not is_val: return False, f"{matric}: Invalid Login"
+        
+        req = core_api.spc_fetch(f"api/v1/student/{matric}", matric, pwd)
+        bio = req.get('data', {}) if req and req.get('data') else {}
+        
+        t = core_api.spc_fetch(f"api/v1/student/{matric}/transcript", matric, pwd)
+        transcript = t.get('data', []) if t and isinstance(t, dict) and 'data' in t else []
+        cgpa = 0.0
+        if isinstance(transcript, list) and len(transcript) > 0:
+            if 'cgpa' in transcript[0]:
+                try: cgpa = float(transcript[0]['cgpa'])
+                except: pass
+                
+        tt = core_api.spc_fetch(f"api/v1/course/student/{matric}?kodSesiSem={active_sem}", matric, pwd)
+        
+        doc_data = {
+            "name": bio.get('studentName', data.get('name', 'Unknown')),
+            "program": bio.get('program', data.get('program', '')),
+            "faculty": bio.get('faculty', data.get('faculty', '')),
+            "cgpa": cgpa,
+            "password": pwd,
+            "timetable_ready": tt is not None,
+            "last_verified": get_malaysia_time().isoformat()
+        }
+        db.collection('valid_directory').document(matric).set(doc_data, merge=True)
+        return True, f"{matric}: Verified (CGPA: {cgpa})"
+    except Exception as e:
+        return False, f"{matric}: Error: {str(e)}"
+
 def get_client_ip():
     if request.headers.getlist("X-Forwarded-For"):
         return request.headers.getlist("X-Forwarded-For")[0]
@@ -1330,11 +1362,24 @@ def api_handler(path):
             log("Starting Directory Verification...")
             active_sem = get_sys_config().get('current_semester', '2025/2026-2')
             
-            docs = list(db.collection('students').order_by('__name__').stream())
-            log(f"Found {len(docs)} student records in database. Verifying valid ones...")
+            cfg_doc = db.collection('system').document('config').get()
+            curr_id = cfg_doc.to_dict().get("verify_start_id", "") if cfg_doc.exists else ""
             
+            log(f"Fetching verifiable accounts from {curr_id or 'start'} (LIMIT 300) to protect database quota...")
+            students_ref = db.collection('students')
+            if curr_id:
+                docs = list(students_ref.order_by('__name__').start_after([curr_id]).limit(300).stream())
+            else:
+                docs = list(students_ref.order_by('__name__').limit(300).stream())
+                
+            if not docs and curr_id:
+                db.collection('system').document('config').set({"verify_start_id": ""}, merge=True)
+                log("Reached the end of students database. Pointer reset to beginning.")
+                return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
+                
             start_time = time.time()
             results = []
+            last_id = curr_id
             
             with ThreadPoolExecutor(max_workers=10) as ex:
                 futures = {}
@@ -1342,6 +1387,7 @@ def api_handler(path):
                     if time.time() - start_time > 40: 
                         log("Timeout approaching. Stopping verification early.")
                         break
+                    last_id = d.id
                     m = d.id
                     data = d.to_dict()
                     pwd = data.get('password')
@@ -1356,6 +1402,9 @@ def api_handler(path):
                     except Exception as e: 
                         log(f"{futures[f]}: Error - {str(e)}")
 
+            if last_id: db.collection('system').document('config').set({"verify_start_id": last_id}, merge=True)
+            log(f"Processed {len(results)} valid credentials.")
+            log(f"Moved verify pointer to {last_id}. Fire again to continue.")
             save_sync_log("VERIFY", "SUCCESS", log_buffer, len(results))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:

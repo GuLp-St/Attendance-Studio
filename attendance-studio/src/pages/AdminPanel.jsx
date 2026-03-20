@@ -5,6 +5,7 @@ import { api, getDirectory } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import Modal from '../components/Modal';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 export default function AdminPanel() {
   const { showToast } = useToast();
@@ -97,6 +98,33 @@ export default function AdminPanel() {
     } catch (e) { showToast(e.message, "error"); }
   };
 
+  const triggerDirectoryVerify = async () => {
+    if (!await confirm(`Start DIRECTORY VERIFY?`)) return;
+    setConsoleOutput("Initializing Directory Verification...");
+    try {
+      const text = await (await fetch(`/api/admin_verify_directory?key=${key}`)).text();
+      setConsoleOutput(text); loadData();
+    } catch (e) { setConsoleOutput("Error: " + e.message); }
+  };
+
+  const handleTestManualSys = async () => {
+    if (!manualMatric || !manualPwd) return;
+    setManualTestStatus('testing');
+    try {
+        const res = await (await fetch(`/api/admin_test_system_account?key=${key}&matric=${manualMatric}&password=${encodeURIComponent(manualPwd)}`)).json();
+        if (res.valid) {
+            setManualTestStatus('valid');
+            showToast("Credential & Timetable Valid!", "success");
+        } else {
+            setManualTestStatus('invalid');
+            showToast(res.error || "Invalid Credentials", "error");
+        }
+    } catch {
+        setManualTestStatus('invalid');
+        showToast("Server Error during test", "error");
+    }
+  };
+
   const triggerSync = async (type) => {
     if (!await confirm(`Start ${type.toUpperCase()} Sync?`)) return;
     setConsoleOutput("Initializing Sync...");
@@ -151,6 +179,7 @@ export default function AdminPanel() {
   );
 
   return (
+    <ErrorBoundary>
     <div className="admin-grid">
 
       <div className="admin-section">
@@ -180,7 +209,7 @@ export default function AdminPanel() {
         ) : (
             <div className="ctrl-row" style={{marginBottom: 0}}>
                 <input type="text" className="t-input" placeholder="Matric" value={manualMatric} onChange={e => {setManualMatric(e.target.value); setManualTestStatus('none');}} style={{flex: 1}} />
-                <input type="password" className="t-input" placeholder="Password" value={manualPwd} onChange={e => {setManualPwd(e.target.value); setManualTestStatus('none');}} style={{flex: 1}} />
+                <input type="text" className="t-input" placeholder="Password" value={manualPwd} onChange={e => {setManualPwd(e.target.value); setManualTestStatus('none');}} style={{flex: 1}} />
                 {manualTestStatus === 'valid' ? (
                     <button className="btn" style={{height: '38px', borderColor: '#0f0', color: '#0f0'}} onClick={saveSettings}>CONFIRM</button>
                 ) : (
@@ -311,6 +340,7 @@ export default function AdminPanel() {
       </Modal>
 
     </div>
+    </ErrorBoundary>
   );
 }
 

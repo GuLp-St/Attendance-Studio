@@ -18,6 +18,23 @@ if ('serviceWorker' in navigator) {
 }
 // ------------------------------------------------
 
+window.addEventListener('error', (event) => {
+  const errorDiv = document.createElement('div');
+  errorDiv.style.position = 'fixed';
+  errorDiv.style.top = '0';
+  errorDiv.style.left = '0';
+  errorDiv.style.width = '100vw';
+  errorDiv.style.height = '100vh';
+  errorDiv.style.backgroundColor = 'red';
+  errorDiv.style.color = 'white';
+  errorDiv.style.zIndex = '999999';
+  errorDiv.style.padding = '20px';
+  errorDiv.style.overflow = 'auto';
+  errorDiv.style.whiteSpace = 'pre-wrap';
+  errorDiv.innerHTML = `<h1>Global Error Caught:</h1><pre>${event.error?.stack || event.message}</pre>`;
+  document.body.appendChild(errorDiv);
+});
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ToastProvider>
