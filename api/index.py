@@ -195,6 +195,33 @@ def consolidate_timetable(slots):
         final_slots.extend(merged)
     return final_slots
 
+def verify_and_save_student(m, data, pwd, active_sem):
+    bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
+    if not bio:
+        db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
+        return False, f"{m}: Invalid Data/Credential"
+    
+    prog = bio.get('namaProgram', 'Unknown')
+    transcript = core_api.spc_fetch(f"api/v1/result/transcript/{m}", m, pwd)
+    cgpa = 0.0
+    if transcript and isinstance(transcript, list) and len(transcript) > 0:
+        if 'cgpa' in transcript[0]:
+            try: cgpa = float(transcript[0]['cgpa'])
+            except: pass
+        
+    tt_check = core_api.spc_fetch(f"api/v1/course/student/{m}?kodSesiSem={active_sem}", m, pwd)
+    is_timetableable = True if tt_check is not None else False
+    
+    db.collection('students').document(m).set({"cgpa": cgpa, "namaProgram": prog, "password": pwd}, merge=True)
+    name = bio.get('nama', data.get('name', 'Unknown'))
+    
+    db.collection('valid_directory').document(m).set({
+        "matric": m, "name": name, "cgpa": cgpa, "programme": prog, "password": pwd, 
+        "timetable_ready": is_timetableable,
+        "last_verified": get_malaysia_time().isoformat()
+    })
+    return True, f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}"
+
 def delete_collection(collection_name, batch_size=400):
     docs = db.collection(collection_name).limit(batch_size).stream()
     deleted = 0
@@ -647,30 +674,9 @@ def api_handler(path):
             start_time = time.time()
             active_sem = cfg.get('current_semester', '2025/2026-2')
             
-            def verify_student(m, data, pwd, active_sem):
-                bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
-                if not bio:
-                    db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
-                    return f"{m}: Invalid"
-                
-                prog = bio.get('namaProgram', 'Unknown')
-                transcript = core_api.spc_fetch(f"api/v1/result/transcript/{m}", m, pwd)
-                cgpa = 0.0
-                if transcript and 'cgpa' in transcript:
-                    cgpa = float(transcript['cgpa'])
-                    
-                tt_check = core_api.spc_fetch(f"api/v1/course/student/{m}?kodSesiSem={active_sem}", m, pwd)
-                is_timetableable = True if tt_check is not None else False
-                
-                db.collection('students').document(m).set({"cgpa": cgpa, "namaProgram": prog, "password": pwd}, merge=True)
-                name = bio.get('nama', data.get('name', 'Unknown'))
-                
-                db.collection('valid_directory').document(m).set({
-                    "matric": m, "name": name, "cgpa": cgpa, "programme": prog, "password": pwd, 
-                    "timetable_ready": is_timetableable,
-                    "last_verified": get_malaysia_time().isoformat()
-                })
-                return f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}"
+            def verify_student_wrapper(m, data, pwd, active_sem):
+                success, msg = verify_and_save_student(m, data, pwd, active_sem)
+                return msg
 
             with ThreadPoolExecutor(max_workers=10) as ex:
                 futures = {}
@@ -681,7 +687,7 @@ def api_handler(path):
                     data = d.to_dict()
                     pwd = data.get('password')
                     if not pwd or pwd == 'Unknown': continue
-                    futures[ex.submit(verify_student, m, data, pwd, active_sem)] = m
+                    futures[ex.submit(verify_student_wrapper, m, data, pwd, active_sem)] = m
                     
                 for f in as_completed(futures):
                     try: results.append(f.result())
@@ -886,6 +892,14 @@ def api_handler(path):
         
         is_valid = core_api.validate_login(m, pwd)
         if is_valid:
+            active_sem = get_sys_config().get('current_semester', '2025/2026-2')
+            try:
+                student_doc = db.collection('students').document(m).get()
+                s_data = student_doc.to_dict() if student_doc.exists else {}
+                verify_and_save_student(m, s_data, pwd, active_sem)
+            except Exception as e:
+                print("Silent error verifying valid directory manually:", str(e))
+                
             db.collection('students').document(m).set({"password": pwd}, merge=True)
             log_action(client_ip, initiator, "TOOL_VALIDATE_PWD", f"Target:{m}")
             return jsonify({"valid": True, "password": pwd})
@@ -1293,6 +1307,61 @@ def api_handler(path):
                         evt['status'] = st; evt['log_id'] = lid; evt['can_checkout'] = cco
             return Response(json.dumps(data), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
+
+    elif path == '/admin_test_system_account':
+        if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+        m, pwd = args.get('matric'), args.get('password')
+        if not m or not pwd: return jsonify({"valid": False, "error": "Missing credentials"})
+        
+        is_valid = core_api.validate_login(m, pwd)
+        if not is_valid: return jsonify({"valid": False, "error": "Invalid login credentials"})
+        
+        active_sem = get_sys_config().get('current_semester', '2025/2026-2')
+        tt_check = core_api.spc_fetch(f"api/v1/course/student/{m}?kodSesiSem={active_sem}", m, pwd)
+        if tt_check is None: return jsonify({"valid": False, "error": "Login successful, but Timetable access failed"})
+        
+        return jsonify({"valid": True})
+
+    elif path == '/admin_verify_directory':
+        if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+        log_buffer = []
+        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
+        try:
+            log("Starting Directory Verification...")
+            active_sem = get_sys_config().get('current_semester', '2025/2026-2')
+            
+            docs = list(db.collection('students').order_by('__name__').stream())
+            log(f"Found {len(docs)} student records in database. Verifying valid ones...")
+            
+            start_time = time.time()
+            results = []
+            
+            with ThreadPoolExecutor(max_workers=10) as ex:
+                futures = {}
+                for d in docs:
+                    if time.time() - start_time > 40: 
+                        log("Timeout approaching. Stopping verification early.")
+                        break
+                    m = d.id
+                    data = d.to_dict()
+                    pwd = data.get('password')
+                    if not pwd or pwd == 'Unknown': continue
+                    futures[ex.submit(verify_and_save_student, m, data, pwd, active_sem)] = m
+                    
+                for f in as_completed(futures):
+                    try: 
+                        success, result_msg = f.result()
+                        results.append(result_msg)
+                        log(result_msg)
+                    except Exception as e: 
+                        log(f"{futures[f]}: Error - {str(e)}")
+
+            save_sync_log("VERIFY", "SUCCESS", log_buffer, len(results))
+            return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
+        except Exception as e:
+            traceback.print_exc()
+            save_sync_log("VERIFY", "ERROR", log_buffer + [str(e)], 0)
+            return Response(f"Error: {str(e)}", status=500, headers=headers)
 
     elif path == '/admin_dashboard' and request.method == 'POST':
         try:

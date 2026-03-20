@@ -1,5 +1,34 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
+
+const ReadableJson = ({ data }) => {
+    if (data === null || data === undefined) return <span style={{ color: '#888' }}>null</span>;
+    if (typeof data !== 'object') return <span style={{ color: '#fff' }}>{String(data)}</span>;
+    
+    if (Array.isArray(data)) {
+        if (data.length === 0) return <span style={{ color: '#888' }}>[ Empty ]</span>;
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {data.map((item, i) => (
+                    <div key={i} style={{ background: 'rgba(255,255,255,0.03)', padding: '8px', borderLeft: '2px solid var(--primary)', borderRadius: '0 4px 4px 0' }}>
+                        <ReadableJson data={item} />
+                    </div>
+                ))}
+            </div>
+        );
+    }
+    
+    return (
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, max-content) 1fr', gap: '4px 10px', fontSize: '0.75rem' }}>
+            {Object.entries(data).map(([k, v]) => (
+                <React.Fragment key={k}>
+                    <div style={{ color: '#aaa', textTransform: 'capitalize', alignSelf: 'start', marginTop: '2px', wordBreak: 'break-word', fontWeight: 'bold' }}>{k.replace(/([A-Z])/g, ' $1').trim()}</div>
+                    <div style={{ wordBreak: 'break-word' }}><ReadableJson data={v} /></div>
+                </React.Fragment>
+            ))}
+        </div>
+    );
+};
 
 export default function DirectoryView({ user }) {
     const [data, setData] = useState([]);
@@ -161,9 +190,9 @@ export default function DirectoryView({ user }) {
                 {Object.entries(d).map(([key, val]) => (
                     <details style={{ marginBottom: '10px' }} key={key}>
                         <summary style={{ cursor: 'pointer', color: 'var(--primary)', fontWeight: 'bold', textTransform: 'uppercase' }}>{key.replace('_', ' ')}</summary>
-                        <pre style={{ fontSize: '0.7rem', color: '#ccc', padding: '10px', background: '#111', borderRadius: '4px', overflowX: 'auto', marginTop: '5px' }}>
-                            {JSON.stringify(val, null, 2)}
-                        </pre>
+                        <div style={{ padding: '10px', background: 'rgba(0,0,0,0.5)', borderRadius: '4px', marginTop: '5px', overflowX: 'auto' }}>
+                            <ReadableJson data={val} />
+                        </div>
                     </details>
                 ))}
             </div>

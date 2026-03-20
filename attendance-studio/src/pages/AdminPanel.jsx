@@ -23,6 +23,12 @@ export default function AdminPanel() {
   const [autoAccounts, setAutoAccounts] = useState([]);
   const [autoIndex, setAutoIndex] = useState(0);
 
+  // Manual System State
+  const [manualMode, setManualMode] = useState(false);
+  const [manualMatric, setManualMatric] = useState('');
+  const [manualPwd, setManualPwd] = useState('');
+  const [manualTestStatus, setManualTestStatus] = useState('none');
+
   const [directory, setDirectory] = useState([]);
   useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}) }, []);
 
@@ -55,7 +61,13 @@ export default function AdminPanel() {
           setAutoAccounts(validAccs);
           if (res.config?.system_matric) {
               const idx = validAccs.findIndex(a => a.matric === res.config.system_matric);
-              if (idx !== -1) setAutoIndex(idx);
+              if (idx !== -1) { setAutoIndex(idx); setManualMode(false); }
+              else {
+                  setManualMode(true);
+                  setManualMatric(res.config.system_matric);
+                  setManualPwd(res.config.system_pwd);
+                  setManualTestStatus('valid');
+              }
           }
       }
 
@@ -77,8 +89,8 @@ export default function AdminPanel() {
         key, type: 'save_settings', scan_limit: formSync.limit, last_scanned: formSync.classStart,
         student_sync_batch: formSync.studentBatch, act_scan_limit: formSync.actLimit,
         act_start_id: formSync.actStart, act_months: formSync.actMonths, 
-        system_matric: autoAccounts[autoIndex]?.matric || "", 
-        system_pwd: autoAccounts[autoIndex]?.password || "", 
+        system_matric: manualMode ? manualMatric : (autoAccounts[autoIndex]?.matric || ""), 
+        system_pwd: manualMode ? manualPwd : (autoAccounts[autoIndex]?.password || ""), 
         priority_courses: priorityCourses, force_student_sync: formSync.forceStudentSync
       });
       showToast("Saved", "success");
@@ -142,19 +154,42 @@ export default function AdminPanel() {
     <div className="admin-grid">
 
       <div className="admin-section">
-        <div className="admin-title">SYSTEM ACCOUNT</div>
-        <div className="ctrl-row" style={{marginBottom: 0}}>
-            <div style={{ flex: 1, background: 'rgba(0,0,0,0.4)', padding: '10px', borderRadius: '4px', border: '1px solid var(--primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                    <span style={{ color: 'var(--primary)', fontWeight: 'bold', marginRight: '10px' }}>AUTO:</span>
-                    <span style={{ color: '#fff' }}>{autoAccounts[autoIndex]?.matric || "NO VALID ACCOUNTS"}</span>
+        <div className="admin-title">
+            <span>SYSTEM ACCOUNT</span>
+            <button onClick={triggerDirectoryVerify} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.7rem' }}>TRIGGER DIRECTORY VERIFY</button>
+        </div>
+        
+        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.8rem', color: '#ccc', cursor: 'pointer', marginBottom: '10px' }}>
+            <input type="checkbox" checked={manualMode} onChange={e => setManualMode(e.target.checked)} />
+            Enable Manual Input
+        </label>
+        
+        {!manualMode ? (
+            <div className="ctrl-row" style={{marginBottom: 0}}>
+                <div style={{ flex: 1, background: 'rgba(0,0,0,0.4)', padding: '10px', borderRadius: '4px', border: '1px solid var(--primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                        <span style={{ color: 'var(--primary)', fontWeight: 'bold', marginRight: '10px' }}>AUTO:</span>
+                        <span style={{ color: '#fff' }}>{autoAccounts[autoIndex]?.matric || "NO VALID ACCOUNTS"}</span>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', gap: '5px'}}>
+                    <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex(0)}>DEFAULT</button>
+                    <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex((autoIndex + 1) % autoAccounts.length)}>SWITCH</button>
                 </div>
             </div>
-            <div style={{ display: 'flex', gap: '5px'}}>
-                <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex(0)}>DEFAULT</button>
-                <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex((autoIndex + 1) % autoAccounts.length)}>SWITCH</button>
+        ) : (
+            <div className="ctrl-row" style={{marginBottom: 0}}>
+                <input type="text" className="t-input" placeholder="Matric" value={manualMatric} onChange={e => {setManualMatric(e.target.value); setManualTestStatus('none');}} style={{flex: 1}} />
+                <input type="password" className="t-input" placeholder="Password" value={manualPwd} onChange={e => {setManualPwd(e.target.value); setManualTestStatus('none');}} style={{flex: 1}} />
+                {manualTestStatus === 'valid' ? (
+                    <button className="btn" style={{height: '38px', borderColor: '#0f0', color: '#0f0'}} onClick={saveSettings}>CONFIRM</button>
+                ) : (
+                    <button className="btn" style={{height: '38px', borderColor: manualTestStatus === 'invalid' ? '#f00' : 'var(--primary)'}} onClick={handleTestManualSys} disabled={manualTestStatus === 'testing' || !manualMatric || !manualPwd}>
+                        {manualTestStatus === 'testing' ? 'TEST...' : 'TEST'}
+                    </button>
+                )}
             </div>
-        </div>
+        )}
       </div>
 
       <div className="admin-section">
