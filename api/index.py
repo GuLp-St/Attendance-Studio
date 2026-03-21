@@ -364,7 +364,11 @@ def api_handler(path):
             for i in range(55):
                 doc = db.collection('system').document(f'{prefix}{i}').get()
                 if not doc.exists: break
-                full_dir.extend(json.loads(doc.to_dict().get('json', '[]')))
+                
+                d = doc.to_dict()
+                if 'data' in d: full_dir.extend(d['data'])
+                else: full_dir.extend(json.loads(d.get('json', '[]')))
+                
             return Response(json.dumps(full_dir), headers=headers)
         except: return jsonify([])
 
@@ -1414,7 +1418,7 @@ def api_handler(path):
                 full_dir.append({"m": str(d['id']), "n": d.get('name', f"Organizer {d['id']}"), "a": act_str})
                 
             c_size = 4000; chunks = [full_dir[i:i + c_size] for i in range(0, len(full_dir), c_size)]; batch = db.batch()
-            for idx, chunk in enumerate(chunks): batch.set(db.collection('system').document(f'org_dir_{idx}'), {'json': json.dumps(chunk)})
+            for idx, chunk in enumerate(chunks): batch.set(db.collection('system').document(f'org_dir_{idx}'), {'data': chunk})
             for idx in range(len(chunks), 20): batch.delete(db.collection('system').document(f'org_dir_{idx}'))
             batch.commit()
             

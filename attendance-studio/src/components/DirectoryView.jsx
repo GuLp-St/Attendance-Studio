@@ -2,14 +2,19 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
 
 const ReadableJson = ({ data }) => {
-    if (data === null || data === undefined) return <span style={{ color: '#888' }}>null</span>;
-    if (typeof data !== 'object') return <span style={{ color: '#fff' }}>{String(data)}</span>;
+    let parsedData = data;
+    if (typeof data === 'string' && (data.trim().startsWith('{') || data.trim().startsWith('['))) {
+        try { parsedData = JSON.parse(data); } catch(e) {}
+    }
     
-    if (Array.isArray(data)) {
-        if (data.length === 0) return <span style={{ color: '#888' }}>[ Empty ]</span>;
+    if (parsedData === null || parsedData === undefined) return <span style={{ color: '#888' }}>null</span>;
+    if (typeof parsedData !== 'object') return <span style={{ color: '#fff' }}>{String(parsedData)}</span>;
+    
+    if (Array.isArray(parsedData)) {
+        if (parsedData.length === 0) return <span style={{ color: '#888' }}>[ Empty ]</span>;
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {data.map((item, i) => (
+                {parsedData.map((item, i) => (
                     <div key={i} style={{ background: 'rgba(255,255,255,0.03)', padding: '8px', borderLeft: '2px solid var(--primary)', borderRadius: '0 4px 4px 0' }}>
                         <ReadableJson data={item} />
                     </div>
@@ -20,7 +25,7 @@ const ReadableJson = ({ data }) => {
     
     return (
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, max-content) 1fr', gap: '4px 10px', fontSize: '0.75rem' }}>
-            {Object.entries(data).map(([k, v]) => (
+            {Object.entries(parsedData).map(([k, v]) => (
                 <React.Fragment key={k}>
                     <div style={{ color: '#aaa', textTransform: 'capitalize', alignSelf: 'start', marginTop: '2px', wordBreak: 'break-word', fontWeight: 'bold' }}>{k.replace(/([A-Z])/g, ' $1').trim()}</div>
                     <div style={{ wordBreak: 'break-word' }}><ReadableJson data={v} /></div>
