@@ -261,11 +261,8 @@ def update_directory_cache(student_data):
         chunk_id = f"chunk_{h[0]}"
         
         doc_ref = db.collection('directory_cache').document(chunk_id)
-        doc = doc_ref.get()
-        data = doc.to_dict() if doc.exists else {"students": {}}
-        if "students" not in data: data["students"] = {}
         
-        data["students"][m] = {
+        payload = {
             "m": m,
             "n": student_data.get('name', ''),
             "f": student_data.get('faculty', ''),
@@ -275,13 +272,20 @@ def update_directory_cache(student_data):
             "t": bool(student_data.get('timetable_ready', False)),
             "pwd": student_data.get('password', '')
         }
-        doc_ref.set(data)
+        
+        # Using merge=True prevents Thread Pool race conditions and costs ZERO reads!
+        doc_ref.set({"students": {m: payload}}, merge=True)
     except: pass
 
 def verify_and_save_student(m, data, pwd, active_sem):
     bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
     if not bio:
         db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
+        # Evict invalid/graduated students from the directory cache
+        try:
+            h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"chunk_{h[0]}"
+            db.collection('directory_cache').document(chunk_id).update({f"students.{m}": firestore.DELETE_FIELD})
+        except: pass
         return False, f"{m}: Invalid Data/Credential"
     
     prog = bio.get('namaProgram', 'Unknown')
