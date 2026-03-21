@@ -449,7 +449,7 @@ export default function Dashboard() {
             style={activeTab === 'tools' ? { flex: 1, borderColor: '#0f0', color: '#0f0', background: 'rgba(0,255,0,0.1)' } : { flex: 1 }} 
             onClick={() => setActiveTab('tools')}
         >
-            TOOLS
+            COURSE HUB
         </button>
         <button 
             className="btn" 

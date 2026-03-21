@@ -33,7 +33,7 @@ const ReadableJson = ({ data }) => {
 export default function DirectoryView({ user }) {
     const [data, setData] = useState([]);
     const [total, setTotal] = useState(0);
-    const [programmes, setProgrammes] = useState({});
+    const [hierarchy, setHierarchy] = useState({});
     
     // Offline Data
     const [useOffline, setUseOffline] = useState(false);
@@ -46,6 +46,7 @@ export default function DirectoryView({ user }) {
     const [sortBy, setSortBy] = useState('name');
     const [order, setOrder] = useState('asc');
     const [searchQuery, setSearchQuery] = useState('');
+    const [selectedFaculty, setSelectedFaculty] = useState('');
     const [selectedProgs, setSelectedProgs] = useState([]);
     
     const [loading, setLoading] = useState(true);
@@ -58,43 +59,38 @@ export default function DirectoryView({ user }) {
     const [testing, setTesting] = useState(false);
     const [testErr, setTestErr] = useState('');
 
-    useEffect(() => {
-        if (!useOffline) {
-            fetchDirectory();
-        }
-    }, [page, limit, sortBy, order, searchQuery, selectedProgs, useOffline]);
+    const [includeUnverified, setIncludeUnverified] = useState(false);
+    const [intakeYear, setIntakeYear] = useState('');
+    const [intakeList, setIntakeList] = useState([]);
+    const [totalPages, setTotalPages] = useState(1);
 
     useEffect(() => {
-        if (useOffline && offlineData.length === 0) {
-            fetchOffline();
-        }
-    }, [useOffline]);
+        fetchDirectory();
+    }, [page, limit, sortBy, order, searchQuery, selectedProgs, selectedFaculty, includeUnverified, intakeYear]);
 
     const fetchDirectory = async () => {
         setLoading(true);
         try {
-            const res = await api.post(`/directory_v2?page=${page}&limit=${limit}&sort_by=${sortBy}&order=${order}&q=${searchQuery}&matric=${user.matric}`, {
-                programmes: selectedProgs
+            const res = await api.post(`/directory_v2?page=${page}&q=${searchQuery}&matric=${user.matric}`, {
+                programme: selectedProgs.length > 0 ? selectedProgs[0] : null,
+                faculty: selectedFaculty,
+                include_unverified: includeUnverified,
+                row_limit: limit,
+                sort_by: sortBy,
+                sort_order: order,
+                intake_year: intakeYear
             });
-            setData(res.results || []);
+            setData(res.data || res.results || []);
             setTotal(res.total || 0);
-            setProgrammes(res.programmes || {});
+            setTotalPages(res.total_pages || 1);
+            setIntakeList(res.intakes || []);
+            
+            const h = res.hierarchy || {};
+            setHierarchy(h);
         } catch (e) {
             console.error("Failed to load directory");
         }
         setLoading(false);
-    };
-
-    const fetchOffline = async () => {
-        setLoadingOffline(true);
-        try {
-            const res = await api.get(`/directory?type=student`);
-            // Offline schema is {m, n, t} instead of {matric, name, ...}
-            setOfflineData((res || []).map(x => ({ matric: x.m, name: x.n, isOffline: true })));
-        } catch (e) {
-            console.error("Failed offline load");
-        }
-        setLoadingOffline(false);
     };
 
     const toggleProg = (p) => {
@@ -103,15 +99,7 @@ export default function DirectoryView({ user }) {
         else setSelectedProgs([...selectedProgs, p]);
     };
 
-    // Derived Data for offline map
-    const displayData = useMemo(() => {
-        if (!useOffline) return data;
-        const sq = searchQuery.toUpperCase();
-        const filtered = offlineData.filter(x => x.name.toUpperCase().includes(sq) || String(x.matric).includes(sq));
-        return filtered.slice((page - 1) * limit, page * limit);
-    }, [useOffline, offlineData, data, searchQuery, page, limit]);
-
-    const totalPages = Math.ceil((useOffline ? offlineData.filter(x => x.name.toUpperCase().includes(searchQuery.toUpperCase()) || String(x.matric).includes(searchQuery.toUpperCase())).length : total) / limit) || 1;
+    const displayData = data;
 
     const handleExpand = async (item) => {
         if (expandedRow === item.matric) {
@@ -122,7 +110,7 @@ export default function DirectoryView({ user }) {
         setTestPwd('');
         setTestErr('');
         
-        if (item.isOffline) return; // Wait for password input if offline
+        if (item.password === 'Unknown') return; // Wait for password input if offline
         if (detailsData[item.matric]) return;
         
         setDetailsLoading(true);
@@ -145,7 +133,6 @@ export default function DirectoryView({ user }) {
                 setTestErr('Verified! Loading data (this might take a few moments)...');
                 const detRes = await api.get(`/student_details_proxy?matric=${item.matric}&password=${testPwd}`);
                 setDetailsData(prev => ({ ...prev, [item.matric]: detRes }));
-                item.isOffline = false; // Upgrade local state
                 item.password = testPwd;
             } else {
                 setTestErr('Invalid Password.');
@@ -161,7 +148,7 @@ export default function DirectoryView({ user }) {
     const renderDetails = (item) => {
         const matric = item.matric;
         
-        if (item.isOffline && !detailsData[matric]) {
+        if (item.password === 'Unknown' && !detailsData[matric]) {
             return (
                 <div style={{ padding: '15px', background: 'rgba(0,0,0,0.3)', borderTop: '1px solid var(--grid-line)', textAlign: 'center' }}>
                     <div style={{ color: 'var(--primary)', marginBottom: '10px', fontSize: '0.85rem' }}>UNVERIFIED ACCOUNT</div>
@@ -206,55 +193,72 @@ export default function DirectoryView({ user }) {
                 <input
                     type="text"
                     className="t-input"
-                    placeholder={useOffline ? "SEARCH UNVERIFIED DIRECTORY (ALL STUDENTS)..." : "SEARCH VERIFIED DIRECTORY..."}
+                    placeholder={includeUnverified ? "SEARCH DIRECTORY INCLUDING UNVERIFIED..." : "SEARCH VERIFIED DIRECTORY..."}
                     value={searchQuery}
                     onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
                     style={{ width: '100%', textAlign: 'center', padding: '10px', marginBottom: '10px' }}
                 />
                 
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', marginBottom: '10px', alignItems: 'center' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.8rem', color: useOffline ? 'var(--primary)' : '#888', cursor: 'pointer', border: '1px solid #444', padding: '5px 10px', borderRadius: '4px', background: '#1a1a1a', height: '32px', boxSizing: 'border-box' }}>
-                        <input type="checkbox" checked={useOffline} onChange={e => { setUseOffline(e.target.checked); setPage(1); }} />
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.8rem', color: includeUnverified ? 'var(--primary)' : '#888', cursor: 'pointer', border: '1px solid #444', padding: '5px 10px', borderRadius: '4px', background: '#1a1a1a', height: '32px', boxSizing: 'border-box' }}>
+                        <input type="checkbox" checked={includeUnverified} onChange={e => { setIncludeUnverified(e.target.checked); setPage(1); }} />
                         Include Unverified System Accs
                     </label>
 
-                    {!useOffline && (
-                        <>
-                            <select className="t-input" value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1); }} style={{ ...selectStyle, width: '100px' }}>
-                                <option value={10}>10 rows</option>
-                                <option value={20}>20 rows</option>
-                                <option value={50}>50 rows</option>
-                            </select>
+                    <select className="t-input" value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1); }} style={{ ...selectStyle, width: '100px' }}>
+                        <option value={10}>10 rows</option>
+                        <option value={20}>20 rows</option>
+                        <option value={50}>50 rows</option>
+                    </select>
 
-                            <select className="t-input" value={sortBy} onChange={e => { setSortBy(e.target.value); setPage(1); }} style={selectStyle}>
-                                <option value="name">Sort by Name</option>
-                                <option value="matric">Sort by Matric</option>
-                                <option value="cgpa">Sort by CGPA</option>
-                            </select>
+                    <select className="t-input" value={sortBy} onChange={e => { setSortBy(e.target.value); setPage(1); }} style={selectStyle}>
+                        <option value="name">Sort by Name</option>
+                        <option value="matric">Sort by Matric</option>
+                        <option value="cgpa">Sort by CGPA</option>
+                    </select>
 
-                            <button className="btn" style={{ padding: '5px 15px', height: '32px' }} onClick={() => setOrder(order === 'asc' ? 'desc' : 'asc')}>
-                                {order.toUpperCase()} ↕
-                            </button>
-                        </>
+                    <button className="btn" style={{ padding: '5px 15px', height: '32px' }} onClick={() => setOrder(order === 'asc' ? 'desc' : 'asc')}>
+                        {order.toUpperCase()} ↕
+                    </button>
+                    
+                    {intakeList.length > 0 && (
+                        <select className="t-input" value={intakeYear} onChange={e => { setIntakeYear(e.target.value); setPage(1); }} style={{ ...selectStyle, width: '130px' }}>
+                            <option value="">Any Intake</option>
+                            {intakeList.map(y => <option key={y} value={y}>{y}</option>)}
+                        </select>
                     )}
                 </div>
 
-                {!useOffline && Object.keys(programmes).length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                        {Object.entries(programmes).map(([p, c]) => (
-                            <button 
-                                key={p} 
-                                className="btn" 
-                                style={{ 
-                                    padding: '4px 8px', fontSize: '0.65rem', 
-                                    borderColor: selectedProgs.includes(p) ? 'var(--primary)' : 'var(--grid-line)',
-                                    color: selectedProgs.includes(p) ? 'var(--primary)' : '#888'
-                                }}
-                                onClick={() => toggleProg(p)}
-                            >
-                                {p} ({c})
-                            </button>
-                        ))}
+                {Object.keys(hierarchy).length > 0 && (
+                    <div style={{ padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <select 
+                            className="t-input" 
+                            style={{ ...selectStyle, width: '100%', maxWidth: '400px', margin: '0 auto', textAlign: 'center', fontWeight: 'bold' }} 
+                            value={selectedFaculty} 
+                            onChange={(e) => { setSelectedFaculty(e.target.value); setSelectedProgs([]); setPage(1); }}
+                        >
+                            <option value="">ALL FACULTIES</option>
+                            {Object.keys(hierarchy).map(fac => <option key={fac} value={fac}>{fac.toUpperCase()}</option>)}
+                        </select>
+                        
+                        {selectedFaculty && hierarchy[selectedFaculty] && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'center' }}>
+                                {Object.entries(hierarchy[selectedFaculty]).map(([p, c]) => (
+                                    <button 
+                                        key={p} 
+                                        className="btn" 
+                                        style={{ 
+                                            padding: '4px 8px', fontSize: '0.65rem', 
+                                            borderColor: selectedProgs.includes(p) ? 'var(--primary)' : 'var(--grid-line)',
+                                            color: selectedProgs.includes(p) ? 'var(--primary)' : '#888'
+                                        }}
+                                        onClick={() => toggleProg(p)}
+                                    >
+                                        {p} ({c})
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -262,67 +266,78 @@ export default function DirectoryView({ user }) {
             {/* DATA TABLE */}
             <div style={{ flex: 1, minHeight: '50vh', background: 'rgba(0,0,0,0.5)', border: '1px solid var(--grid-line)', borderRadius: '4px', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', padding: '10px', background: 'rgba(255,255,255,0.05)', color: 'var(--primary)', fontWeight: 'bold', fontSize: '0.75rem', borderBottom: '1px solid var(--grid-line)' }}>
-                    {!useOffline && sortBy === 'cgpa' && <div style={{ width: '80px', flexShrink: 0 }}>RANK</div>}
                     <div style={{ width: '50px', flexShrink: 0 }}>PIC</div>
-                    <div style={{ flex: 1, minWidth: '150px' }}>NAME / MATRIC</div>
-                    {!useOffline && (
-                        <>
-                            <div style={{ flex: 1, minWidth: '120px' }}>PROGRAMME</div>
-                            <div style={{ width: '60px', textAlign: 'right' }}>CGPA</div>
-                        </>
-                    )}
+                    <div style={{ flex: 1, minWidth: '130px' }}>NAME / MATRIC</div>
+                    <div style={{ flex: 1, minWidth: '130px' }}>PROGRAM / FACULTY</div>
+                    <div style={{ width: '90px', textAlign: 'center' }}>INTAKE</div>
+                    <div style={{ width: '85px', textAlign: 'right' }}>CGPA (PCT)</div>
                 </div>
 
-                {(loading && !useOffline) || (loadingOffline && useOffline) ? <div style={{ padding: '30px', textAlign: 'center', color: '#888' }}>Loading Directory Data...</div> : displayData.length === 0 ? <div style={{ padding: '30px', textAlign: 'center', color: '#888' }}>NO RESULTS</div> : (
+                {loading ? <div style={{ padding: '30px', textAlign: 'center', color: '#888' }}>Loading Directory Data...</div> : displayData.length === 0 ? <div style={{ padding: '30px', textAlign: 'center', color: '#888' }}>NO RESULTS</div> : (
                     <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-                        {displayData.map(u => (
-                            <div key={`${u.matric}_${u.is_appended_owner ? 'owner' : 'list'}`} style={{ borderBottom: '1px solid var(--grid-line)' }}>
-                                <div 
-                                    style={{ 
-                                        display: 'flex', padding: '10px', alignItems: 'center', cursor: 'pointer',
-                                        background: u.is_appended_owner ? 'rgba(0, 243, 255, 0.1)' : 'transparent',
-                                        opacity: u.isOffline ? 0.6 : 1
-                                    }}
-                                    onClick={() => handleExpand(u)}
-                                >
-                                    {!useOffline && sortBy === 'cgpa' && (
-                                        <div style={{ width: '80px', flexShrink: 0, fontSize: '0.7rem' }}>
-                                            <div style={{ color: 'var(--accent)', fontWeight: 'bold' }}>#{u.rank || '-'}</div>
-                                            <div style={{ color: '#888' }}>Top {u.top_pct || '0'}%</div>
+                        {displayData.map(u => {
+                            const pct = u.top_pct || 100;
+                            let cgpaColor = '#888';
+                            if (pct <= 1) cgpaColor = '#ffd700';
+                            else if (pct <= 10) cgpaColor = '#00f3ff';
+                            else if (pct <= 25) cgpaColor = '#a2ff00';
+                            else if (pct <= 50) cgpaColor = '#00ff00';
+                            else if (pct <= 75) cgpaColor = '#ffff00';
+                            
+                            return (
+                                <div key={`${u.matric}_${u.is_appended_owner ? 'owner' : 'list'}`} style={{ borderBottom: '1px solid var(--grid-line)' }}>
+                                    <div 
+                                        style={{ 
+                                            display: 'flex', padding: '10px', alignItems: 'center', cursor: 'pointer',
+                                            background: u.is_appended_owner ? 'rgba(0, 243, 255, 0.1)' : 'transparent',
+                                            opacity: u.isOffline ? 0.6 : 1
+                                        }}
+                                        onClick={() => handleExpand(u)}
+                                    >
+                                        <div style={{ width: '50px', flexShrink: 0 }}>
+                                            <img src={`https://studentphotos.unimas.my/${u.matric}.jpg`} style={{ width: '35px', height: '35px', borderRadius: '50%', objectFit: 'cover' }} onError={e=>e.target.style.display='none'} alt=""/>
                                         </div>
-                                    )}
-                                    <div style={{ width: '50px', flexShrink: 0 }}>
-                                        <img src={`https://studentphotos.unimas.my/${u.matric}.jpg`} style={{ width: '35px', height: '35px', borderRadius: '50%', objectFit: 'cover' }} onError={e=>e.target.style.display='none'} alt=""/>
-                                    </div>
-                                    <div style={{ flex: 1, minWidth: '150px', overflow: 'hidden' }}>
-                                        <div style={{ fontSize: '0.85rem', color: u.isOffline ? '#aaa' : '#fff', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{u.name}</div>
-                                        <div style={{ fontSize: '0.7rem', color: '#888' }}>{u.matric} {u.isOffline ? '(Unverified)' : ''} {u.is_appended_owner ? '(YOU)' : ''}</div>
-                                    </div>
-                                    {!useOffline && (
-                                        <>
-                                            <div style={{ flex: 1, minWidth: '120px', fontSize: '0.7rem', color: '#aaa', paddingRight: '10px' }}>
-                                                {u.programme || 'Unknown Program'}
+                                        <div style={{ flex: 1, minWidth: '130px', overflow: 'hidden', paddingRight: '10px' }}>
+                                            <div style={{ fontSize: '0.85rem', color: u.password === 'Unknown' ? '#aaa' : '#fff', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{u.name}</div>
+                                            <div style={{ fontSize: '0.7rem', color: '#888' }}>
+                                                {u.matric} {u.password === 'Unknown' ? '(Unverified)' : ''} {u.is_appended_owner ? '(YOU)' : ''}
                                             </div>
-                                            <div style={{ width: '60px', textAlign: 'right', fontWeight: 'bold', color: u.cgpa >= 3.5 ? '#0f0' : '#fff' }}>
-                                                {(u.cgpa || 0).toFixed(2)}
-                                            </div>
-                                        </>
-                                    )}
+                                        </div>
+                                        <div style={{ flex: 1, minWidth: '130px', fontSize: '0.7rem', color: '#aaa', paddingRight: '10px', overflow: 'hidden' }}>
+                                            <div style={{ color: 'var(--primary)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{u.programme || 'Unknown Program'}</div>
+                                            <div style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{u.faculty || 'Unknown Faculty'}</div>
+                                        </div>
+                                        <div style={{ width: '90px', textAlign: 'center', fontSize: '0.75rem', color: '#888', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                            {u.intake_year || 'Unknown'}
+                                        </div>
+                                        <div style={{ width: '85px', textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center' }}>
+                                            {u.password !== 'Unknown' && (
+                                                <>
+                                                    <div style={{ fontWeight: 'bold', color: cgpaColor, fontSize: '0.9rem' }}>
+                                                        {(u.cgpa || 0).toFixed(2)}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.65rem', padding: '2px 4px', background: 'rgba(0,0,0,0.4)', borderRadius: '3px', color: cgpaColor, border: `1px solid ${cgpaColor}40` }}>
+                                                        TOP {pct}%
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                    {expandedRow === u.matric && renderDetails(u)}
                                 </div>
-                                {expandedRow === u.matric && renderDetails(u)}
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 )}
             </div>
 
             {/* PAGINATION */}
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', margin: '15px 0', gap: '15px' }}>
-                <button className="btn" disabled={page <= 1 || loading || loadingOffline} onClick={() => setPage(page - 1)} style={{ padding: '8px 20px' }}>PREV</button>
+                <button className="btn" disabled={page <= 1 || loading} onClick={() => setPage(page - 1)} style={{ padding: '8px 20px' }}>PREV</button>
                 <div style={{ color: 'var(--primary)', fontWeight: 'bold', fontSize: '0.85rem' }}>
                     PAGE {page} OF {totalPages}
                 </div>
-                <button className="btn" disabled={page >= totalPages || loading || loadingOffline} onClick={() => setPage(page + 1)} style={{ padding: '8px 20px' }}>NEXT</button>
+                <button className="btn" disabled={page >= totalPages || loading} onClick={() => setPage(page + 1)} style={{ padding: '8px 20px' }}>NEXT</button>
             </div>
         </div>
     );

@@ -16,6 +16,7 @@ export default function AdminPanel() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null); 
   const [consoleOutput, setConsoleOutput] = useState("Ready...");
+  const [sysConsoleOutput, setSysConsoleOutput] = useState("Ready...");
   const [jobLogs, setJobLogs] = useState("Awaiting manual trigger...");
   const [expandedIps, setExpandedIps] = useState({});
   const [tagModalData, setTagModalData] = useState(null); 
@@ -100,11 +101,11 @@ export default function AdminPanel() {
 
   const triggerDirectoryVerify = async () => {
     if (!await confirm(`Start DIRECTORY VERIFY?`)) return;
-    setConsoleOutput("Initializing Directory Verification...");
+    setSysConsoleOutput("Initializing Directory Verification...");
     try {
       const text = await (await fetch(`/api/admin_verify_directory?key=${key}`)).text();
-      setConsoleOutput(text); loadData();
-    } catch (e) { setConsoleOutput("Error: " + e.message); }
+      setSysConsoleOutput(text); loadData();
+    } catch (e) { setSysConsoleOutput("Error: " + e.message); }
   };
 
   const handleTestManualSys = async () => {
@@ -185,7 +186,7 @@ export default function AdminPanel() {
       <div className="admin-section">
         <div className="admin-title">
             <span>SYSTEM ACCOUNT</span>
-            <button onClick={triggerDirectoryVerify} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.7rem' }}>TRIGGER DIRECTORY VERIFY</button>
+            <button className="btn" onClick={triggerDirectoryVerify} style={{ borderColor: 'var(--primary)', color: 'var(--primary)', padding: '2px 8px', fontSize: '0.7rem' }}>RUN VERIFY</button>
         </div>
         
         <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.8rem', color: '#ccc', cursor: 'pointer', marginBottom: '10px' }}>
@@ -219,6 +220,22 @@ export default function AdminPanel() {
                 )}
             </div>
         )}
+        
+        <textarea readOnly style={{ width: '100%', height: '80px', background: '#000', color: 'var(--primary)', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginTop: '15px', boxSizing: 'border-box' }} value={sysConsoleOutput} />
+        
+        <div style={{ borderTop: '1px solid #333', marginTop: '15px', paddingTop: '10px' }}>
+          <div className="admin-title" style={{ border: 'none', padding: 0, marginBottom: '5px' }}>VERIFICATION HISTORY</div>
+          <div style={{ maxHeight: '120px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)' }}>
+            {data.sys_history?.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No history found</div>}
+            {data.sys_history?.map(h => (
+              <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#888', width: '120px' }}>{h.timestamp.substring(0, 19).replace('T', ' ')}</span>
+                <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{h.action}</span>
+                <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00' }}>{h.status} ({h.items_processed || 0})</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="admin-section">
@@ -275,7 +292,7 @@ export default function AdminPanel() {
           <div style={{ maxHeight: '120px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)' }}>
             {data.sync_history?.map(h => (
               <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#888', width: '80px' }}>{h.timestamp.substring(11, 19)}</span>
+                <span style={{ color: '#888', width: '120px' }}>{h.timestamp.substring(0, 19).replace('T', ' ')}</span>
                 <span style={{ color: h.type === 'CLASS' ? 'var(--primary)' : h.type === 'STUDENT' ? '#0f0' : 'var(--accent)', fontWeight: 'bold' }}>{h.type}</span>
                 <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00' }}>{h.status} ({h.items_found})</span>
               </div>
@@ -297,7 +314,7 @@ export default function AdminPanel() {
         </div>
         <textarea readOnly style={{ width: '100%', height: '80px', background: '#000', color: '#0f0', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginBottom: '15px', boxSizing: 'border-box' }} value={jobLogs} />
         
-        <div style={{ maxHeight: '200px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', border: '1px solid #333' }}>
+        <div style={{ maxHeight: '200px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', border: '1px solid #333', marginBottom: '15px' }}>
             {data.jobs?.length === 0 && <div style={{ padding: '10px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No Active Auto-Jobs</div>}
             {data.jobs?.map(job => {
                 const isReg = job.type === 'register';
@@ -314,6 +331,20 @@ export default function AdminPanel() {
                 );
             })}
         </div>
+        
+        <div style={{ borderTop: '1px solid #333', paddingTop: '10px' }}>
+          <div className="admin-title" style={{ border: 'none', padding: 0, marginBottom: '5px' }}>AUTO JOB HISTORY</div>
+          <div style={{ maxHeight: '120px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)' }}>
+            {data.job_history?.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No history found</div>}
+            {data.job_history?.map(h => (
+              <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#888', width: '120px' }}>{h.timestamp.substring(0, 19).replace('T', ' ')}</span>
+                <span style={{ color: h.category === 'autoregister' ? '#f0f' : 'var(--accent)', fontWeight: 'bold' }}>{h.category.toUpperCase()}</span>
+                <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00' }}>{h.status} ({h.items_processed || 0})</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="admin-section">
@@ -328,7 +359,7 @@ export default function AdminPanel() {
                   <div><span style={{ color, marginRight: '5px', fontSize: '1.2rem' }}>●</span><div style={{ display: 'flex', flexDirection: 'column' }}><span className="ip-addr-text">{group.id}</span><div style={{ fontSize: '0.7rem', color: '#888' }}>{group.name ? <span style={{ color: 'var(--primary)', marginRight: '5px' }}>({group.name})</span> : null}{group.recentIdentity}</div></div></div>
                   <div className="ip-actions" onClick={e => e.stopPropagation()}><button className="btn" style={{ color: '#888', padding: '4px 8px', minWidth: 'auto' }} onClick={() => openTagModal(group.id, group.name || '')}>TAG</button><button className="btn" style={{ color: '#f00', padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleDeviceDelete(group.id)}>DEL</button><button className="btn" style={{ color: color, padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleIpAction(group.id, group.banned ? 'unban' : 'ban')}>{group.banned ? 'UNBAN' : 'BAN'}</button></div>
                 </div>
-                {isExpanded && (<div className="ip-logs" style={{ display: 'block' }}>{group.logs.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No recent logs</div>}{group.logs.map(l => (<div key={l.id} className="log-row"><div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{l.timestamp.substring(11, 19)}</span><span style={{ color: '#fff' }}>{l.matric || '-'}</span></div><div style={{ color: '#ccc' }}>{l.action} {l.details || ''}</div></div>))}</div>)}
+                {isExpanded && (<div className="ip-logs" style={{ display: 'block' }}>{group.logs.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No recent logs</div>}{group.logs.map(l => (<div key={l.id} className="log-row"><div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{(l.timestamp||"").substring(0, 19).replace('T', ' ')}</span><span style={{ color: '#fff' }}>{l.matric || '-'}</span></div><div style={{ color: '#ccc' }}>{l.action} {l.details || ''}</div></div>))}</div>)}
               </div>
             );
           })}

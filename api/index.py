@@ -193,6 +193,30 @@ def save_sync_log(type, status, messages, items_count):
             batch.commit()
     except: pass
 
+def save_sys_log(action, status, items_processed):
+    try:
+        db.collection('sys_history').add({
+            "timestamp": get_malaysia_time().isoformat(), "action": action, "status": status, "items_processed": items_processed
+        })
+        docs = list(db.collection('sys_history').order_by('timestamp', direction=firestore.Query.DESCENDING).stream())
+        if len(docs) > 10:
+            batch = db.batch()
+            for doc in docs[10:]: batch.delete(doc.reference)
+            batch.commit()
+    except: pass
+
+def save_job_log(category, status, items_processed):
+    try:
+        db.collection('job_history').add({
+            "timestamp": get_malaysia_time().isoformat(), "category": category, "status": status, "items_processed": items_processed
+        })
+        docs = list(db.collection('job_history').order_by('timestamp', direction=firestore.Query.DESCENDING).stream())
+        if len(docs) > 10:
+            batch = db.batch()
+            for doc in docs[10:]: batch.delete(doc.reference)
+            batch.commit()
+    except: pass
+
 def consolidate_timetable(slots):
     if not slots: return []
     by_day = {}
@@ -244,11 +268,13 @@ def verify_and_save_student(m, data, pwd, active_sem):
     tt_check = core_api.spc_fetch(f"api/v1/course/student/{m}?kodSesiSem={active_sem}", m, pwd)
     is_timetableable = True if tt_check is not None else False
     
-    db.collection('students').document(m).set({"cgpa": cgpa, "namaProgram": prog, "password": pwd}, merge=True)
+    faculty = bio.get('Fakulti') or bio.get('fakulti') or bio.get('namaFakulti') or data.get('faculty') or 'Unknown Faculty'
+    intake = bio.get('Sesi Pelan') or bio.get('sesiPelan') or data.get('intake') or 'Unknown Intake'
+    db.collection('students').document(m).set({"cgpa": cgpa, "namaProgram": prog, "password": pwd, "faculty": faculty, "intake_year": intake}, merge=True)
     name = bio.get('nama', data.get('name', 'Unknown'))
     
     db.collection('valid_directory').document(m).set({
-        "matric": m, "name": name, "cgpa": cgpa, "programme": prog, "password": pwd, 
+        "matric": m, "name": name, "cgpa": cgpa, "programme": prog, "faculty": faculty, "password": pwd, "intake_year": intake, 
         "timetable_ready": is_timetableable,
         "last_verified": get_malaysia_time().isoformat()
     })
@@ -721,72 +747,106 @@ def api_handler(path):
                     if not pwd or pwd == 'Unknown': continue
                     futures[ex.submit(verify_student_wrapper, m, data, pwd, active_sem)] = m
                     
-                for f in as_completed(futures):
-                    try: results.append(f.result())
-                    except Exception as e: results.append(f"{futures[f]}: Error - {str(e)}")
+            tt_valid = 0
+            login_valid = 0
+            for f in as_completed(futures):
+                try: 
+                    msg = f.result()
+                    if "Valid -" in msg: login_valid += 1
+                    if "TT: True" in msg: tt_valid += 1
+                except: pass
             
             if last_id: db.collection('system').document('config').set({"verify_start_id": last_id}, merge=True)
-            return Response(json.dumps({"processed": len(results), "details": results}), headers=headers)
-        except Exception as e: return jsonify({"error": str(e)}), 500
+            log_str = f"Processed: {len(futures)} | Valid Logins: {login_valid} | Valid+TT: {tt_valid} | Pointer: {curr_id or 'START'} -> {last_id}"
+            save_sys_log("CRON VERIFY", "SUCCESS", len(futures))
+            return Response(json.dumps({"processed": len(futures), "details": log_str}), headers=headers)
+        except Exception as e:
+            save_sys_log("CRON VERIFY", "ERROR", 0)
+            return jsonify({"error": str(e)}), 500
 
     elif path == '/directory_v2' and request.method == 'POST':
         page = int(args.get('page', 1))
         limit = min(int(args.get('limit', 10)), 50)
-        sort_by = args.get('sort_by', 'name')
-        order = args.get('order', 'asc')
-        search_q = args.get('q', '').strip().upper()
         req_body = request.get_json(silent=True) or {}
+        limit_val = int(req_body.get('row_limit', limit))
+        include_unverified = req_body.get('include_unverified', False)
+        sort_by = req_body.get('sort_by', 'name')
+        sort_order = req_body.get('sort_order', 'asc')
+        intake_filt = req_body.get('intake_year', '')
+        search_q = args.get('q', '').strip().upper()
         
         try:
             docs = db.collection('valid_directory').stream()
             all_valid = [d.to_dict() for d in docs]
             
+            if include_unverified:
+                if search_q:
+                    unv = db.collection('students').document(search_q).get()
+                    if unv.exists and unv.to_dict().get('password') == 'Unknown':
+                        all_valid.append(unv.to_dict() | {'matric': unv.id})
+                else:
+                    unv_docs = db.collection('students').where(filter=FieldFilter("password", "==", "Unknown")).limit(limit_val).stream()
+                    for u in unv_docs:
+                        d = u.to_dict(); d['matric'] = u.id
+                        all_valid.append(d)
+                        
             if search_q:
                 all_valid = [x for x in all_valid if search_q in x.get('name', '').upper() or search_q in x.get('matric','')]
-            
-            prog_filter = req_body.get('programmes', [])
-            if prog_filter and len(prog_filter) > 0:
-                all_valid = [x for x in all_valid if x.get('programme') in prog_filter]
                 
-            if sort_by == 'cgpa':
-                prog_groups = {}
-                for v in all_valid:
-                    p = v.get('programme', 'Unknown')
-                    if p not in prog_groups: prog_groups[p] = []
-                    prog_groups[p].append(v)
-                
-                for p, group in prog_groups.items():
-                    group.sort(key=lambda x: x.get('cgpa', 0), reverse=True)
-                    total = len(group)
-                    for idx, v in enumerate(group):
-                        rank = idx + 1
-                        pct = (rank / total) * 100 if total > 0 else 0
-                        v['rank'] = rank
-                        v['top_pct'] = round(pct)
-            else:
-                for v in all_valid:
-                    v['rank'] = 0
-                    v['top_pct'] = 0
+            if intake_filt:
+                all_valid = [x for x in all_valid if x.get('intake_year') == intake_filt]
             
-            rev = (order == 'desc')
+            # 1. Normalize fields
+            for x in all_valid:
+                x['programme'] = x.get('program', x.get('programme', 'Unknown Programme'))
+            
+            # 2. Extract hierarchy: Faculty -> { Programme: Count }
+            hierarchy = {}
+            for x in all_valid:
+                f = x.get('faculty', 'Unknown Faculty')
+                p = x.get('programme')
+                if f not in hierarchy: hierarchy[f] = {}
+                hierarchy[f][p] = hierarchy[f].get(p, 0) + 1
+                
+            # 3. Always calculate CGPA percentiles per programme FIRST (so colors are accurate globally)
+            prog_groups = {}
+            for v in all_valid:
+                p = v.get('programme')
+                if p not in prog_groups: prog_groups[p] = []
+                prog_groups[p].append(v)
+                
+            for p, group in prog_groups.items():
+                group.sort(key=lambda x: x.get('cgpa', 0), reverse=True)
+                total = len(group)
+                for idx, v in enumerate(group):
+                    rank = idx + 1
+                    pct = (rank / total) * 100 if total > 0 else 0
+                    v['rank'] = rank
+                    v['top_pct'] = round(pct)
+                    
+            # 4. Filter by selected program/faculty
+            selected_prog = req_body.get('programme')
+            selected_fac = req_body.get('faculty')
+            if selected_prog:
+                all_valid = [v for v in all_valid if v.get('programme') == selected_prog]
+            elif selected_fac:
+                all_valid = [v for v in all_valid if v.get('faculty') == selected_fac]
+                
+            intakes = sorted(list({x.get('intake_year') for x in all_valid if x.get('intake_year')}), reverse=True)
+                
+            # 5. Sort
+            rev = (sort_order == 'desc')
             if sort_by == 'cgpa':
-                all_valid.sort(key=lambda x: x.get('cgpa', 0), reverse=rev)
+                all_valid.sort(key=lambda x: float(x.get('cgpa') or 0), reverse=rev)
             elif sort_by == 'matric':
                 all_valid.sort(key=lambda x: x.get('matric', ''), reverse=rev)
             else:
                 all_valid.sort(key=lambda x: x.get('name', ''), reverse=rev)
                 
             total_matches = len(all_valid)
-            start_idx = (page - 1) * limit
-            end_idx = start_idx + limit
+            start_idx = (page - 1) * limit_val
+            end_idx = start_idx + limit_val
             paged = all_valid[start_idx:end_idx]
-            
-            prog_counts = {}
-            for x in all_valid:
-                p = x.get('programme', 'Unknown')
-                prog_counts[p] = prog_counts.get(p, 0) + 1
-                
-            res_data = {"total": total_matches, "results": paged, "programmes": prog_counts}
             
             req_matric = args.get('matric')
             if req_matric and sort_by == 'cgpa':
@@ -798,6 +858,10 @@ def api_handler(path):
                         owner_row['is_appended_owner'] = True
                         paged.append(owner_row)
             
+            res_data = {
+                "page": page, "limit": limit_val, "total": total_matches, "total_pages": max(1, (total_matches + limit_val - 1) // limit_val),
+                "hierarchy": hierarchy, "intakes": intakes, "data": paged
+            }
             return Response(json.dumps(res_data), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -1379,6 +1443,8 @@ def api_handler(path):
                 
             start_time = time.time()
             results = []
+            tt_valid_count = 0
+            login_valid_count = 0
             last_id = curr_id
             
             with ThreadPoolExecutor(max_workers=10) as ex:
@@ -1398,14 +1464,18 @@ def api_handler(path):
                     try: 
                         success, result_msg = f.result()
                         results.append(result_msg)
-                        log(result_msg)
+                        if success:
+                            login_valid_count += 1
+                            if "TT: True" in result_msg or "TT pass" in result_msg or "timetable_ready" in result_msg or "Verified" in result_msg:
+                                tt_valid_count += 1
                     except Exception as e: 
-                        log(f"{futures[f]}: Error - {str(e)}")
+                        pass
 
             if last_id: db.collection('system').document('config').set({"verify_start_id": last_id}, merge=True)
-            log(f"Processed {len(results)} valid credentials.")
-            log(f"Moved verify pointer to {last_id}. Fire again to continue.")
-            save_sync_log("VERIFY", "SUCCESS", log_buffer, len(results))
+            log(f"Batch Range: {curr_id or 'START'} -> {last_id}")
+            log(f"Processed {len(results)} accounts with existing passwords.")
+            log(f"Results: {login_valid_count} Valid Logins | {tt_valid_count} Valid+Timetable.")
+            save_sys_log("MANUAL VERIFY", "SUCCESS", len(results))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
             traceback.print_exc()
@@ -1423,8 +1493,14 @@ def api_handler(path):
                 for l in db.collection('system_logs').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(100).stream():
                     ld = l.to_dict(); ld['id'] = l.id; logs.append(ld)
                 sync_hist = []
-                for h in db.collection('sync_history').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(20).stream():
+                for h in db.collection('sync_history').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream():
                     hd = h.to_dict(); hd['id'] = h.id; sync_hist.append(hd)
+                sys_hist = []
+                for h in db.collection('sys_history').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream():
+                    hd = h.to_dict(); hd['id'] = h.id; sys_hist.append(hd)
+                job_hist = []
+                for h in db.collection('job_history').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream():
+                    hd = h.to_dict(); hd['id'] = h.id; job_hist.append(hd)
                 jobs = []
                 for j in db.collection('autoscan_jobs').stream():
                     jd = j.to_dict(); jd['id'] = j.id; jobs.append(jd)
@@ -1437,14 +1513,14 @@ def api_handler(path):
                 docs = db.collection('valid_directory').order_by('__name__', direction=firestore.Query.DESCENDING).limit(300).stream()
                 for d in docs: 
                     p = d.to_dict().get('password')
-                    tt_ready = d.to_dict().get('timetable_ready', False)
+                    tt_ready = d.to_dict().get('timetable_ready', True)
                     if p and p != 'Unknown' and tt_ready is True:
                         auto_accounts.append({"matric": d.id, "password": p})
                         if len(auto_accounts) >= 50: break
 
                 return Response(json.dumps({
                     "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
-                    "sync_history": sync_hist, "ip_meta": ip_meta,
+                    "sync_history": sync_hist, "sys_history": sys_hist, "job_history": job_hist, "ip_meta": ip_meta,
                     "auto_accounts": auto_accounts
                 }), headers=headers)
             
@@ -1514,6 +1590,7 @@ def api_handler(path):
                             else:
                                 out_logs.append(f"[{matric}] AR {code}: No Password")
                 
+                save_job_log(job_category, "SUCCESS", len(jobs))
                 return jsonify({"log": "\n".join(out_logs)})
                 
             elif req_type == 'ban_ip':
