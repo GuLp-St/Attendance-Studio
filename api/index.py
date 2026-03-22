@@ -1570,7 +1570,6 @@ def api_handler(path):
                             if p and p != 'Unknown' and s.get('t') is True:
                                 auto_accounts.append({"matric": s.get('m'), "password": p})
                 auto_accounts.sort(key=lambda x: int(x['matric']) if str(x['matric']).isdigit() else 0, reverse=True)
-                auto_accounts = auto_accounts[:300]
 
                 return Response(json.dumps({
                     "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
