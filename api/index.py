@@ -95,14 +95,7 @@ def get_authorized_session():
         if doc.exists: pwd = doc.to_dict().get('password')
         
     if not pwd or pwd == "Unknown":
-        docs = db.collection('valid_directory').where(filter=FieldFilter("timetable_ready", "==", True)).limit(5).stream()
-        for d in docs:
-            sys_m = d.id
-            pwd = d.to_dict().get('password')
-            if sys_m and pwd: break
-            
-        if not sys_m or not pwd:
-            docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(20).stream()
+        docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(20).stream()
             for d in docs:
                 p = d.to_dict().get('password')
                 if p and p != "Unknown":
@@ -302,7 +295,6 @@ def verify_and_save_student(m, data, pwd, active_sem):
         "timetable_ready": is_timetableable,
         "last_verified": get_malaysia_time().isoformat()
     }
-    db.collection('valid_directory').document(m).set(cache_payload)
     update_directory_cache(cache_payload)
     
     return True, f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}"
@@ -818,7 +810,8 @@ def api_handler(path):
         search_q = args.get('q', '').strip().upper()
         
         try:
-            chunks = db.collection('system').where(filter=FieldFilter('__name__', '>=', 'dir_cache_')).where(filter=FieldFilter('__name__', '<', 'dir_cache_\uf8ff')).stream()
+            refs = [db.collection('system').document(f"dir_cache_{format(i, 'x')}") for i in range(16)]
+            chunks = [doc for doc in db.get_all(refs) if doc.exists]
             all_valid = []
             for c in chunks:
                 cd = c.to_dict()
@@ -1564,7 +1557,8 @@ def api_handler(path):
                 
                 # --- FETCH MULTIPLE VALID ACCOUNTS FOR THE SWITCHER ---
                 auto_accounts = []
-                chunks = db.collection('system').where(filter=FieldFilter('__name__', '>=', 'dir_cache_')).where(filter=FieldFilter('__name__', '<', 'dir_cache_\uf8ff')).stream()
+                refs = [db.collection('system').document(f"dir_cache_{format(i, 'x')}") for i in range(16)]
+                chunks = [doc for doc in db.get_all(refs) if doc.exists]
                 for c in chunks:
                     cd = c.to_dict()
                     if "students" in cd:

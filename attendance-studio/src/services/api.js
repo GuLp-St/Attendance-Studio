@@ -4,6 +4,8 @@ const API_URL = "/api";
 // --- ADVANCED FINGERPRINTING HELPER ---
 const getDeviceId = () => {
     try {
+        const storedId = localStorage.getItem('as_device_id');
+        if (storedId) return storedId;
         // 1. Canvas Fingerprint (The GPU Signature)
         // We draw a hidden image. Different GPUs render fonts/anti-aliasing slightly differently.
         const getCanvasHash = () => {
@@ -46,7 +48,9 @@ const getDeviceId = () => {
             hash = hash & hash;
         }
 
-        return 'dev_' + Math.abs(hash).toString(16);
+        const generatedId = 'dev_' + Math.abs(hash).toString(16);
+        localStorage.setItem('as_device_id', generatedId);
+        return generatedId;
 
     } catch (e) {
         return 'unknown_device';
