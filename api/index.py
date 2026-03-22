@@ -96,12 +96,12 @@ def get_authorized_session():
         
     if not pwd or pwd == "Unknown":
         docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(20).stream()
-            for d in docs:
-                p = d.to_dict().get('password')
-                if p and p != "Unknown":
-                    sys_m = d.id
-                    pwd = p
-                    break
+        for d in docs:
+            p = d.to_dict().get('password')
+            if p and p != "Unknown":
+                sys_m = d.id
+                pwd = p
+                break
                 
     if not sys_m or not pwd:
         raise Exception("CRITICAL: No valid system credentials found in database.")
