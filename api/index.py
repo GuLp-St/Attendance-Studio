@@ -82,7 +82,8 @@ def get_sys_config():
         "priority_courses": conf.get("priority_courses", []),
         "system_matric": conf.get("system_matric", ""),
         "system_pwd": conf.get("system_pwd", ""),
-        "force_student_sync": conf.get("force_student_sync", False)
+        "force_student_sync": conf.get("force_student_sync", False),
+        "verify_start_id": conf.get("verify_start_id", "")
     }
     
 def get_authorized_session():
@@ -817,6 +818,8 @@ def api_handler(path):
                 cd = c.to_dict()
                 if "students" in cd:
                     for s in cd['students'].values():
+                        if not include_unverified and s.get('pwd') == 'Unknown':
+                            continue
                         all_valid.append({
                             "matric": s.get('m'),
                             "name": s.get('n'),
@@ -1566,8 +1569,8 @@ def api_handler(path):
                             p = s.get('pwd')
                             if p and p != 'Unknown' and s.get('t') is True:
                                 auto_accounts.append({"matric": s.get('m'), "password": p})
-                auto_accounts.sort(key=lambda x: x['matric'], reverse=True)
-                auto_accounts = auto_accounts[:50]
+                auto_accounts.sort(key=lambda x: int(x['matric']) if str(x['matric']).isdigit() else 0, reverse=True)
+                auto_accounts = auto_accounts[:300]
 
                 return Response(json.dumps({
                     "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
