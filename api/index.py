@@ -1590,6 +1590,7 @@ def api_handler(path):
                 if 'system_matric' in data: update["system_matric"] = data['system_matric']
                 if 'system_pwd' in data: update["system_pwd"] = data['system_pwd']
                 if 'force_student_sync' in data: update["force_student_sync"] = data['force_student_sync'] 
+                if 'verify_start_id' in data: update["verify_start_id"] = data['verify_start_id']
                 
                 db.collection('system').document('config').set(update, merge=True)
                 return jsonify({"status": "Settings Saved"})
