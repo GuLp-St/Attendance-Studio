@@ -78,24 +78,35 @@ export default function AdminPanel() {
           limit: res.config.scan_limit || 5000, classStart: res.config.start_id || 100000,
           studentBatch: res.config.student_sync_batch || 50, actLimit: res.config.act_scan_limit || 5000,
           actStart: res.config.act_start_id || 107000, actMonths: res.config.act_months || 6,
-          forceStudentSync: res.config.force_student_sync || false
+          forceStudentSync: res.config.force_student_sync || false,
+          verifyStartId: res.config.verify_start_id || ""
         });
         setPriorityCourses(res.config.priority_courses || []);
       }
     } catch (e) { showToast(e.message || "Invalid Key", "error"); setIsAuthenticated(false); } finally { setLoading(false); }
   };
 
-  const saveSettings = async () => {
+  const saveSystemSettings = async () => {
+    try {
+      await api.post('/admin_dashboard', {
+        key, type: 'save_settings', 
+        system_matric: manualMode ? manualMatric : (autoAccounts[autoIndex]?.matric || ""), 
+        system_pwd: manualMode ? manualPwd : (autoAccounts[autoIndex]?.password || ""),
+        verify_start_id: formSync.verifyStartId
+      });
+      showToast("System Saved", "success");
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  const saveSyncSettings = async () => {
     try {
       await api.post('/admin_dashboard', {
         key, type: 'save_settings', scan_limit: formSync.limit, last_scanned: formSync.classStart,
         student_sync_batch: formSync.studentBatch, act_scan_limit: formSync.actLimit,
         act_start_id: formSync.actStart, act_months: formSync.actMonths, 
-        system_matric: manualMode ? manualMatric : (autoAccounts[autoIndex]?.matric || ""), 
-        system_pwd: manualMode ? manualPwd : (autoAccounts[autoIndex]?.password || ""), 
         priority_courses: priorityCourses, force_student_sync: formSync.forceStudentSync
       });
-      showToast("Saved", "success");
+      showToast("Sync Saved", "success");
     } catch (e) { showToast(e.message, "error"); }
   };
 
@@ -157,7 +168,7 @@ export default function AdminPanel() {
   const networkGroups = useMemo(() => {
     if (!data) return [];
     const groups = {};
-    data.logs.forEach(l => {
+    data.logs.filter(l => !l.log_type || l.log_type === 'USER_ACTION').forEach(l => {
       const id = l.device_id && l.device_id !== 'unknown' ? l.device_id : l.ip;
       if (!groups[id]) groups[id] = { id, logs: [], banned: false, name: '', recentIdentity: 'Unknown User', lastActive: '', lastIdentityTime: '' };
       groups[id].logs.push(l);
@@ -212,7 +223,7 @@ export default function AdminPanel() {
                 <input type="text" className="t-input" placeholder="Matric" value={manualMatric} onChange={e => {setManualMatric(e.target.value); setManualTestStatus('none');}} style={{flex: 1}} />
                 <input type="text" className="t-input" placeholder="Password" value={manualPwd} onChange={e => {setManualPwd(e.target.value); setManualTestStatus('none');}} style={{flex: 1}} />
                 {manualTestStatus === 'valid' ? (
-                    <button className="btn" style={{height: '38px', borderColor: '#0f0', color: '#0f0'}} onClick={saveSettings}>CONFIRM</button>
+                    <button className="btn" style={{height: '38px', borderColor: '#0f0', color: '#0f0'}} onClick={saveSystemSettings}>CONFIRM</button>
                 ) : (
                     <button className="btn" style={{height: '38px', borderColor: manualTestStatus === 'invalid' ? '#f00' : 'var(--primary)'}} onClick={handleTestManualSys} disabled={manualTestStatus === 'testing' || !manualMatric || !manualPwd}>
                         {manualTestStatus === 'testing' ? 'TEST...' : 'TEST'}
@@ -221,21 +232,14 @@ export default function AdminPanel() {
             </div>
         )}
         
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '15px' }}>
+            <span style={{ fontSize: '0.75rem', color: '#aaa', fontWeight: 'bold' }}>POINTER:</span>
+            <input type="text" className="t-input" placeholder="Start ID (e.g. 100000)" value={formSync.verifyStartId || ""} onChange={e => setFormSync({ ...formSync, verifyStartId: e.target.value })} style={{ flex: 1 }} />
+        </div>
+        <button className="btn" style={{ width: '100%', marginTop: '10px', borderColor: 'var(--primary)', color: 'var(--primary)' }} onClick={saveSystemSettings}>SAVE SYSTEM SETTINGS</button>
+        
         <textarea readOnly style={{ width: '100%', height: '80px', background: '#000', color: 'var(--primary)', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginTop: '15px', boxSizing: 'border-box' }} value={sysConsoleOutput} />
         
-        <div style={{ borderTop: '1px solid #333', marginTop: '15px', paddingTop: '10px' }}>
-          <div className="admin-title" style={{ border: 'none', padding: 0, marginBottom: '5px' }}>VERIFICATION HISTORY</div>
-          <div style={{ maxHeight: '120px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)' }}>
-            {data.sys_history?.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No history found</div>}
-            {data.sys_history?.map(h => (
-              <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#888', width: '120px' }}>{h.timestamp.substring(0, 19).replace('T', ' ')}</span>
-                <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{h.action}</span>
-                <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00' }}>{h.status} ({h.items_processed || 0})</span>
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
 
       <div className="admin-section">
@@ -283,22 +287,8 @@ export default function AdminPanel() {
           <div className="ctrl-row"><div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: '0 0 auto' }}><label>MTH:</label><input type="number" className="t-input" style={{ width: '50px' }} value={formSync.actMonths} onChange={e => setFormSync({ ...formSync, actMonths: e.target.value })} /></div><input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID" value={formSync.actStart} onChange={e => setFormSync({ ...formSync, actStart: e.target.value })} /><button className="btn" style={{ '--accent': '1' }} onClick={() => triggerSync('activity')}>RUN</button></div>
         </div>
 
-        <button className="btn" style={{ width: '100%', marginTop: '15px' }} onClick={saveSettings}>SAVE ALL SETTINGS</button>
+        <button className="btn" style={{ width: '100%', marginTop: '15px' }} onClick={saveSyncSettings}>SAVE SETTINGS</button>
         <textarea readOnly style={{ width: '100%', height: '100px', background: '#000', color: '#0f0', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginTop: '10px', boxSizing: 'border-box' }} value={consoleOutput} />
-
-        {/* --- SYNC HISTORY VISUALIZER RESTORED --- */}
-        <div style={{ borderTop: '1px solid #333', marginTop: '15px', paddingTop: '10px' }}>
-          <div className="admin-title" style={{ border: 'none', padding: 0, marginBottom: '5px' }}>SYNC HISTORY</div>
-          <div style={{ maxHeight: '120px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)' }}>
-            {data.sync_history?.map(h => (
-              <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#888', width: '120px' }}>{h.timestamp.substring(0, 19).replace('T', ' ')}</span>
-                <span style={{ color: h.type === 'CLASS' ? 'var(--primary)' : h.type === 'STUDENT' ? '#0f0' : 'var(--accent)', fontWeight: 'bold' }}>{h.type}</span>
-                <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00' }}>{h.status} ({h.items_found})</span>
-              </div>
-            ))}
-          </div>
-        </div>
 
       </div>
 
@@ -333,14 +323,15 @@ export default function AdminPanel() {
         </div>
         
         <div style={{ borderTop: '1px solid #333', paddingTop: '10px' }}>
-          <div className="admin-title" style={{ border: 'none', padding: 0, marginBottom: '5px' }}>AUTO JOB HISTORY</div>
-          <div style={{ maxHeight: '120px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)' }}>
-            {data.job_history?.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No history found</div>}
-            {data.job_history?.map(h => (
-              <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#888', width: '120px' }}>{h.timestamp.substring(0, 19).replace('T', ' ')}</span>
-                <span style={{ color: h.category === 'autoregister' ? '#f0f' : 'var(--accent)', fontWeight: 'bold' }}>{h.category.toUpperCase()}</span>
-                <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00' }}>{h.status} ({h.items_processed || 0})</span>
+          <div className="admin-title" style={{ border: 'none', padding: 0, marginBottom: '5px' }}>GLOBAL SYSTEM LOGS</div>
+          <div style={{ maxHeight: '150px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)' }}>
+            {data.logs?.filter(l => l.log_type && l.log_type !== 'USER_ACTION').length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No system logs found</div>}
+            {data.logs?.filter(l => l.log_type && l.log_type !== 'USER_ACTION').map(h => (
+              <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between', gap: '5px' }}>
+                <span style={{ color: '#888', flex: '0 0 120px' }}>{(h.timestamp || "").substring(0, 19).replace('T', ' ')}</span>
+                <span style={{ color: h.log_type === 'JOB' ? '#f0f' : h.log_type === 'SYNC' ? '#0f0' : 'var(--primary)', fontWeight: 'bold', flex: '0 0 40px' }}>{h.log_type}</span>
+                <span style={{ color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.action || h.category || h.type}</span>
+                <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00', flex: '0 0 auto' }}>{h.status} ({h.items_processed || h.items_found || 0})</span>
               </div>
             ))}
           </div>

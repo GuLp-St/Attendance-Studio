@@ -144,7 +144,6 @@ def verify_and_save_student(matric, data, pwd, active_sem):
             "timetable_ready": tt is not None,
             "last_verified": get_malaysia_time().isoformat()
         }
-        db.collection('valid_directory').document(matric).set(doc_data, merge=True)
         return True, f"{matric}: Verified (CGPA: {cgpa})"
     except Exception as e:
         return False, f"{matric}: Error: {str(e)}"
@@ -157,8 +156,9 @@ def get_client_ip():
 def log_action(ip, matric, action, details=""):
     try:
         dev_id = request.headers.get('X-Device-ID', 'unknown')
-        db.collection('system_logs').add({
+        db.collection('logs').add({
             "timestamp": get_malaysia_time().isoformat(),
+            "log_type": "USER_ACTION",
             "ip": ip,
             "device_id": dev_id,
             "matric": matric,
@@ -182,39 +182,23 @@ def create_notification(matric, type, title, status, details, mode):
 
 def save_sync_log(type, status, messages, items_count):
     try:
-        db.collection('sync_history').add({
-            "timestamp": get_malaysia_time().isoformat(), "type": type, "status": status, "log_text": "\n".join(messages), "items_found": items_count
+        db.collection('logs').add({
+            "timestamp": get_malaysia_time().isoformat(), "log_type": "SYNC", "type": type, "status": status, "log_text": "\n".join(messages), "items_found": items_count
         })
-        # FIX: Keep exactly 5 logs of EACH type, instead of 10 total
-        docs = list(db.collection('sync_history').where(filter=FieldFilter("type", "==", type)).order_by('timestamp', direction=firestore.Query.DESCENDING).stream())
-        if len(docs) > 5:
-            batch = db.batch()
-            for doc in docs[5:]: batch.delete(doc.reference)
-            batch.commit()
     except: pass
 
 def save_sys_log(action, status, items_processed):
     try:
-        db.collection('sys_history').add({
-            "timestamp": get_malaysia_time().isoformat(), "action": action, "status": status, "items_processed": items_processed
+        db.collection('logs').add({
+            "timestamp": get_malaysia_time().isoformat(), "log_type": "SYS", "action": action, "status": status, "items_processed": items_processed
         })
-        docs = list(db.collection('sys_history').order_by('timestamp', direction=firestore.Query.DESCENDING).stream())
-        if len(docs) > 10:
-            batch = db.batch()
-            for doc in docs[10:]: batch.delete(doc.reference)
-            batch.commit()
     except: pass
 
 def save_job_log(category, status, items_processed):
     try:
-        db.collection('job_history').add({
-            "timestamp": get_malaysia_time().isoformat(), "category": category, "status": status, "items_processed": items_processed
+        db.collection('logs').add({
+            "timestamp": get_malaysia_time().isoformat(), "log_type": "JOB", "category": category, "status": status, "items_processed": items_processed
         })
-        docs = list(db.collection('job_history').order_by('timestamp', direction=firestore.Query.DESCENDING).stream())
-        if len(docs) > 10:
-            batch = db.batch()
-            for doc in docs[10:]: batch.delete(doc.reference)
-            batch.commit()
     except: pass
 
 def consolidate_timetable(slots):
@@ -258,9 +242,9 @@ def update_directory_cache(student_data):
         m = student_data.get('matric')
         if not m: return
         h = hashlib.md5(m.encode()).hexdigest()
-        chunk_id = f"chunk_{h[0]}"
+        chunk_id = f"dir_cache_{h[0]}"
         
-        doc_ref = db.collection('directory_cache').document(chunk_id)
+        doc_ref = db.collection('system').document(chunk_id)
         
         payload = {
             "m": m,
@@ -278,13 +262,22 @@ def update_directory_cache(student_data):
     except: pass
 
 def verify_and_save_student(m, data, pwd, active_sem):
+    if not pwd or pwd == 'Unknown':
+        db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
+        try:
+            h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"dir_cache_{h[0]}"
+            payload = {"m": m, "pwd": "Unknown", "n": data.get('name', ''), "f": data.get('faculty', ''), "p": data.get('program', data.get('programme', '')), "i": data.get('intake_year', ''), "c": float(data.get('cgpa') or 0), "t": False}
+            db.collection('system').document(chunk_id).set({"students": {m: payload}}, merge=True)
+        except: pass
+        return False, f"{m}: Cached as Unverified"
+
     bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
     if not bio:
         db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
-        # Evict invalid/graduated students from the directory cache
         try:
-            h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"chunk_{h[0]}"
-            db.collection('directory_cache').document(chunk_id).update({f"students.{m}": firestore.DELETE_FIELD})
+            h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"dir_cache_{h[0]}"
+            payload = {"m": m, "pwd": "Unknown", "n": data.get('name', ''), "f": data.get('faculty', ''), "p": data.get('program', data.get('programme', '')), "i": data.get('intake_year', ''), "c": float(data.get('cgpa') or 0), "t": False}
+            db.collection('system').document(chunk_id).set({"students": {m: payload}}, merge=True)
         except: pass
         return False, f"{m}: Invalid Data/Credential"
     
@@ -794,7 +787,6 @@ def api_handler(path):
                                 if ic: pwd = f"Unimas!{ic}"
                         except: pass
                         
-                    if not pwd or pwd == 'Unknown': continue
                     futures[ex.submit(verify_student_wrapper, m, data, pwd, active_sem)] = m
                     
             tt_valid = 0
@@ -826,7 +818,7 @@ def api_handler(path):
         search_q = args.get('q', '').strip().upper()
         
         try:
-            chunks = db.collection('directory_cache').stream()
+            chunks = db.collection('system').where(filter=FieldFilter('__name__', '>=', 'dir_cache_')).where(filter=FieldFilter('__name__', '<', 'dir_cache_\uf8ff')).stream()
             all_valid = []
             for c in chunks:
                 cd = c.to_dict()
@@ -1057,6 +1049,7 @@ def api_handler(path):
                 student_doc = db.collection('students').document(m).get()
                 s_data = student_doc.to_dict() if student_doc.exists else {}
                 verify_and_save_student(m, s_data, pwd, active_sem)
+                log_action("SYSTEM", initiator, "AUTH_VERIFIED", f"System verified new valid credential for user {m} and saved to Directory Cache.")
             except Exception as e:
                 print("Silent error verifying valid directory manually:", str(e))
                 
@@ -1326,9 +1319,9 @@ def api_handler(path):
                 if rb_count >= 400: rem_batch.commit(); rem_batch = db.batch(); rb_count = 0
             if rb_count > 0: rem_batch.commit()
             
-            # --- VALID_DIRECTORY PRUNING (OPTIMIZED) ---
+            # --- ORPHAN STUDENT PRUNING ---
             log("Identifying departed students for directory cleanup...")
-            vd_batch = db.batch(); vdb_count = 0; pruned = 0
+            pruned = 0
             
             # ONLY check students who have had courses removed during THIS run
             students_to_verify = [m for m, diff in updates_by_student.items() if diff["remove"]]
@@ -1345,14 +1338,9 @@ def api_handler(path):
                         # If the student dropped the course and now has 0 registered courses, purge them!
                         if not groups or len(groups) == 0:
                             db.collection('students').document(doc.id).delete()
-                            vd_batch.delete(db.collection('valid_directory').document(doc.id))
-                            vdb_count += 1; pruned += 1
-                    else:
-                        vd_batch.delete(db.collection('valid_directory').document(doc.id))
-                        vdb_count += 1; pruned += 1
+                            pruned += 1
                         
-            if vdb_count > 0: vd_batch.commit()
-            log(f"Pruned {pruned} departed accounts from Valid Directory.")
+            log(f"Pruned {pruned} departed accounts.")
 
             save_sync_log("STUDENT", "SUCCESS", log_buffer, len(target_courses))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
@@ -1533,7 +1521,6 @@ def api_handler(path):
                                 if ic: pwd = f"Unimas!{ic}"
                         except: pass
                         
-                    if not pwd or pwd == 'Unknown': continue
                     futures[ex.submit(verify_and_save_student, m, data, pwd, active_sem)] = m
                     
                 for f in as_completed(futures):
@@ -1566,17 +1553,8 @@ def api_handler(path):
             cfg = get_sys_config()
             if req_type == 'get_data':
                 logs = []
-                for l in db.collection('system_logs').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(100).stream():
+                for l in db.collection('logs').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(150).stream():
                     ld = l.to_dict(); ld['id'] = l.id; logs.append(ld)
-                sync_hist = []
-                for h in db.collection('sync_history').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream():
-                    hd = h.to_dict(); hd['id'] = h.id; sync_hist.append(hd)
-                sys_hist = []
-                for h in db.collection('sys_history').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream():
-                    hd = h.to_dict(); hd['id'] = h.id; sys_hist.append(hd)
-                job_hist = []
-                for h in db.collection('job_history').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream():
-                    hd = h.to_dict(); hd['id'] = h.id; job_hist.append(hd)
                 jobs = []
                 for j in db.collection('autoscan_jobs').stream():
                     jd = j.to_dict(); jd['id'] = j.id; jobs.append(jd)
@@ -1586,7 +1564,7 @@ def api_handler(path):
                 
                 # --- FETCH MULTIPLE VALID ACCOUNTS FOR THE SWITCHER ---
                 auto_accounts = []
-                chunks = db.collection('directory_cache').stream()
+                chunks = db.collection('system').where(filter=FieldFilter('__name__', '>=', 'dir_cache_')).where(filter=FieldFilter('__name__', '<', 'dir_cache_\uf8ff')).stream()
                 for c in chunks:
                     cd = c.to_dict()
                     if "students" in cd:
@@ -1599,8 +1577,7 @@ def api_handler(path):
 
                 return Response(json.dumps({
                     "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
-                    "sync_history": sync_hist, "sys_history": sys_hist, "job_history": job_hist, "ip_meta": ip_meta,
-                    "auto_accounts": auto_accounts
+                    "ip_meta": ip_meta, "auto_accounts": auto_accounts
                 }), headers=headers)
             
             elif req_type == 'save_settings':
