@@ -111,36 +111,6 @@ def get_authorized_session():
     core_api.configure_session(s, sys_m, pwd)
     return s
 
-def verify_and_save_student(matric, data, pwd, active_sem):
-    try:
-        is_val = core_api.validate_login(matric, pwd)
-        if not is_val: return False, f"{matric}: Invalid Login"
-        
-        req = core_api.spc_fetch(f"api/v1/student/{matric}", matric, pwd)
-        bio = req.get('data', {}) if req and req.get('data') else {}
-        
-        t = core_api.spc_fetch(f"api/v1/student/{matric}/transcript", matric, pwd)
-        transcript = t.get('data', []) if t and isinstance(t, dict) and 'data' in t else []
-        cgpa = 0.0
-        if isinstance(transcript, list) and len(transcript) > 0:
-            if 'cgpa' in transcript[0]:
-                try: cgpa = float(transcript[0]['cgpa'])
-                except: pass
-                
-        tt = core_api.spc_fetch(f"api/v1/course/student/{matric}?kodSesiSem={active_sem}", matric, pwd)
-        
-        doc_data = {
-            "name": bio.get('studentName', data.get('name', 'Unknown')),
-            "program": bio.get('program', data.get('program', '')),
-            "faculty": bio.get('faculty', data.get('faculty', '')),
-            "cgpa": cgpa,
-            "password": pwd,
-            "timetable_ready": tt is not None,
-            "last_verified": get_malaysia_time().isoformat()
-        }
-        return True, f"{matric}: Verified (CGPA: {cgpa})"
-    except Exception as e:
-        return False, f"{matric}: Error: {str(e)}"
 
 def get_client_ip():
     if request.headers.getlist("X-Forwarded-For"):
@@ -256,23 +226,27 @@ def update_directory_cache(student_data):
     except: pass
 
 def verify_and_save_student(m, data, pwd, active_sem):
+    is_currently_unknown = data.get('password') == 'Unknown'
+    
     if not pwd or pwd == 'Unknown':
-        db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
-        try:
-            h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"dir_cache_{h[0]}"
-            payload = {"m": m, "pwd": "Unknown", "n": data.get('name', ''), "f": data.get('faculty', ''), "p": data.get('program', data.get('programme', '')), "i": data.get('intake_year', ''), "c": float(data.get('cgpa') or 0), "t": False}
-            db.collection('system').document(chunk_id).set({"students": {m: payload}}, merge=True)
-        except: pass
+        if not is_currently_unknown:
+            db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
+            try:
+                h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"dir_cache_{h[0]}"
+                payload = {"m": m, "pwd": "Unknown", "n": data.get('name', ''), "f": data.get('faculty', ''), "p": data.get('program', data.get('programme', '')), "i": data.get('intake_year', ''), "c": float(data.get('cgpa') or 0), "t": False}
+                db.collection('system').document(chunk_id).set({"students": {m: payload}}, merge=True)
+            except: pass
         return False, f"{m}: Cached as Unverified"
 
     bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
     if not bio:
-        db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
-        try:
-            h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"dir_cache_{h[0]}"
-            payload = {"m": m, "pwd": "Unknown", "n": data.get('name', ''), "f": data.get('faculty', ''), "p": data.get('program', data.get('programme', '')), "i": data.get('intake_year', ''), "c": float(data.get('cgpa') or 0), "t": False}
-            db.collection('system').document(chunk_id).set({"students": {m: payload}}, merge=True)
-        except: pass
+        if not is_currently_unknown:
+            db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
+            try:
+                h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"dir_cache_{h[0]}"
+                payload = {"m": m, "pwd": "Unknown", "n": data.get('name', ''), "f": data.get('faculty', ''), "p": data.get('program', data.get('programme', '')), "i": data.get('intake_year', ''), "c": float(data.get('cgpa') or 0), "t": False}
+                db.collection('system').document(chunk_id).set({"students": {m: payload}}, merge=True)
+            except: pass
         return False, f"{m}: Invalid Data/Credential"
     
     prog = bio.get('namaProgram', 'Unknown')
@@ -282,14 +256,21 @@ def verify_and_save_student(m, data, pwd, active_sem):
         if 'cgpa' in transcript[0]:
             try: cgpa = float(transcript[0]['cgpa'])
             except: pass
-        
-    tt_check = core_api.spc_fetch(f"api/v1/course/student/{m}?kodSesiSem={active_sem}", m, pwd)
-    is_timetableable = True if tt_check is not None else False
+    is_timetableable = core_api.validate_login(m, pwd)
     
     faculty = bio.get('Fakulti') or bio.get('fakulti') or bio.get('namaFakulti') or data.get('faculty') or 'Unknown Faculty'
     intake = bio.get('Sesi Pelan') or bio.get('sesiPelan') or data.get('intake') or 'Unknown Intake'
-    db.collection('students').document(m).set({"cgpa": cgpa, "namaProgram": prog, "password": pwd, "faculty": faculty, "intake_year": intake}, merge=True)
     name = bio.get('nama', data.get('name', 'Unknown'))
+    
+    changed = False
+    if data.get('cgpa') != cgpa: changed = True
+    if data.get('namaProgram') != prog: changed = True
+    if data.get('password') != pwd: changed = True
+    if data.get('faculty') != faculty: changed = True
+    if data.get('intake_year') != intake: changed = True
+    
+    if changed:
+        db.collection('students').document(m).set({"cgpa": cgpa, "namaProgram": prog, "password": pwd, "faculty": faculty, "intake_year": intake}, merge=True)
     
     cache_payload = {
         "matric": m, "name": name, "cgpa": cgpa, "programme": prog, "faculty": faculty, "password": pwd, "intake_year": intake, 
@@ -1460,9 +1441,7 @@ def api_handler(path):
         is_valid = core_api.validate_login(m, pwd)
         if not is_valid: return jsonify({"valid": False, "error": "Invalid login credentials"})
         
-        active_sem = get_sys_config().get('current_semester', '2025/2026-2')
-        tt_check = core_api.spc_fetch(f"api/v1/course/student/{m}?kodSesiSem={active_sem}", m, pwd)
-        if tt_check is None: return jsonify({"valid": False, "error": "Login successful, but Timetable access failed"})
+        # The validate_login method intrinsically checks timetable API access over atdcloud.
         
         return jsonify({"valid": True})
 
