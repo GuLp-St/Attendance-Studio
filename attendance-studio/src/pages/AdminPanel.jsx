@@ -35,7 +35,7 @@ export default function AdminPanel() {
   useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}) }, []);
 
   const [formSync, setFormSync] = useState({ 
-      classStart: 0, actStart: 0, actMonths: 6, forceStudentSync: false 
+      classStart: 0, actStart: 0, actMonths: 6 
   });
   const [priorityCourses, setPriorityCourses] = useState([]);
   const [courseSearch, setCourseSearch] = useState('');
@@ -77,7 +77,6 @@ export default function AdminPanel() {
         setFormSync({
           classStart: res.config.start_id || 100000,
           actStart: res.config.act_start_id || 107000, actMonths: res.config.act_months || 6,
-          forceStudentSync: res.config.force_student_sync || false,
           verifyStartId: res.config.verify_start_id || ""
         });
         setPriorityCourses(res.config.priority_courses || []);
@@ -102,7 +101,7 @@ export default function AdminPanel() {
       await api.post('/admin_dashboard', {
         key, type: 'save_settings', last_scanned: formSync.classStart,
         act_start_id: formSync.actStart, act_months: formSync.actMonths, 
-        priority_courses: priorityCourses, force_student_sync: formSync.forceStudentSync
+        priority_courses: priorityCourses
       });
       showToast("Sync Saved", "success");
     } catch (e) { showToast(e.message, "error"); }
@@ -268,10 +267,6 @@ export default function AdminPanel() {
               </div>
           </div>
           <div className="ctrl-row">
-            <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#f00', cursor: 'pointer', fontSize: '0.75rem' }}>
-                <input type="checkbox" checked={formSync.forceStudentSync} onChange={e => setFormSync({...formSync, forceStudentSync: e.target.checked})} />
-                FORCE HEAL
-            </label>
             <div style={{ flex: 1 }}></div>
             <button className="btn" style={{ borderColor: '#0f0', color: '#0f0' }} onClick={() => triggerSync('student')}>RUN</button>
           </div>

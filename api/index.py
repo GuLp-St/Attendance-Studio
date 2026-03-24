@@ -238,16 +238,114 @@ def api_handler(path):
         dir_type = args.get('type', 'student')
         try:
             if dir_type == 'student':
-                students = pg_db.query("SELECT matric as m, name as n, faculty as f, program as p, intake_year as i, cgpa as c, timetable_ready as t, password as pwd FROM students ORDER BY matric")
-                return Response(json.dumps(students), headers=headers)
+                # Global Directory for Search/Admin (Limit to 50000 for full frontend cache)
+                students = pg_db.query("SELECT matric as m, name as n, 's' as t FROM students LIMIT 50000")
+                courses = pg_db.query("SELECT id as m, CONCAT(code, ' ', name) as n, 'c' as t FROM courses LIMIT 50000")
+                return Response(json.dumps(list(students) + list(courses)), headers=headers)
             else:
-                orgs = pg_db.query("SELECT id as m, name as n, activities as data FROM organizers ORDER BY id")
-                full_dir = []
+                # Organizer search for OrgSearchView.jsx
+                orgs = pg_db.query("SELECT id as m, name as n, activities FROM organizers ORDER BY id")
+                results = []
                 for org in orgs:
-                    if org['data'] and isinstance(org['data'], list): full_dir.extend(org['data'])
-                return Response(json.dumps(full_dir), headers=headers)
+                    acts = org['activities']
+                    if isinstance(acts, str):
+                        try: acts = json.loads(acts)
+                        except: acts = []
+                    
+                    act_names = []
+                    if isinstance(acts, list):
+                        for a in acts:
+                            if isinstance(a, dict) and 'name' in a: act_names.append(a['name'])
+                            elif isinstance(a, str): act_names.append(a)
+                    
+                    results.append({
+                        "m": org['m'],
+                        "n": org['n'],
+                        "a": " | ".join(act_names)
+                    })
+                return Response(json.dumps(results), headers=headers)
         except Exception as e:
+            traceback.print_exc()
             return jsonify([{"error": str(e)}])
+
+    elif path == '/directory_v2' and request.method == 'POST':
+        try:
+            d = request.get_json() or {}
+            page = int(args.get('page', 1))
+            limit = int(d.get('row_limit', 10))
+            offset = (page - 1) * limit
+            q = args.get('q', '').strip()
+            
+            # Filters
+            faculty = d.get('faculty')
+            prog = d.get('programme')
+            intake = d.get('intake_year')
+            include_unverified = d.get('include_unverified', False)
+            
+            # Sort
+            sort_by = d.get('sort_by', 'name')
+            if sort_by not in ['name', 'matric', 'cgpa']: sort_by = 'name'
+            order = d.get('sort_order', 'asc').upper()
+            if order not in ['ASC', 'DESC']: order = 'ASC'
+
+            where_clauses = []
+            params = []
+
+            if not include_unverified:
+                where_clauses.append("password != 'Unknown' AND password IS NOT NULL")
+            
+            if q:
+                where_clauses.append("(matric ILIKE %s OR name ILIKE %s)")
+                params.extend([f"%{q}%", f"%{q}%"])
+            
+            if faculty:
+                where_clauses.append("faculty = %s")
+                params.append(faculty)
+            
+            if prog:
+                where_clauses.append("program = %s")
+                params.append(prog)
+                
+            if intake:
+                where_clauses.append("intake_year = %s")
+                params.append(intake)
+
+            where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            
+            sql = f"""
+                SELECT matric, name, faculty, program as programme, intake_year, cgpa, timetable_ready, password
+                FROM students 
+                {where_sql}
+                ORDER BY {sort_by} {order}
+                LIMIT %s OFFSET %s
+            """
+            data = pg_db.query(sql, params + [limit, offset])
+            
+            count_sql = f"SELECT COUNT(*) as count FROM students {where_sql}"
+            count_res = pg_db.query_one(count_sql, params)
+            total = count_res['count'] if count_res else 0
+            
+            # Hierarchy for filters
+            hierarchy = {}
+            h_data = pg_db.query("SELECT faculty, program, COUNT(*) as count FROM students GROUP BY faculty, program")
+            for row in h_data:
+                f, p, c = row['faculty'], row['program'], row['count']
+                if f not in hierarchy: hierarchy[f] = {}
+                hierarchy[f][p] = c
+                
+            # Intakes list
+            intakes = [r['intake_year'] for r in pg_db.query("SELECT DISTINCT intake_year FROM students WHERE intake_year IS NOT NULL ORDER BY intake_year DESC")]
+
+            return Response(json.dumps({
+                "data": list(data),
+                "total": total,
+                "total_pages": (total + limit - 1) // limit,
+                "hierarchy": hierarchy,
+                "intakes": intakes
+            }), headers=headers)
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
 
     elif path == '/search':
         query = args.get('q', '').strip()
@@ -255,7 +353,8 @@ def api_handler(path):
         results = []
         try:
             q = f"%{query}%"
-            docs = pg_db.query("SELECT matric as matric, name as name FROM students WHERE matric ILIKE %s OR name ILIKE %s LIMIT 10", (q, q))
+            # Return same structure as Search.jsx expects
+            docs = pg_db.query("SELECT matric as m, name as n, 's' as t FROM students WHERE matric ILIKE %s OR name ILIKE %s LIMIT 10", (q, q))
             results = list(docs)
         except: pass
         return Response(json.dumps(results), headers=headers)
@@ -265,7 +364,23 @@ def api_handler(path):
         log_action(client_ip, matric, "VIEW_DASHBOARD")
         try:
             doc = pg_db.query_one("SELECT * FROM students WHERE matric = %s", (matric,))
-            if not doc: return jsonify({}), 404
+            
+            # NEW: If student doesn't exist, try to fetch basic identity publicly via system creds
+            if not doc:
+                try:
+                    req_session = get_authorized_session()
+                    bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{matric}", matric, "dummy", session=req_session)
+                    if bio:
+                        name = bio.get('nama', 'Unknown Student')
+                        faculty = bio.get('namaFakulti', 'Unknown Faculty')
+                        program = bio.get('namaProgram', 'Unknown Program')
+                        intake = bio.get('Sesi Pelan', 'Unknown')
+                        pg_db.execute("INSERT INTO students (matric, name, faculty, program, intake_year, password) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                                       (matric, name, faculty, program, intake, "Unknown"))
+                        doc = pg_db.query_one("SELECT * FROM students WHERE matric = %s", (matric,))
+                except: pass
+
+            if not doc: return jsonify({"error": "User not found in system directory"}), 404
             
             req_session = get_authorized_session()
             user_data = dict(doc)
@@ -1079,20 +1194,18 @@ def api_handler(path):
                         target_courses.append(dict(d))
                         seen_gids.add(d['id'])
             
-            # --- FETCH ALL REMAINING COURSES, STALEST FIRST (no limit) ---
-            courses_query = pg_db.query("SELECT id, code, name, semester, course_group AS group, last_student_sync FROM courses ORDER BY last_student_sync ASC")
+            # --- FETCH COURSES, STALEST FIRST (LIMIT 250 per run to prevent bloat) ---
+            courses_query = pg_db.query("SELECT id, code, name, semester, course_group AS group, last_student_sync FROM courses WHERE semester = %s ORDER BY last_student_sync ASC LIMIT 250", (active_sem,))
             for c in courses_query:
                 if c['id'] in seen_gids: continue
-                d = dict(c)
-                if d.get('semester') == active_sem:
-                    target_courses.append(d)
-                    seen_gids.add(c['id'])
-                else:
-                    # Mark old-semester courses so they sink to bottom next run
-                    pg_db.execute("UPDATE courses SET last_student_sync = 9999999999 WHERE id = %s", (c['id'],))
+                target_courses.append(dict(c))
+                seen_gids.add(c['id'])
+            
+            # Update old-semester courses timestamp so they don't clog discovery
+            pg_db.execute("UPDATE courses SET last_student_sync = 9999999999 WHERE semester != %s", (active_sem,))
             
             if not target_courses: return Response("No current-semester courses to sync", headers=headers)
-            log(f"Found {len(target_courses)} current-semester courses queued (stalest first). Running until timeout...")
+            log(f"Processing {len(target_courses)} courses (stalest first). Running until timeout...")
             
             course_students = {}
             student_names = {}
@@ -1102,15 +1215,16 @@ def api_handler(path):
             with ThreadPoolExecutor(max_workers=8) as ex:
                 futures = {}
                 for c in target_courses:
-                    if time.time() - start_time > 30:  # stop submitting at 30s to leave room for processing
-                        log(f"Submission timeout. Queued {len(futures)} fetches.")
+                    # stop submitting if we are close to Vercel/Lambda limit
+                    if time.time() - start_time > 25: 
+                        log(f"Submission paused. Collected {len(futures)} so far.")
                         break
                     futures[ex.submit(core_api.get_students, c['id'], req_session)] = c
                     processed_courses.append(c)
                     
-                for f in as_completed(futures, timeout=25):  # hard 25s wait on all futures
-                    if time.time() - start_time > 50:  # emergency stop at 50s total
-                        log("Hard timeout reached during collection. Stopping early.")
+                for f in as_completed(futures, timeout=25): 
+                    if time.time() - start_time > 50: 
+                        log("Hard timeout reached during collection. Finalizing results...")
                         break
                     c = futures[f]
                     try:
@@ -1123,10 +1237,12 @@ def api_handler(path):
                         course_students[c['id']] = matrics
                     except Exception: pass
 
-            log(f"Fetched student lists for {len(processed_courses)} courses. Processing diffs...")
+            log(f"Fetched student lists for {len(course_students)} courses. Syncing DB...")
 
             updates_by_student = {}
-            for m, name in student_names.items(): updates_by_student[m] = {"add": set(), "remove": set(), "name": name}
+            # Initialize with names first
+            for m, name in student_names.items(): 
+                updates_by_student[m] = {"add": set(), "remove": set(), "name": name}
             
             now_ts = int(datetime.now().timestamp())
             total_added = 0
@@ -1134,13 +1250,11 @@ def api_handler(path):
             
             for c in processed_courses:
                 gid = c['id']
-                current_matrics = set(course_students.get(gid, []))
+                if gid not in course_students: continue # Skips if fetch failed or timed out
                 
+                current_matrics = set(course_students[gid])
                 old_enr = pg_db.query_one("SELECT enrolled_students FROM courses WHERE id = %s", (str(gid),))
-                if force_sync:
-                    previous_matrics = set()
-                else:
-                    previous_matrics = set(old_enr['enrolled_students'] if old_enr and old_enr['enrolled_students'] else [])
+                previous_matrics = set(old_enr['enrolled_students'] if old_enr and old_enr['enrolled_students'] else [])
                 
                 added = current_matrics - previous_matrics
                 removed = previous_matrics - current_matrics
@@ -1148,14 +1262,14 @@ def api_handler(path):
                 total_removed += len(removed)
                 
                 if added or removed:
-                    log(f"  [{c['code']} | {c['id']}]: +{len(added)} students, -{len(removed)} students (total now: {len(current_matrics)})")
+                    log(f"  [{c['code']} | {c['id']}]: +{len(added)}, -{len(removed)} (total: {len(current_matrics)})")
                 
                 for m in added:
-                    if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set()}
+                    if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set(), "name": "Unknown"}
                     updates_by_student[m]["add"].add(str(gid))
                     
                 for m in removed:
-                    if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set()}
+                    if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set(), "name": "Unknown"}
                     updates_by_student[m]["remove"].add(str(gid))
                     
                 pg_db.execute("UPDATE courses SET enrolled_students = %s, last_student_sync = %s WHERE id = %s", (list(current_matrics), now_ts, str(gid)))
@@ -1168,17 +1282,14 @@ def api_handler(path):
                     if diff["add"]: curr_groups.update(diff["add"])
                     if diff["remove"]: curr_groups.difference_update(diff["remove"])
                     
-                    name_upd = diff.get("name")
-                    if name_upd:
-                        pg_db.execute("""
-                            INSERT INTO students (matric, name, groups) 
-                            VALUES (%s, %s, %s)
-                            ON CONFLICT (matric) DO UPDATE SET 
-                                groups = EXCLUDED.groups, 
-                                name = COALESCE(NULLIF(students.name, 'Unknown'), EXCLUDED.name)
-                        """, (m, name_upd, list(curr_groups)))
-                    else:
-                        pg_db.execute("UPDATE students SET groups = %s WHERE matric = %s", (list(curr_groups), m))
+                    name_upd = diff.get("name", "Unknown")
+                    pg_db.execute("""
+                        INSERT INTO students (matric, name, groups) 
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (matric) DO UPDATE SET 
+                            groups = EXCLUDED.groups, 
+                            name = CASE WHEN students.name = 'Unknown' THEN EXCLUDED.name ELSE students.name END
+                    """, (m, name_upd, list(curr_groups)))
             
             # --- ORPHAN STUDENT PRUNING ---
             pruned = 0
@@ -1190,7 +1301,7 @@ def api_handler(path):
                         pg_db.execute("DELETE FROM students WHERE matric = %s", (m,))
                         pruned += 1
                         
-            log(f"Summary: {len(processed_courses)}/{len(target_courses)} courses synced | +{total_added} enrollments | -{total_removed} departures | {pruned} accounts pruned.")
+            log(f"Summary: {len(processed_courses)} courses synced | +{total_added} / -{total_removed} changes | {pruned} pruned.")
             elapsed = round(time.time() - start_time, 1)
             log(f"Completed in {elapsed}s.")
 
@@ -1428,17 +1539,13 @@ def api_handler(path):
             
             elif req_type == 'save_settings':
                 fields, values = [], []
-                if data.get('scan_limit'): fields.append('scan_limit = %s'); values.append(int(data['scan_limit']))
                 if data.get('last_scanned') is not None: fields.append('last_scanned_id = %s'); values.append(int(data['last_scanned']))
-                if data.get('student_sync_batch'): fields.append('student_sync_batch = %s'); values.append(int(data['student_sync_batch']))
-                if data.get('act_scan_limit'): fields.append('act_scan_limit = %s'); values.append(int(data['act_scan_limit']))
                 if data.get('act_start_id') is not None: fields.append('act_last_scanned_id = %s'); values.append(int(data['act_start_id']))
                 if data.get('act_months'): fields.append('act_time_threshold = %s'); values.append(int(data['act_months']))
                 
                 if 'priority_courses' in data: fields.append('priority_courses = %s'); values.append(data['priority_courses'])
                 if 'system_matric' in data: fields.append('system_matric = %s'); values.append(data['system_matric'])
                 if 'system_pwd' in data: fields.append('system_pwd = %s'); values.append(data['system_pwd'])
-                if 'force_student_sync' in data: fields.append('force_student_sync = %s'); values.append(data['force_student_sync']) 
                 if 'verify_start_id' in data: fields.append('verify_start_id = %s'); values.append(data['verify_start_id'])
                 
                 if fields:
