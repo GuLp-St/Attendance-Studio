@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
-import './AttendanceStyles.css';
 
 const ReadableJson = ({ data }) => {
     if (!data) return null;
