@@ -1023,7 +1023,7 @@ def api_handler(path):
             if discovered:
                 upsert_sql = """
                 INSERT INTO courses (id, code, name, semester, course_group)
-                VALUES %s
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET 
                     code = EXCLUDED.code, name = EXCLUDED.name, 
                     semester = EXCLUDED.semester, course_group = EXCLUDED.course_group
