@@ -55,7 +55,9 @@ def get_malaysia_time():
 
 def get_sys_config():
     conf = pg_db.query_one("SELECT * FROM system_config WHERE id = 'config'")
-    if not conf: conf = {}
+    if not conf: 
+        pg_db.execute("INSERT INTO system_config (id) VALUES ('config') ON CONFLICT DO NOTHING")
+        conf = {}
     
     return {
         "start_id": int(conf.get("last_scanned_id") or 100000),
@@ -75,13 +77,10 @@ def get_sys_config():
 def get_authorized_session():
     cfg = get_sys_config()
     sys_m = cfg.get("system_matric")
-    pwd = None
-    
-    if sys_m:
-        stud = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (sys_m,))
-        if stud: pwd = stud.get('password')
+    pwd = cfg.get("system_pwd")  # Use password stored directly in system_config
         
     if not pwd or pwd == "Unknown":
+        # Fallback: find any valid student credential
         docs = pg_db.query("SELECT matric, password FROM students WHERE password IS NOT NULL AND password != 'Unknown' LIMIT 1")
         if docs:
             sys_m = docs[0]['matric']
