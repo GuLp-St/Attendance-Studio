@@ -1029,8 +1029,7 @@ def api_handler(path):
                                     INSERT INTO students (matric, name) 
                                     VALUES {placeholders}
                                     ON CONFLICT (matric) DO UPDATE SET 
-                                        name = CASE WHEN students.name = 'Unknown' THEN EXCLUDED.name ELSE students.name END
-                                    WHERE students.name = 'Unknown' AND EXCLUDED.name != 'Unknown'
+                                        name = CASE WHEN EXCLUDED.name != 'Unknown' THEN EXCLUDED.name ELSE students.name END
                                 """, tuple(params))
 
                         # 2. Get Diffs
