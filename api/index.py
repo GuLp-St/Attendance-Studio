@@ -238,9 +238,9 @@ def api_handler(path):
         dir_type = args.get('type', 'student')
         try:
             if dir_type == 'student':
-                # Global Directory for Search/Admin (Limit to 50000 for full frontend cache)
-                students = pg_db.query("SELECT matric as m, name as n, 's' as t FROM students LIMIT 50000")
-                courses = pg_db.query("SELECT id as m, CONCAT(code, ' ', name) as n, 'c' as t FROM courses LIMIT 50000")
+                # Global Directory for Search/Admin (No limit to stay dynamic per user request)
+                students = pg_db.query("SELECT matric as m, name as n, 's' as t FROM students ORDER BY matric")
+                courses = pg_db.query("SELECT id as m, CONCAT(code, ' ', name) as n, 'c' as t FROM courses ORDER BY id")
                 return Response(json.dumps(list(students) + list(courses)), headers=headers)
             else:
                 # Organizer search for OrgSearchView.jsx
