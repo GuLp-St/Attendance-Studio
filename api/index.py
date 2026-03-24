@@ -250,7 +250,7 @@ def api_handler(path):
             if dir_type == 'student':
                 # Global Directory for Search/Admin (No limit to stay dynamic per user request)
                 students = pg_db.query("SELECT matric as m, name as n, 's' as t FROM students ORDER BY matric")
-                courses = pg_db.query("SELECT id as m, CONCAT(code, ' ', name) as n, 'c' as t FROM courses ORDER BY id")
+                courses = pg_db.query("SELECT MIN(id) as m, CONCAT(code, ' ', name) as n, 'c' as t FROM courses GROUP BY code, name ORDER BY m")
                 return Response(json.dumps(list(students) + list(courses)), headers=headers)
             else:
                 # Organizer search for OrgSearchView.jsx
@@ -1043,18 +1043,16 @@ def api_handler(path):
                         if added or removed:
                             log(f"  [{c['code']}]: +{len(added)}, -{len(removed)} | {len(current_matrics)} total")
                             
-                            # Bulk Update Student -> Course pointers
-                            if added:
-                                pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = ANY(%s) AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, added, gid))
-                            if removed:
-                                pg_db.execute("UPDATE students SET groups = array_remove(groups, %s) WHERE matric = ANY(%s)", (gid, removed))
-                                # Prune orphans in bulk
-                                pg_db.execute("DELETE FROM students WHERE matric = ANY(%s) AND (groups IS NULL OR array_length(groups, 1) IS NULL OR array_length(groups, 1) = 0)", (removed,))
-                        else:
-                            # If no changes but groups are empty, we might need a heal? 
-                            # But for now, just record the sync
-                            if not added and len(current_matrics) > 0:
-                                pass 
+                        # FORCE HEAL: Always ensure current students have the group in their array
+                        if current_matrics:
+                            pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = ANY(%s) AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, list(current_matrics), gid))
+
+                        # Remove group from students who dropped
+                        if removed:
+                            pg_db.execute("UPDATE students SET groups = array_remove(groups, %s) WHERE matric = ANY(%s)", (gid, removed))
+                            
+                            # Prune orphans in bulk
+                            pg_db.execute("DELETE FROM students WHERE matric = ANY(%s) AND (groups IS NULL OR array_length(groups, 1) IS NULL OR array_length(groups, 1) = 0)", (removed,)) 
 
                         # Save course enrollment list (Course -> Students)
                         pg_db.execute("UPDATE courses SET enrolled_students = %s, last_student_sync = %s WHERE id = %s", (list(current_matrics), int(time.time()), gid))
