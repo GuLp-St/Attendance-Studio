@@ -1102,21 +1102,26 @@ def api_handler(path):
             with ThreadPoolExecutor(max_workers=8) as ex:
                 futures = {}
                 for c in target_courses:
-                    if time.time() - start_time > 40:
-                        log(f"Timeout approaching. Queued {len(futures)} fetches, stopping submission.")
+                    if time.time() - start_time > 30:  # stop submitting at 30s to leave room for processing
+                        log(f"Submission timeout. Queued {len(futures)} fetches.")
                         break
                     futures[ex.submit(core_api.get_students, c['id'], req_session)] = c
                     processed_courses.append(c)
                     
-                for f in as_completed(futures):
+                for f in as_completed(futures, timeout=25):  # hard 25s wait on all futures
+                    if time.time() - start_time > 50:  # emergency stop at 50s total
+                        log("Hard timeout reached during collection. Stopping early.")
+                        break
                     c = futures[f]
-                    matrics = []
-                    for s in (f.result() or []):
-                        m, n = s.get("NOMATRIK"), s.get("NAMAPELAJAR")
-                        if m:
-                            matrics.append(m)
-                            if n and n != "Unknown": student_names[m] = n
-                    course_students[c['id']] = matrics
+                    try:
+                        matrics = []
+                        for s in (f.result() or []):
+                            m, n = s.get("NOMATRIK"), s.get("NAMAPELAJAR")
+                            if m:
+                                matrics.append(m)
+                                if n and n != "Unknown": student_names[m] = n
+                        course_students[c['id']] = matrics
+                    except Exception: pass
 
             log(f"Fetched student lists for {len(processed_courses)} courses. Processing diffs...")
 
