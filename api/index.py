@@ -1210,102 +1210,74 @@ def api_handler(path):
             course_students = {}
             student_names = {}
             start_time = time.time()
-            processed_courses = []
+            processed_count = 0
+            total_added = 0
+            total_removed = 0
             
             with ThreadPoolExecutor(max_workers=8) as ex:
                 futures = {}
                 for c in target_courses:
-                    # stop submitting if we are close to Vercel/Lambda limit
                     if time.time() - start_time > 25: 
-                        log(f"Submission paused. Collected {len(futures)} so far.")
+                        log(f"Submission paused. {len(futures)} courses queued.")
                         break
                     futures[ex.submit(core_api.get_students, c['id'], req_session)] = c
-                    processed_courses.append(c)
                     
                 for f in as_completed(futures, timeout=25): 
-                    if time.time() - start_time > 50: 
-                        log("Hard timeout reached during collection. Finalizing results...")
+                    if time.time() - start_time > 55: 
+                        log("Time limit reached. Saving progress and stopping.")
                         break
+                        
                     c = futures[f]
                     try:
-                        matrics = []
-                        for s in (f.result() or []):
+                        resp = f.result() or []
+                        current_matrics = set()
+                        for s in resp:
                             m, n = s.get("NOMATRIK"), s.get("NAMAPELAJAR")
                             if m:
-                                matrics.append(m)
-                                if n and n != "Unknown": student_names[m] = n
-                        course_students[c['id']] = matrics
-                    except Exception: pass
+                                current_matrics.add(m)
+                                # Atomic Student Creation/Name Update
+                                pg_db.execute("""
+                                    INSERT INTO students (matric, name) 
+                                    VALUES (%s, %s) 
+                                    ON CONFLICT (matric) DO UPDATE SET 
+                                        name = CASE WHEN students.name = 'Unknown' THEN EXCLUDED.name ELSE students.name END
+                                    WHERE EXCLUDED.name != 'Unknown' AND students.name = 'Unknown'
+                                """, (m, n or 'Unknown'))
 
-            log(f"Fetched student lists for {len(course_students)} courses. Syncing DB...")
-
-            updates_by_student = {}
-            # Initialize with names first
-            for m, name in student_names.items(): 
-                updates_by_student[m] = {"add": set(), "remove": set(), "name": name}
-            
-            now_ts = int(datetime.now().timestamp())
-            total_added = 0
-            total_removed = 0
-            
-            for c in processed_courses:
-                gid = c['id']
-                if gid not in course_students: continue # Skips if fetch failed or timed out
-                
-                current_matrics = set(course_students[gid])
-                old_enr = pg_db.query_one("SELECT enrolled_students FROM courses WHERE id = %s", (str(gid),))
-                previous_matrics = set(old_enr['enrolled_students'] if old_enr and old_enr['enrolled_students'] else [])
-                
-                added = current_matrics - previous_matrics
-                removed = previous_matrics - current_matrics
-                total_added += len(added)
-                total_removed += len(removed)
-                
-                if added or removed:
-                    log(f"  [{c['code']} | {c['id']}]: +{len(added)}, -{len(removed)} (total: {len(current_matrics)})")
-                
-                for m in added:
-                    if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set(), "name": "Unknown"}
-                    updates_by_student[m]["add"].add(str(gid))
-                    
-                for m in removed:
-                    if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set(), "name": "Unknown"}
-                    updates_by_student[m]["remove"].add(str(gid))
-                    
-                pg_db.execute("UPDATE courses SET enrolled_students = %s, last_student_sync = %s WHERE id = %s", (list(current_matrics), now_ts, str(gid)))
-            
-            for m, diff in updates_by_student.items():
-                if diff["add"] or diff["remove"]:
-                    stud = pg_db.query_one("SELECT groups FROM students WHERE matric = %s", (m,))
-                    curr_groups = set(stud['groups'] if stud and stud['groups'] else [])
-                    
-                    if diff["add"]: curr_groups.update(diff["add"])
-                    if diff["remove"]: curr_groups.difference_update(diff["remove"])
-                    
-                    name_upd = diff.get("name", "Unknown")
-                    pg_db.execute("""
-                        INSERT INTO students (matric, name, groups) 
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (matric) DO UPDATE SET 
-                            groups = EXCLUDED.groups, 
-                            name = CASE WHEN students.name = 'Unknown' THEN EXCLUDED.name ELSE students.name END
-                    """, (m, name_upd, list(curr_groups)))
-            
-            # --- ORPHAN STUDENT PRUNING ---
-            pruned = 0
-            students_to_verify = [m for m, diff in updates_by_student.items() if diff["remove"]]
-            if students_to_verify:
-                for m in set(students_to_verify):
-                    stud = pg_db.query_one("SELECT groups FROM students WHERE matric = %s", (m,))
-                    if stud and (not stud['groups'] or len(stud['groups']) == 0):
-                        pg_db.execute("DELETE FROM students WHERE matric = %s", (m,))
-                        pruned += 1
+                        # Calculate Diff for this specific course
+                        gid = str(c['id'])
+                        old_rec = pg_db.query_one("SELECT enrolled_students FROM courses WHERE id = %s", (gid,))
+                        previous_matrics = set(old_rec['enrolled_students'] if old_rec and old_rec['enrolled_students'] else [])
                         
-            log(f"Summary: {len(processed_courses)} courses synced | +{total_added} / -{total_removed} changes | {pruned} pruned.")
+                        added = current_matrics - previous_matrics
+                        removed = previous_matrics - current_matrics
+                        
+                        if added or removed:
+                            log(f"  [{c['code']}]: +{len(added)}, -{len(removed)} (total: {len(current_matrics)})")
+                            
+                            # Atomic Student Group Updates
+                            for m in added:
+                                pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, m, gid))
+                            for m in removed:
+                                pg_db.execute("UPDATE students SET groups = array_remove(groups, %s) WHERE matric = %s", (gid, m))
+                                # Check for orphan student
+                                pg_db.execute("DELETE FROM students WHERE matric = %s AND (groups IS NULL OR array_length(groups, 1) IS NULL OR array_length(groups, 1) = 0)", (m,))
+
+                        # Save course enrollment list
+                        pg_db.execute("UPDATE courses SET enrolled_students = %s, last_student_sync = %s WHERE id = %s", (list(current_matrics), int(time.time()), gid))
+                        
+                        total_added += len(added)
+                        total_removed += len(removed)
+                        processed_count += 1
+                        
+                    except Exception as e:
+                        log(f"Error syncing {c.get('code', 'Unknown')}: {str(e)}")
+
+            log(f"Summary: {processed_count} courses synced | +{total_added} / -{total_removed} changes.")
             elapsed = round(time.time() - start_time, 1)
             log(f"Completed in {elapsed}s.")
 
-            save_sync_log("STUDENT", "SUCCESS", log_buffer, len(processed_courses))
+            save_sync_log("STUDENT", "SUCCESS", log_buffer, processed_count)
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
             traceback.print_exc()
