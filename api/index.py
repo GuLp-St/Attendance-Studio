@@ -203,17 +203,6 @@ def verify_and_save_student(m, data, pwd, active_sem):
     
     return True, f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}"
 
-def delete_collection(collection_name, batch_size=400):
-    docs = db.collection(collection_name).limit(batch_size).stream()
-    deleted = 0
-    batch = db.batch()
-    for doc in docs:
-        batch.delete(doc.reference)
-        deleted += 1
-    if deleted > 0:
-        batch.commit()
-        delete_collection(collection_name, batch_size)
-
 # ==========================================
 #  MAIN ROUTE HANDLER
 # ==========================================
@@ -238,7 +227,8 @@ def api_handler(path):
     args = request.args
     client_ip = get_client_ip()
 
-    if db.collection('banned_ips').document(client_ip).get().exists:
+    ip_doc = pg_db.query_one("SELECT 1 FROM banned_ips WHERE ip = %s", (client_ip,))
+    if ip_doc:
         return jsonify({"error": "Access Denied"}), 403
 
     # ==========================================
@@ -275,24 +265,24 @@ def api_handler(path):
         matric = args.get('matric')
         log_action(client_ip, matric, "VIEW_DASHBOARD")
         try:
-            doc = db.collection('students').document(matric).get()
-            if not doc.exists: return jsonify({}), 404
+            doc = pg_db.query_one("SELECT * FROM students WHERE matric = %s", (matric,))
+            if not doc: return jsonify({}), 404
             
             req_session = get_authorized_session()
-            user_data = doc.to_dict()
-            group_ids = user_data.get('groups', [])
-            following_ids = user_data.get('following', [])
+            user_data = dict(doc)
+            group_ids = user_data.get('groups') or []
+            following_ids = user_data.get('following') or []
             
             active_autoscan = set()
             try:
-                for j in db.collection('autoscan_jobs').where(filter=FieldFilter("matric", "==", matric)).stream():
-                    if j.to_dict().get('status') == 'pending': active_autoscan.add(j.to_dict().get('gid'))
+                for j in pg_db.query("SELECT gid FROM autoscan_jobs WHERE matric = %s AND status = 'pending'", (matric,)):
+                    active_autoscan.add(j['gid'])
             except: pass
 
             active_auto_register = []
             try:
-                for j in db.collection('auto_register_jobs').where(filter=FieldFilter("matric", "==", matric)).stream():
-                    active_auto_register.append(str(j.to_dict().get('gid')))
+                for j in pg_db.query("SELECT gid FROM auto_register_jobs WHERE matric = %s", (matric,)):
+                    active_auto_register.append(str(j['gid']))
             except: pass
 
             courses = {}
@@ -883,9 +873,11 @@ def api_handler(path):
             
             # --- SUPER FAST FIREBASE BATCH READ ---
             matrics = [s.get("NOMATRIK") for s in students if s.get("NOMATRIK")]
-            refs = [db.collection('students').document(m) for m in matrics]
-            docs = db.get_all(refs) if refs else []
-            pwd_map = {d.id: d.to_dict().get('password', '') for d in docs if d.exists}
+            pwd_map = {}
+            if matrics:
+                format_strings = ','.join(['%s'] * len(matrics))
+                docs = pg_db.query(f"SELECT matric, password FROM students WHERE matric IN ({format_strings})", tuple(matrics))
+                pwd_map = {d['matric']: d.get('password', '') for d in docs}
             
             for s in students:
                 m = s.get("NOMATRIK")
@@ -915,20 +907,20 @@ def api_handler(path):
         if is_valid:
             active_sem = get_sys_config().get('current_semester', '2025/2026-2')
             try:
-                student_doc = db.collection('students').document(m).get()
-                s_data = student_doc.to_dict() if student_doc.exists else {}
+                student_doc = pg_db.query_one("SELECT * FROM students WHERE matric = %s", (m,))
+                s_data = dict(student_doc) if student_doc else {}
                 verify_and_save_student(m, s_data, pwd, active_sem)
                 log_action("SYSTEM", initiator, "AUTH_VERIFIED", f"System verified new valid credential for user {m} and saved to Directory Cache.")
             except Exception as e:
                 print("Silent error verifying valid directory manually:", str(e))
                 
-            db.collection('students').document(m).set({"password": pwd}, merge=True)
+            pg_db.execute("UPDATE students SET password = %s WHERE matric = %s", (pwd, m))
             log_action(client_ip, initiator, "TOOL_VALIDATE_PWD", f"Target:{m}")
             return jsonify({"valid": True, "password": pwd})
         else:
             if auto_fetch:
                 # Save as Unknown so it doesn't re-test next time
-                db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
+                pg_db.execute("INSERT INTO students (matric, password) VALUES (%s, %s) ON CONFLICT (matric) DO UPDATE SET password = EXCLUDED.password", (m, "Unknown"))
             return jsonify({"valid": False})
 
     elif path == '/tools/action' and request.method == 'POST':
@@ -940,8 +932,8 @@ def api_handler(path):
         
         try:
             if not pwd:
-                doc = db.collection('students').document(m).get()
-                pwd = doc.to_dict().get('password') if doc.exists else None
+                doc = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (m,))
+                pwd = doc.get('password') if doc else None
             
             if not pwd or pwd == 'Unknown':
                 return jsonify({"needs_password": True})
@@ -953,9 +945,8 @@ def api_handler(path):
                 is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower() or 'gugur' in resp.lower())
                 
                 if is_success:
-                    # FIX: Remove BOTH int and str to clean up old DB state to use strictly string moving onward
-                    db.collection('students').document(m).set({"groups": firestore.ArrayRemove([int(cid), str(cid)]), "password": pwd}, merge=True)
-                    db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
+                    pg_db.execute("UPDATE students SET groups = array_remove(groups, %s), password = %s WHERE matric = %s", (str(cid), pwd, m))
+                    pg_db.execute("UPDATE courses SET last_student_sync = 0 WHERE id = %s", (str(cid),))
             else:
                 status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "P")
                 is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower())
@@ -966,8 +957,8 @@ def api_handler(path):
                 
                 if is_success:
                     # FIX: Enforce str(cid)
-                    db.collection('students').document(m).set({"groups": firestore.ArrayUnion([str(cid)]), "password": pwd}, merge=True)
-                    db.collection('courses').document(str(cid)).set({'last_student_sync': 0}, merge=True)
+                    pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s), password = %s WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (str(cid), pwd, m, str(cid)))
+                    pg_db.execute("UPDATE courses SET last_student_sync = 0 WHERE id = %s", (str(cid),))
             
             return jsonify({"status": status, "response": resp, "success": is_success})
         except Exception as e: return jsonify({"error": str(e)}), 500
