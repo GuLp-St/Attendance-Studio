@@ -1230,38 +1230,47 @@ def api_handler(path):
                     c = futures[f]
                     try:
                         resp = f.result() or []
-                        current_matrics = set()
+                        current_list = []
                         for s in resp:
                             m, n = s.get("NOMATRIK"), s.get("NAMAPELAJAR")
-                            if m:
-                                current_matrics.add(m)
-                                # Atomic Student Creation/Name Update
-                                pg_db.execute("""
+                            if m: current_list.append((m, n or 'Unknown'))
+
+                        current_matrics = set(m for m, n in current_list)
+                        gid = str(c['id'])
+                        
+                        # 1. Bulk Upsert Students (matric, name)
+                        if current_list:
+                            # Split into chunks of 100 to stay safe with SQL limits
+                            for i in range(0, len(current_list), 100):
+                                batch = current_list[i:i+100]
+                                placeholders = ", ".join(["(%s, %s)"] * len(batch))
+                                params = []
+                                for m, n in batch: params.extend([m, n])
+                                pg_db.execute(f"""
                                     INSERT INTO students (matric, name) 
-                                    VALUES (%s, %s) 
+                                    VALUES {placeholders}
                                     ON CONFLICT (matric) DO UPDATE SET 
                                         name = CASE WHEN students.name = 'Unknown' THEN EXCLUDED.name ELSE students.name END
-                                    WHERE EXCLUDED.name != 'Unknown' AND students.name = 'Unknown'
-                                """, (m, n or 'Unknown'))
+                                    WHERE students.name = 'Unknown' AND EXCLUDED.name != 'Unknown'
+                                """, tuple(params))
 
-                        # Sync Course -> Student relation
-                        gid = str(c['id'])
+                        # 2. Get Diffs
                         old_rec = pg_db.query_one("SELECT enrolled_students FROM courses WHERE id = %s", (gid,))
                         previous_matrics = set(old_rec['enrolled_students'] if old_rec and old_rec['enrolled_students'] else [])
                         
-                        added = current_matrics - previous_matrics
-                        removed = previous_matrics - current_matrics
+                        added = list(current_matrics - previous_matrics)
+                        removed = list(previous_matrics - current_matrics)
                         
                         if added or removed:
                             log(f"  [{c['code']}]: +{len(added)}, -{len(removed)} | {len(current_matrics)} total")
                             
-                            # Update Student -> Course pointers (Redundant but used for fast Dashboard Load)
-                            for m in added:
-                                pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, m, gid))
-                            for m in removed:
-                                pg_db.execute("UPDATE students SET groups = array_remove(groups, %s) WHERE matric = %s", (gid, m))
-                                # Prune orphans
-                                pg_db.execute("DELETE FROM students WHERE matric = %s AND (groups IS NULL OR array_length(groups, 1) IS NULL OR array_length(groups, 1) = 0)", (m,))
+                            # Bulk Update Student -> Course pointers
+                            if added:
+                                pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = ANY(%s) AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, added, gid))
+                            if removed:
+                                pg_db.execute("UPDATE students SET groups = array_remove(groups, %s) WHERE matric = ANY(%s)", (gid, removed))
+                                # Prune orphans in bulk
+                                pg_db.execute("DELETE FROM students WHERE matric = ANY(%s) AND (groups IS NULL OR array_length(groups, 1) IS NULL OR array_length(groups, 1) = 0)", (removed,))
                         else:
                             # If no changes but groups are empty, we might need a heal? 
                             # But for now, just record the sync
