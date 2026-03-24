@@ -8,9 +8,6 @@ import time
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, request, jsonify, Response
-import firebase_admin 
-from firebase_admin import credentials, firestore
-from google.cloud.firestore import FieldFilter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 import json
@@ -29,23 +26,14 @@ from werkzeug.exceptions import HTTPException
 def handle_exception(e):
     if isinstance(e, HTTPException):
         return e.get_response()
-    
+
     import traceback
     traceback.print_exc()
     if "Quota exceeded" in str(e):
         return jsonify({"error": "Firebase Quota Exceeded. Please check your Google Cloud Console."}), 429
     return jsonify({"error": "Internal Server Error", "details": str(e)}), 500
 
-if not firebase_admin._apps:
-    cred_content = os.environ.get('FIREBASE_CREDENTIALS')
-    if cred_content:
-        cred_json = json.loads(cred_content)
-        cred = credentials.Certificate(cred_json)
-        firebase_admin.initialize_app(cred)
-    else:
-        print("WARNING: FIREBASE_CREDENTIALS env var not found.")
-
-db = firestore.client()
+import db_pgsql as pg_db
 
 # --- CONFIGURATION ---
 ADMIN_SECRET_KEY = "nexus"
@@ -66,43 +54,38 @@ def get_malaysia_time():
     return datetime.now(timezone.utc) + timedelta(hours=8)
 
 def get_sys_config():
-    try:
-        conf_doc = db.collection('system').document('config').get()
-        conf = conf_doc.to_dict() if conf_doc.exists else {}
-    except: conf = {}
+    conf = pg_db.query_one("SELECT * FROM system_config WHERE id = 'config'")
+    if not conf: conf = {}
     
     return {
-        "start_id": int(conf.get("last_scanned_id", 100000)),
-        "scan_limit": int(conf.get("scan_limit", 5000)),
-        "student_sync_batch": int(conf.get("student_sync_batch", 50)),
+        "start_id": int(conf.get("last_scanned_id") or 100000),
+        "scan_limit": int(conf.get("scan_limit") or 5000),
+        "student_sync_batch": int(conf.get("student_sync_batch") or 50),
         "current_semester": conf.get("current_semester", ""),
-        "act_start_id": int(conf.get("act_last_scanned_id", 107000)),
-        "act_scan_limit": int(conf.get("act_scan_limit", 5000)),
-        "act_months": int(conf.get("act_time_threshold", 6)),
+        "act_start_id": int(conf.get("act_last_scanned_id") or 107000),
+        "act_scan_limit": int(conf.get("act_scan_limit") or 5000),
+        "act_months": int(conf.get("act_time_threshold") or 6),
         "priority_courses": conf.get("priority_courses", []),
         "system_matric": conf.get("system_matric", ""),
         "system_pwd": conf.get("system_pwd", ""),
         "force_student_sync": conf.get("force_student_sync", False),
         "verify_start_id": conf.get("verify_start_id", "")
     }
-    
+
 def get_authorized_session():
     cfg = get_sys_config()
     sys_m = cfg.get("system_matric")
     pwd = None
     
     if sys_m:
-        doc = db.collection('students').document(sys_m).get()
-        if doc.exists: pwd = doc.to_dict().get('password')
+        stud = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (sys_m,))
+        if stud: pwd = stud.get('password')
         
     if not pwd or pwd == "Unknown":
-        docs = db.collection('students').where(filter=FieldFilter("password", ">", "")).limit(20).stream()
-        for d in docs:
-            p = d.to_dict().get('password')
-            if p and p != "Unknown":
-                sys_m = d.id
-                pwd = p
-                break
+        docs = pg_db.query("SELECT matric, password FROM students WHERE password IS NOT NULL AND password != 'Unknown' LIMIT 1")
+        if docs:
+            sys_m = docs[0]['matric']
+            pwd = docs[0]['password']
                 
     if not sys_m or not pwd:
         raise Exception("CRITICAL: No valid system credentials found in database.")
@@ -120,49 +103,32 @@ def get_client_ip():
 def log_action(ip, matric, action, details=""):
     try:
         dev_id = request.headers.get('X-Device-ID', 'unknown')
-        db.collection('logs').add({
-            "timestamp": get_malaysia_time().isoformat(),
-            "log_type": "USER_ACTION",
-            "ip": ip,
-            "device_id": dev_id,
-            "matric": matric,
-            "action": action,
-            "details": str(details)
-        })
+        pg_db.execute("INSERT INTO logs (timestamp, log_type, ip, device_id, matric, action, details) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (get_malaysia_time(), "USER_ACTION", ip, dev_id, matric, action, str(details)))
     except: pass
 
 def create_notification(matric, type, title, status, details, mode):
     try:
-        db.collection('notifications').add({
-            "matric": matric,
-            "type": type,
-            "title": title,
-            "status": status,
-            "details": details,
-            "mode": mode,
-            "timestamp": get_malaysia_time().isoformat()
-        })
+        pg_db.execute("INSERT INTO notifications (timestamp, matric, type, title, status, details, mode) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (get_malaysia_time(), matric, type, title, status, details, mode))
     except: pass
 
 def save_sync_log(type, status, messages, items_count):
     try:
-        db.collection('logs').add({
-            "timestamp": get_malaysia_time().isoformat(), "log_type": "SYNC", "type": type, "status": status, "log_text": "\n".join(messages), "items_found": items_count
-        })
+        pg_db.execute("INSERT INTO logs (timestamp, log_type, category, status, log_text, items_found) VALUES (%s, %s, %s, %s, %s, %s)",
+            (get_malaysia_time(), "SYNC", type, status, "\n".join(messages), items_count))
     except: pass
 
 def save_sys_log(action, status, items_processed):
     try:
-        db.collection('logs').add({
-            "timestamp": get_malaysia_time().isoformat(), "log_type": "SYS", "action": action, "status": status, "items_processed": items_processed
-        })
+        pg_db.execute("INSERT INTO logs (timestamp, log_type, action, status, items_processed) VALUES (%s, %s, %s, %s, %s)",
+            (get_malaysia_time(), "SYS", action, status, items_processed))
     except: pass
 
 def save_job_log(category, status, items_processed):
     try:
-        db.collection('logs').add({
-            "timestamp": get_malaysia_time().isoformat(), "log_type": "JOB", "category": category, "status": status, "items_processed": items_processed
-        })
+        pg_db.execute("INSERT INTO logs (timestamp, log_type, category, status, items_processed) VALUES (%s, %s, %s, %s, %s)",
+            (get_malaysia_time(), "JOB", category, status, items_processed))
     except: pass
 
 def consolidate_timetable(slots):
@@ -199,54 +165,18 @@ def consolidate_timetable(slots):
         final_slots.extend(merged)
     return final_slots
 
-import hashlib
-
-def update_directory_cache(student_data):
-    try:
-        m = student_data.get('matric')
-        if not m: return
-        h = hashlib.md5(m.encode()).hexdigest()
-        chunk_id = f"dir_cache_{h[0]}"
-        
-        doc_ref = db.collection('system').document(chunk_id)
-        
-        payload = {
-            "m": m,
-            "n": student_data.get('name', ''),
-            "f": student_data.get('faculty', ''),
-            "p": student_data.get('programme', ''),
-            "i": student_data.get('intake_year', ''),
-            "c": float(student_data.get('cgpa') or 0),
-            "t": bool(student_data.get('timetable_ready', False)),
-            "pwd": student_data.get('password', '')
-        }
-        
-        # Using merge=True prevents Thread Pool race conditions and costs ZERO reads!
-        doc_ref.set({"students": {m: payload}}, merge=True)
-    except: pass
-
 def verify_and_save_student(m, data, pwd, active_sem):
     is_currently_unknown = data.get('password') == 'Unknown'
     
     if not pwd or pwd == 'Unknown':
         if not is_currently_unknown:
-            db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
-            try:
-                h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"dir_cache_{h[0]}"
-                payload = {"m": m, "pwd": "Unknown", "n": data.get('name', ''), "f": data.get('faculty', ''), "p": data.get('program', data.get('programme', '')), "i": data.get('intake_year', ''), "c": float(data.get('cgpa') or 0), "t": False}
-                db.collection('system').document(chunk_id).set({"students": {m: payload}}, merge=True)
-            except: pass
+            pg_db.execute("UPDATE students SET password = 'Unknown' WHERE matric = %s", (m,))
         return False, f"{m}: Cached as Unverified"
 
     bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
     if not bio:
         if not is_currently_unknown:
-            db.collection('students').document(m).set({"password": "Unknown"}, merge=True)
-            try:
-                h = hashlib.md5(m.encode()).hexdigest(); chunk_id = f"dir_cache_{h[0]}"
-                payload = {"m": m, "pwd": "Unknown", "n": data.get('name', ''), "f": data.get('faculty', ''), "p": data.get('program', data.get('programme', '')), "i": data.get('intake_year', ''), "c": float(data.get('cgpa') or 0), "t": False}
-                db.collection('system').document(chunk_id).set({"students": {m: payload}}, merge=True)
-            except: pass
+            pg_db.execute("UPDATE students SET password = 'Unknown' WHERE matric = %s", (m,))
         return False, f"{m}: Invalid Data/Credential"
     
     prog = bio.get('namaProgram', 'Unknown')
@@ -262,22 +192,14 @@ def verify_and_save_student(m, data, pwd, active_sem):
     intake = bio.get('Sesi Pelan') or bio.get('sesiPelan') or data.get('intake') or 'Unknown Intake'
     name = bio.get('nama', data.get('name', 'Unknown'))
     
-    changed = False
-    if data.get('cgpa') != cgpa: changed = True
-    if data.get('namaProgram') != prog: changed = True
-    if data.get('password') != pwd: changed = True
-    if data.get('faculty') != faculty: changed = True
-    if data.get('intake_year') != intake: changed = True
-    
-    if changed:
-        db.collection('students').document(m).set({"cgpa": cgpa, "namaProgram": prog, "password": pwd, "faculty": faculty, "intake_year": intake}, merge=True)
-    
-    cache_payload = {
-        "matric": m, "name": name, "cgpa": cgpa, "programme": prog, "faculty": faculty, "password": pwd, "intake_year": intake, 
-        "timetable_ready": is_timetableable,
-        "last_verified": get_malaysia_time().isoformat()
-    }
-    update_directory_cache(cache_payload)
+    pg_db.execute("""
+        INSERT INTO students (matric, name, cgpa, program, password, faculty, intake_year, timetable_ready)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (matric) DO UPDATE SET 
+            name = EXCLUDED.name, cgpa = EXCLUDED.cgpa, program = EXCLUDED.program, 
+            password = EXCLUDED.password, faculty = EXCLUDED.faculty, 
+            intake_year = EXCLUDED.intake_year, timetable_ready = EXCLUDED.timetable_ready
+    """, (m, name, cgpa, prog, pwd, faculty, intake, is_timetableable))
     
     return True, f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}"
 
@@ -325,31 +247,28 @@ def api_handler(path):
 
     if path == '/directory':
         dir_type = args.get('type', 'student')
-        prefix = 'dir_' if dir_type == 'student' else 'org_dir_'
         try:
-            full_dir = []
-            for i in range(55):
-                doc = db.collection('system').document(f'{prefix}{i}').get()
-                if not doc.exists: break
-                
-                d = doc.to_dict()
-                if 'data' in d: full_dir.extend(d['data'])
-                else: full_dir.extend(json.loads(d.get('json', '[]')))
-                
-            return Response(json.dumps(full_dir), headers=headers)
-        except: return jsonify([])
+            if dir_type == 'student':
+                students = pg_db.query("SELECT matric as m, name as n, faculty as f, program as p, intake_year as i, cgpa as c, timetable_ready as t, password as pwd FROM students ORDER BY matric")
+                return Response(json.dumps(students), headers=headers)
+            else:
+                orgs = pg_db.query("SELECT id as m, name as n, activities as data FROM organizers ORDER BY id")
+                full_dir = []
+                for org in orgs:
+                    if org['data'] and isinstance(org['data'], list): full_dir.extend(org['data'])
+                return Response(json.dumps(full_dir), headers=headers)
+        except Exception as e:
+            return jsonify([{"error": str(e)}])
 
     elif path == '/search':
         query = args.get('q', '').strip()
         if len(query) < 2: return jsonify([])
         results = []
         try:
-            students_ref = db.collection('students')
-            q_upper = query.upper()
-            if query[0].isdigit(): docs = students_ref.order_by('__name__').start_at([q_upper]).end_at([q_upper + '\uf8ff']).limit(10).stream()
-            else: docs = students_ref.order_by('name').start_at([q_upper]).end_at([q_upper + '\uf8ff']).limit(10).stream()
-            for doc in docs: results.append({"matric": doc.id, "name": doc.to_dict().get('name', 'Unknown')})
-        except: return jsonify([])
+            q = f"%{query}%"
+            docs = pg_db.query("SELECT matric as matric, name as name FROM students WHERE matric ILIKE %s OR name ILIKE %s LIMIT 10", (q, q))
+            results = list(docs)
+        except: pass
         return Response(json.dumps(results), headers=headers)
 
     elif path == '/dashboard':
@@ -499,34 +418,24 @@ def api_handler(path):
             elif d['type'] == 'act_manual_out': msg = core_api.manual_activity(d['sid'], d['matric'], 'CO', req_session)
             elif d['type'] == 'act_delete': msg = core_api.delete_activity_log(d['lid'], req_session)
             elif d['type'] == 'autoscan':
-                jid = f"{d['matric']}_{d['gid']}"
-                db.collection('autoscan_jobs').document(jid).set({
-                    "matric": d['matric'], "gid": str(d['gid']), 
-                    "createdAt": get_malaysia_time().isoformat(),
-                    "status": "pending",
-                    "mode": d.get('mode', 'crowd'), "job_type": d.get('job_type', 'class')
-                })
+                pg_db.execute("INSERT INTO autoscan_jobs (matric, gid, createdAt, status, mode, job_type) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (matric, gid) DO UPDATE SET status = EXCLUDED.status, mode = EXCLUDED.mode, job_type = EXCLUDED.job_type",
+                    (d.get('matric'), str(d.get('gid')), get_malaysia_time(), "pending", d.get('mode', 'crowd'), d.get('job_type', 'class')))
                 msg = "Autoscan Activated."
             elif d['type'] == 'cancel_autoscan':
-                jid = f"{d['matric']}_{d['gid']}"
-                db.collection('autoscan_jobs').document(jid).delete()
+                pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (d.get('matric'), str(d.get('gid'))))
                 msg = "Autoscan Deactivated."
             elif d['type'] == 'follow_org':
-                db.collection('students').document(d['matric']).update({'following': firestore.ArrayUnion([d['sid']])})
+                pg_db.execute("UPDATE students SET following = array_append(COALESCE(following, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(following, '{}')))", (d['sid'], d['matric'], d['sid']))
                 msg = "Followed"
             elif d['type'] == 'unfollow_org':
-                db.collection('students').document(d['matric']).update({'following': firestore.ArrayRemove([d['sid']])})
+                pg_db.execute("UPDATE students SET following = array_remove(following, %s) WHERE matric = %s", (d['sid'], d['matric']))
                 msg = "Unfollowed"
             elif d['type'] == 'start_auto_register':
-                jid = f"{d['matric']}_{d['gid']}"
-                db.collection('auto_register_jobs').document(jid).set({
-                    "matric": d['matric'], "gid": str(d['gid']),
-                    "createdAt": get_malaysia_time().isoformat(), "status": "pending"
-                })
+                pg_db.execute("INSERT INTO auto_register_jobs (matric, gid, createdAt, status) VALUES (%s, %s, %s, %s) ON CONFLICT (matric, gid) DO UPDATE SET status = EXCLUDED.status",
+                    (d.get('matric'), str(d.get('gid')), get_malaysia_time(), "pending"))
                 msg = "Auto Register Activated."
             elif d['type'] == 'stop_auto_register':
-                jid = f"{d['matric']}_{d['gid']}"
-                db.collection('auto_register_jobs').document(jid).delete()
+                pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (d.get('matric'), str(d.get('gid'))))
                 msg = "Auto Register Deactivated."
         except Exception as e: msg = str(e)
         return jsonify({"msg": msg})
@@ -538,23 +447,21 @@ def api_handler(path):
             now_my = get_malaysia_time()
             today_str = now_my.strftime('%Y-%m-%d')
             
-            cutoff = (now_my - timedelta(days=7)).isoformat()
-            old_logs = db.collection('system_logs').where(filter=FieldFilter("timestamp", "<", cutoff)).limit(400).stream()
-            batch = db.batch(); deleted_logs = 0
-            for doc in old_logs: batch.delete(doc.reference); deleted_logs += 1
-            if deleted_logs > 0: batch.commit()
+            cutoff = now_my - timedelta(days=7)
+            pg_db.execute("DELETE FROM system_logs WHERE timestamp < %s", (cutoff,))
 
-            jobs = list(db.collection('autoscan_jobs').stream())
+            jobs = pg_db.query("SELECT * FROM autoscan_jobs")
             results = []
 
             def process_autoscan_job(job):
-                d = job.to_dict()
-                job_time = datetime.fromisoformat(d['createdAt'])
+                d = dict(job)
+                job_time = d['createdAt'] if isinstance(d['createdAt'], datetime) else datetime.fromisoformat(str(d['createdAt']).replace("Z", "+00:00"))
                 if (now_my - job_time).total_seconds() > 86400:
                     create_notification(d['matric'], d.get('job_type','class'), d.get('gid', 'Unknown'), 'FAILED', 'Autoscan Expired (24h)', d.get('mode','crowd'))
-                    job.reference.delete(); return "Cleaned (Expired)"
+                    pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (d['matric'], d['gid']))
+                    return "Cleaned (Expired)"
                 
-                matric, target_id = d['matric'], d['gid']
+                matric, target_id = d['matric'], str(d['gid'])
                 mode, j_type = d.get('mode', 'crowd'), d.get('job_type', 'class')
 
                 if j_type == 'class':
@@ -565,13 +472,14 @@ def api_handler(path):
                     my_log = core_api.get_log(target['id'], matric, req_session)
                     if my_log and my_log.get('status') == 'P':
                         create_notification(matric, 'class', f"Class {target_id}", 'SUCCESS', 'Already marked Present', mode)
-                        job.reference.delete(); return "Already Present"
+                        pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                        return "Already Present"
                     
                     should_scan = False
                     if mode == 'crowd' and core_api.get_attendance_count(target['id'], req_session) >= 5: should_scan = True
                     elif mode == 'time':
                         try:
-                            dt_end = datetime.strptime(f"{today_str} {target['endTime']}", "%Y-%m-%d %I:%M %p")
+                            dt_end = datetime.strptime(f"{today_str} {target['endTime']}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
                             if (dt_end.timestamp() - 1200) <= now_my.timestamp(): should_scan = True
                         except: pass
                     
@@ -580,7 +488,7 @@ def api_handler(path):
                         is_success = ("Success" in res or "taken" in res.lower() or ("Server:" in res and "Server Error" not in res))
                         status = "SUCCESS" if is_success else "FAILED"
                         create_notification(matric, 'class', f"Class {target_id}", status, res, mode)
-                        job.reference.delete()
+                        pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return f"Attempted ({status})"
                     return f"Pending ({mode})"
                 
@@ -595,7 +503,8 @@ def api_handler(path):
                     
                     if (req_co and is_ci and is_co) or (not req_co and is_ci):
                         create_notification(matric, 'activity', target.get('name'), 'SUCCESS', 'Activity Completed', mode)
-                        job.reference.delete(); return "Completed"
+                        pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                        return "Completed"
                         
                     scan_ci, scan_co = False, False
                     if mode == 'crowd':
@@ -605,8 +514,8 @@ def api_handler(path):
                     elif mode == 'time':
                         try:
                             t_str = target['endTime']
-                            try: dt_end = datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %I:%M %p")
-                            except: dt_end = datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %H:%M:%S")
+                            try: dt_end = datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
+                            except: dt_end = datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=8)))
                             if (dt_end.timestamp() - 1200) <= now_my.timestamp():
                                 if not is_ci: scan_ci = True
                                 if is_ci and not is_co and req_co: scan_co = True
@@ -618,7 +527,7 @@ def api_handler(path):
                         status = "SUCCESS" if is_success else "FAILED"
                         create_notification(matric, 'activity', target.get('name'), status, f"Check-In: {r}", mode)
                         if not req_co:
-                            job.reference.delete()
+                            pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                             return f"CI Attempted ({status}) - Job Deleted"
                         return f"CI Attempted ({status}) - Job Kept for CO"
 
@@ -627,7 +536,7 @@ def api_handler(path):
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
                         status = "SUCCESS" if is_success else "FAILED"
                         create_notification(matric, 'activity', target.get('name'), status, f"Check-Out: {r}", mode)
-                        job.reference.delete()
+                        pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return f"CO Attempted ({status}) - Job Deleted"
                     
                     return f"Pending ({mode})"
@@ -643,41 +552,40 @@ def api_handler(path):
                     except Exception as e: results.append(f"Error: {str(e)}")
 
             # === AUTO REGISTER JOBS ===
-            ar_jobs = list(db.collection('auto_register_jobs').stream())
+            ar_jobs = pg_db.query("SELECT * FROM auto_register_jobs")
 
             def process_auto_register_job(job):
-                d = job.to_dict()
-                matric, gid = d['matric'], d['gid']
-                job_time = datetime.fromisoformat(d['createdAt'])
+                d = dict(job)
+                matric, gid = d['matric'], str(d['gid'])
+                job_time = d['createdAt'] if isinstance(d['createdAt'], datetime) else datetime.fromisoformat(str(d['createdAt']).replace("Z", "+00:00"))
                 if (now_my - job_time).total_seconds() > 86400 * 7:
                     create_notification(matric, 'class', f'GID:{gid}', 'FAILED', 'Auto Register Expired (7d)', 'auto')
-                    job.reference.delete()
+                    pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (matric, gid))
                     return "AR Expired"
                 try:
-                    course_doc = db.collection('courses').document(str(gid)).get()
-                    code, group = ('Unknown', '') if not course_doc.exists else (course_doc.to_dict().get('code', 'Unknown'), course_doc.to_dict().get('group', ''))
-                    stud_doc = db.collection('students').document(matric).get()
-                    pwd = ''
-                    if stud_doc.exists:
-                        pwd = stud_doc.to_dict().get('password', '')
-                    if not pwd:
+                    course_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (gid,))
+                    code, group = ('Unknown', '') if not course_doc else (course_doc.get('code', 'Unknown'), course_doc.get('course_group', ''))
+                    stud_doc = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (matric,))
+                    pwd = stud_doc.get('password') if stud_doc else ''
+                    
+                    if not pwd or pwd == 'Unknown':
                         return "AR Pending (No Password)"
                         
                     sem = get_sys_config().get('current_semester', '2025/2026-2')
-                    status_c, resp_c = core_api.register_course(matric, pwd, code, str(gid), sem, group, "P")
+                    status_c, resp_c = core_api.register_course(matric, pwd, code, gid, sem, group, "P")
                     is_success = status_c == 200 and ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
                     
                     if not is_success and ("error\":true" in resp_c.replace(" ", "").lower() or "taraf" in resp_c.lower() or "syarat" in resp_c.lower()):
-                        status_c, resp_c = core_api.register_course(matric, pwd, code, str(gid), sem, group, "T")
+                        status_c, resp_c = core_api.register_course(matric, pwd, code, gid, sem, group, "T")
                         is_success = status_c == 200 and ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
 
                     status = 'SUCCESS' if is_success else 'FAILED'
                     create_notification(matric, 'class', f'{code} {group}', status, f'Auto Register: {str(resp_c)[:80]}', 'auto')
                     
                     if is_success:
-                        db.collection('students').document(matric).set({"groups": firestore.ArrayUnion([str(gid)])}, merge=True)
-                        db.collection('courses').document(str(gid)).set({'last_student_sync': 0}, merge=True)
-                        job.reference.delete()
+                        pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, matric, gid))
+                        pg_db.execute("UPDATE courses SET last_student_sync = 0 WHERE id = %s", (gid,))
+                        pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (matric, gid))
                         
                     return f"AR {status}"
                 except Exception as e:
@@ -698,13 +606,15 @@ def api_handler(path):
     elif path == '/notifications':
         matric = args.get('matric')
         if request.method == 'GET':
-            docs = db.collection('notifications').where(filter=FieldFilter("matric", "==", matric)).stream()
-            res = [{"id": d.id, **d.to_dict()} for d in docs]
-            res.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            docs = pg_db.query("SELECT * FROM notifications WHERE matric = %s ORDER BY timestamp DESC", (matric,))
+            res = [{"id": str(d.get('id', '')), **dict(d)} for d in docs]
+            for r in res:
+                if 'timestamp' in r and isinstance(r['timestamp'], datetime):
+                    r['timestamp'] = r['timestamp'].isoformat()
             return Response(json.dumps(res), headers=headers)
         elif request.method == 'DELETE':
             nid = args.get('id')
-            db.collection('notifications').document(nid).delete()
+            pg_db.execute("DELETE FROM notifications WHERE id = %s", (nid,))
             return jsonify({"status": "deleted"})
 
     elif path == '/profile':
@@ -717,19 +627,16 @@ def api_handler(path):
 
     elif path == '/cron_verify':
         try:
-            cfg_doc = db.collection('system').document('config').get()
-            cfg = cfg_doc.to_dict() if cfg_doc.exists else {}
+            cfg = get_sys_config()
             curr_id = cfg.get("verify_start_id", "")
             
-            students_ref = db.collection('students')
             if curr_id:
-                docs = students_ref.order_by('__name__').start_after([curr_id]).limit(100).stream()
+                docs = pg_db.query("SELECT * FROM students WHERE matric > %s ORDER BY matric LIMIT 100", (curr_id,))
             else:
-                docs = students_ref.order_by('__name__').limit(100).stream()
+                docs = pg_db.query("SELECT * FROM students ORDER BY matric LIMIT 100")
             
-            docs = list(docs)
             if not docs and curr_id:
-                db.collection('system').document('config').set({"verify_start_id": ""}, merge=True)
+                pg_db.execute("UPDATE system_config SET verify_start_id = '' WHERE id = 'config'")
                 return Response("Reset verify pointer.", headers=headers)
                 
             results = []
@@ -748,9 +655,9 @@ def api_handler(path):
                 
                 for d in docs:
                     if time.time() - start_time > 45: break
-                    last_id = d.id
-                    m = d.id
-                    data = d.to_dict()
+                    last_id = d['matric']
+                    m = d['matric']
+                    data = dict(d)
                     pwd = data.get('password')
                     
                     if (not pwd or pwd == 'Unknown') and req_s:
@@ -772,7 +679,7 @@ def api_handler(path):
                     if "TT: True" in msg: tt_valid += 1
                 except: pass
             
-            if last_id: db.collection('system').document('config').set({"verify_start_id": last_id}, merge=True)
+            if last_id: pg_db.execute("UPDATE system_config SET verify_start_id = %s WHERE id = 'config'", (last_id,))
             log_str = f"Processed: {len(futures)} | Valid Logins: {login_valid} | Valid+TT: {tt_valid} | Pointer: {curr_id or 'START'} -> {last_id}"
             save_sys_log("CRON VERIFY", "SUCCESS", len(futures))
             return Response(json.dumps({"processed": len(futures), "details": log_str}), headers=headers)
@@ -792,36 +699,24 @@ def api_handler(path):
         search_q = args.get('q', '').strip().upper()
         
         try:
-            refs = [db.collection('system').document(f"dir_cache_{format(i, 'x')}") for i in range(16)]
-            chunks = [doc for doc in db.get_all(refs) if doc.exists]
+            db_docs = pg_db.query("SELECT * FROM students")
             all_valid = []
-            for c in chunks:
-                cd = c.to_dict()
-                if "students" in cd:
-                    for s in cd['students'].values():
-                        if not include_unverified and s.get('pwd') == 'Unknown':
-                            continue
-                        all_valid.append({
-                            "matric": s.get('m'),
-                            "name": s.get('n'),
-                            "faculty": s.get('f'),
-                            "programme": s.get('p'),
-                            "intake_year": s.get('i'),
-                            "cgpa": s.get('c'),
-                            "timetable_ready": s.get('t'),
-                            "password": s.get('pwd')
-                        })
-            
-            if include_unverified:
-                if search_q:
-                    unv = db.collection('students').document(search_q).get()
-                    if unv.exists and unv.to_dict().get('password') == 'Unknown':
-                        all_valid.append(unv.to_dict() | {'matric': unv.id})
-                else:
-                    unv_docs = db.collection('students').where(filter=FieldFilter("password", "==", "Unknown")).limit(limit_val).stream()
-                    for u in unv_docs:
-                        d = u.to_dict(); d['matric'] = u.id
-                        all_valid.append(d)
+            for x in db_docs:
+                s = dict(x)
+                if not include_unverified and (not s.get('password') or s.get('password') == 'Unknown'):
+                    continue
+                if search_q and search_q not in str(s.get('name', '')).upper() and search_q not in str(s.get('matric', '')):
+                    continue
+                all_valid.append({
+                    "matric": s.get('matric'),
+                    "name": s.get('name'),
+                    "faculty": s.get('faculty'),
+                    "programme": s.get('program') or s.get('programme') or 'Unknown Programme',
+                    "intake_year": s.get('intake_year'),
+                    "cgpa": s.get('cgpa'),
+                    "timetable_ready": bool(s.get('groups')),
+                    "password": s.get('password')
+                })
                         
             if search_q:
                 all_valid = [x for x in all_valid if search_q in x.get('name', '').upper() or search_q in x.get('matric','')]
@@ -901,8 +796,8 @@ def api_handler(path):
     elif path == '/student_details_proxy':
         m, pwd = args.get('matric'), args.get('password')
         if not pwd:
-            doc = db.collection('students').document(m).get()
-            pwd = doc.to_dict().get('password') if doc.exists else None
+            doc = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (m,))
+            pwd = doc.get('password') if doc else None
         
         if not pwd or pwd == 'Unknown':
             return jsonify({"error": "No valid password"}), 401
@@ -935,19 +830,16 @@ def api_handler(path):
         try:
             res = []
             if q_type == 'c':
-                docs = db.collection('courses').where(filter=FieldFilter("code", "==", query)).stream()
-                for d in docs:
-                    data = d.to_dict()
-                    res.append({"id": d.id, "group": data.get('group'), "name": data.get('name'), "code": data.get('code'), "students": len(data.get('enrolled_students', []))})
+                docs = pg_db.query("SELECT * FROM courses WHERE code = %s", (query,))
+                for data in docs:
+                    res.append({"id": str(data['id']), "group": data.get('course_group'), "name": data.get('name'), "code": data.get('code'), "students": len(data.get('enrolled_students') or [])})
             elif q_type == 's':
-                student = db.collection('students').document(query).get()
-                if student.exists:
-                    s_data = student.to_dict()
-                    for gid in s_data.get('groups', []):
-                        cdoc = db.collection('courses').document(str(gid)).get()
-                        if cdoc.exists:
-                            c_data = cdoc.to_dict()
-                            res.append({"id": gid, "group": c_data.get('group'), "name": c_data.get('name'), "code": c_data.get('code'), "students": len(c_data.get('enrolled_students', []))})
+                s_data = pg_db.query_one("SELECT * FROM students WHERE matric = %s", (query,))
+                if s_data:
+                    for gid in (s_data.get('groups') or []):
+                        c_data = pg_db.query_one("SELECT * FROM courses WHERE id = %s", (gid,))
+                        if c_data:
+                            res.append({"id": str(gid), "group": c_data.get('course_group'), "name": c_data.get('name'), "code": c_data.get('code'), "students": len(c_data.get('enrolled_students') or [])})
             return Response(json.dumps(res), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -1107,18 +999,15 @@ def api_handler(path):
         try:
             log("Starting Class Discovery...")
             cfg = get_sys_config()
-            req_session = get_authorized_session() # <--- FIXED
+            req_session = get_authorized_session() 
             active_sem = core_api.get_active_semester(req_session)
             stored_sem = cfg.get('current_semester')
             
             if active_sem and active_sem != stored_sem:
                 log(f"New Semester Detected: {active_sem}. Clearing DB...")
-                delete_collection('students', 400)
-                delete_collection('courses', 400)
-                batch = db.batch()
-                for i in range(55): batch.delete(db.collection('system').document(f'dir_{i}'))
-                batch.commit()
-                db.collection('system').document('config').set({'current_semester': active_sem}, merge=True)
+                pg_db.execute("DELETE FROM students")
+                pg_db.execute("DELETE FROM courses")
+                pg_db.execute("UPDATE system_config SET current_semester = %s WHERE id = 'config'", (active_sem,))
                 
             curr = cfg['start_id']
             limit = cfg['scan_limit']
@@ -1142,36 +1031,20 @@ def api_handler(path):
                                 if res_id > highest_valid_id: highest_valid_id = res_id
                                 
             if discovered:
-                batch = db.batch(); count = 0
+                upsert_sql = """
+                INSERT INTO courses (id, code, name, semester, course_group)
+                VALUES %s
+                ON CONFLICT (id) DO UPDATE SET 
+                    code = EXCLUDED.code, name = EXCLUDED.name, 
+                    semester = EXCLUDED.semester, course_group = EXCLUDED.course_group
+                """
+                tuples = []
                 for d in discovered:
-                    batch.set(db.collection('courses').document(str(d['id'])), {
-                        "code": d['code'], "name": d['name'], "semester": d['semester'], "group": d['group']
-                    }, merge=True)
-                    count += 1
-                    if count >= 400: batch.commit(); batch = db.batch(); count = 0
-                if count > 0: batch.commit()
+                    tuples.append((str(d['id']), d['code'], d['name'], d['semester'], d['group']))
+                pg_db.execute_batch(upsert_sql, tuples)
 
-            # REBUILD UNIFIED DIRECTORY
-            log("Rebuilding Unified Search Directory (Students + Courses)...")
-            d_list = []
-            for d in db.collection('students').stream():
-                d_list.append({"m": d.id, "n": d.to_dict().get('name'), "t": "s"})
-                
-            seen_c = set()
-            for c in db.collection('courses').stream():
-                cd = c.to_dict()
-                code = cd.get('code')
-                if code and code not in seen_c:
-                    seen_c.add(code)
-                    d_list.append({"m": code, "n": cd.get('name'), "t": "c"})
-                    
-            chunks = [d_list[i:i + 4000] for i in range(0, len(d_list), 4000)]
-            dir_batch = db.batch()
-            for idx, chunk in enumerate(chunks): dir_batch.set(db.collection('system').document(f'dir_{idx}'), {'json': json.dumps(chunk)})
-            for idx in range(len(chunks), 55): dir_batch.delete(db.collection('system').document(f'dir_{idx}'))
-            dir_batch.commit()
-
-            db.collection('system').document('config').set({'last_scanned_id': highest_valid_id}, merge=True)
+            log("Bypassing unified directory rebuilding (Relational Table mapping dynamically).")
+            pg_db.execute("UPDATE system_config SET last_scanned_id = %s WHERE id = 'config'", (highest_valid_id,))
             save_sync_log("CLASS", "SUCCESS", log_buffer, len(discovered))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
@@ -1204,30 +1077,26 @@ def api_handler(path):
             if priority_codes:
                 log(f"Processing {len(priority_codes)} Priority Courses...")
                 for code in priority_codes:
-                    docs = db.collection('courses').where(filter=FieldFilter("code", "==", code)).where(filter=FieldFilter("semester", "==", active_sem)).stream()
-                    for c in docs:
-                        d = c.to_dict(); d['id'] = c.id
-                        target_courses.append(d)
-                        seen_gids.add(c.id)
+                    docs = pg_db.query("SELECT id, code, name, semester, course_group AS group FROM courses WHERE code = %s AND semester = %s", (code, active_sem))
+                    for d in docs:
+                        target_courses.append(dict(d))
+                        seen_gids.add(d['id'])
             
             # --- NORMAL FETCH TO FILL QUOTA ---
             rem_limit = batch_limit - len(target_courses)
             if rem_limit > 0:
-                courses_query = db.collection('courses').order_by('last_student_sync').limit(batch_limit + len(target_courses)).stream()
-                skip_batch = db.batch(); skip_count = 0
+                courses_query = pg_db.query("SELECT id, code, name, semester, course_group AS group, last_student_sync FROM courses ORDER BY last_student_sync ASC LIMIT %s", (batch_limit + len(target_courses),))
                 
                 for c in courses_query:
                     if rem_limit <= 0: break
-                    if c.id in seen_gids: continue
-                    d = c.to_dict(); d['id'] = c.id
+                    if c['id'] in seen_gids: continue
+                    d = dict(c)
                     if d.get('semester') == active_sem:
                         target_courses.append(d)
-                        seen_gids.add(c.id)
+                        seen_gids.add(c['id'])
                         rem_limit -= 1
                     else:
-                        skip_batch.set(c.reference, {"last_student_sync": 9999999999}, merge=True)
-                        skip_count += 1
-                if skip_count > 0: skip_batch.commit()
+                        pg_db.execute("UPDATE courses SET last_student_sync = 9999999999 WHERE id = %s", (c['id'],))
             
             if not target_courses: return Response("No courses to sync", headers=headers)
             log(f"Selected {len(target_courses)} total courses to sync.")
@@ -1252,70 +1121,61 @@ def api_handler(path):
                     course_students[gid] = matrics
                     
             updates_by_student = {}
-            for m, name in student_names.items(): updates_by_student[m] = {"add": [], "remove": [], "name": name}
+            for m, name in student_names.items(): updates_by_student[m] = {"add": set(), "remove": set(), "name": name}
             
             now_ts = int(datetime.now().timestamp())
-            course_batch = db.batch(); cb_count = 0
             
             for c in target_courses:
                 gid = c['id']
                 current_matrics = set(course_students.get(gid, []))
                 
-                # --- APPLY THE CHECKBOX LOGIC HERE ---
+                old_enr = pg_db.query_one("SELECT enrolled_students FROM courses WHERE id = %s", (str(gid),))
                 if force_sync:
                     previous_matrics = set() 
                 else:
-                    previous_matrics = set(c.get('enrolled_students', []))
+                    previous_matrics = set(old_enr['enrolled_students'] if old_enr and old_enr['enrolled_students'] else [])
                 
                 for m in (current_matrics - previous_matrics):
-                    if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
-                    updates_by_student[m]["add"].append(str(gid)) # Safe String Cast
+                    if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set()}
+                    updates_by_student[m]["add"].add(str(gid)) 
                     
                 for m in (previous_matrics - current_matrics):
-                    if m not in updates_by_student: updates_by_student[m] = {"add": [], "remove": []}
-                    updates_by_student[m]["remove"].append(str(gid)) # Safe String Cast
+                    if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set()}
+                    updates_by_student[m]["remove"].add(str(gid)) 
                     
-                course_batch.set(db.collection('courses').document(gid), {"enrolled_students": list(current_matrics), "last_student_sync": now_ts}, merge=True)
-                cb_count += 1
-                if cb_count >= 400: course_batch.commit(); course_batch = db.batch(); cb_count = 0
-            if cb_count > 0: course_batch.commit()
+                pg_db.execute("UPDATE courses SET enrolled_students = %s, last_student_sync = %s WHERE id = %s", (list(current_matrics), now_ts, str(gid)))
             
-            add_batch = db.batch(); sb_count = 0
             for m, diff in updates_by_student.items():
-                if diff["add"]: 
-                    add_batch.set(db.collection('students').document(m), {"semester": active_sem, "name": diff.get("name", ""), "groups": firestore.ArrayUnion(diff["add"])}, merge=True)
-                    sb_count += 1
-                if sb_count >= 400: add_batch.commit(); add_batch = db.batch(); sb_count = 0
-            if sb_count > 0: add_batch.commit()
-            
-            rem_batch = db.batch(); rb_count = 0
-            for m, diff in updates_by_student.items():
-                if diff["remove"]:
-                    rem_batch.set(db.collection('students').document(m), {"groups": firestore.ArrayRemove(diff["remove"])}, merge=True)
-                    rb_count += 1
-                if rb_count >= 400: rem_batch.commit(); rem_batch = db.batch(); rb_count = 0
-            if rb_count > 0: rem_batch.commit()
+                if diff["add"] or diff["remove"]:
+                    stud = pg_db.query_one("SELECT groups FROM students WHERE matric = %s", (m,))
+                    curr_groups = set(stud['groups'] if stud and stud['groups'] else [])
+                    
+                    if diff["add"]: curr_groups.update(diff["add"])
+                    if diff["remove"]: curr_groups.difference_update(diff["remove"])
+                    
+                    name_upd = diff.get("name")
+                    if name_upd:
+                        pg_db.execute("""
+                            INSERT INTO students (matric, name, groups) 
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (matric) DO UPDATE SET 
+                                groups = EXCLUDED.groups, 
+                                name = COALESCE(NULLIF(students.name, 'Unknown'), EXCLUDED.name)
+                        """, (m, name_upd, list(curr_groups)))
+                    else:
+                        pg_db.execute("UPDATE students SET groups = %s WHERE matric = %s", (list(curr_groups), m))
             
             # --- ORPHAN STUDENT PRUNING ---
             log("Identifying departed students for directory cleanup...")
             pruned = 0
             
-            # ONLY check students who have had courses removed during THIS run
             students_to_verify = [m for m, diff in updates_by_student.items() if diff["remove"]]
             if students_to_verify:
-                # Fetch only these students to see if they have any remaining courses
-                refs = [db.collection('students').document(m) for m in students_to_verify]
-                # Firestore get_all costs 1 read per document, which is extremely cheap here (usually 0-5)
-                # compared to the 30,000 reads streaming the whole directory would cost.
-                docs = db.get_all(refs)
-                for doc in docs:
-                    if doc.exists:
-                        d_dict = doc.to_dict()
-                        groups = d_dict.get('groups', [])
-                        # If the student dropped the course and now has 0 registered courses, purge them!
-                        if not groups or len(groups) == 0:
-                            db.collection('students').document(doc.id).delete()
-                            pruned += 1
+                for m in set(students_to_verify):
+                    stud = pg_db.query_one("SELECT groups FROM students WHERE matric = %s", (m,))
+                    if stud and (not stud['groups'] or len(stud['groups']) == 0):
+                        pg_db.execute("DELETE FROM students WHERE matric = %s", (m,))
+                        pruned += 1
                         
             log(f"Pruned {pruned} departed accounts.")
 
@@ -1371,24 +1231,19 @@ def api_handler(path):
                 bio = core_api.get_student_biodata(org_id, req_session)
                 name = f"Organizer {org_id}"
                 if bio: name = bio.get('NAMAPELAJAR') or bio.get('namaPelajar') or bio.get('Name') or name
-                db.collection('organizers').document(str(org_id)).set({"id": str(org_id), "name": name, "last_active": latest.isoformat(), "activities": top10})
+                
+                pg_db.execute("""
+                    INSERT INTO organizers (id, name, last_active, activities)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET 
+                        name = EXCLUDED.name, 
+                        last_active = EXCLUDED.last_active, 
+                        activities = EXCLUDED.activities
+                """, (str(org_id), name, latest, json.dumps(top10)))
                 log(f"Synced {name} - Updated {len(top10)} recent activities")
                 
-            all_orgs = db.collection('organizers').stream()
-            full_dir = []
-            for doc in all_orgs:
-                d = doc.to_dict()
-                acts = d.get('activities', [])
-                act_str = " | ".join([str(e.get('name', '')) for e in acts[:5] if e.get('name')]).upper()
-                full_dir.append({"m": str(d['id']), "n": d.get('name', f"Organizer {d['id']}"), "a": act_str})
-                
-            c_size = 4000; chunks = [full_dir[i:i + c_size] for i in range(0, len(full_dir), c_size)]; batch = db.batch()
-            for idx, chunk in enumerate(chunks): batch.set(db.collection('system').document(f'org_dir_{idx}'), {'data': chunk})
-            for idx in range(len(chunks), 20): batch.delete(db.collection('system').document(f'org_dir_{idx}'))
-            batch.commit()
-            
-            db.collection('system').document('config').set({'act_last_scanned_id': highest_valid_id}, merge=True)
-            save_sync_log("ACTIVITY", "SUCCESS", log_buffer, len(full_dir))
+            pg_db.execute("UPDATE system_config SET act_last_scanned_id = %s WHERE id = 'config'", (highest_valid_id,))
+            save_sync_log("ACTIVITY", "SUCCESS", log_buffer, len(organizers))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
             save_sync_log("ACTIVITY", "ERROR", log_buffer + [str(e)], 0)
@@ -1397,11 +1252,15 @@ def api_handler(path):
     elif path == '/organizer_details':
         oid, matric = args.get('oid'), args.get('matric')
         try:
-            doc = db.collection('organizers').document(oid).get()
-            data = doc.to_dict() if doc.exists else {"id": oid}
+            doc = pg_db.query_one("SELECT * FROM organizers WHERE id = %s", (oid,))
+            data = dict(doc) if doc else {"id": oid}
+            if 'activities' in data and type(data['activities']) is str:
+                try: data['activities'] = json.loads(data['activities'])
+                except: pass
+                
             req_session = get_authorized_session()
             live_events = core_api.get_organizer_events(oid, req_session)
-            if 'name' not in data:
+            if 'name' not in data or not data['name']:
                 bio = core_api.get_student_biodata(oid, req_session)
                 if bio: data['name'] = bio.get('NAMAPELAJAR') or bio.get('namaPelajar') or bio.get('Name') or f"Organizer {oid}"
                 else: data['name'] = f"Organizer {oid}"
@@ -1415,8 +1274,8 @@ def api_handler(path):
             if not data: return jsonify({"error": "Not Found"}), 404
             if matric:
                 job_id = f"{matric}_{oid}"
-                job_doc = db.collection('autoscan_jobs').document(job_id).get()
-                data['autoscan_active'] = (job_doc.exists and job_doc.to_dict().get('status') == 'pending')
+                job_doc = pg_db.query_one("SELECT status FROM autoscan_jobs WHERE id = %s", (job_id,))
+                data['autoscan_active'] = (job_doc and job_doc['status'] == 'pending')
                 with ThreadPoolExecutor(max_workers=10) as ex:
                     f_map = {ex.submit(core_api.get_activity_log, evt['id'], matric, req_session): evt for evt in data.get('activities', [])}
                     for f in as_completed(f_map):
@@ -1451,20 +1310,18 @@ def api_handler(path):
         def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
         try:
             log("Starting Directory Verification...")
-            active_sem = get_sys_config().get('current_semester', '2025/2026-2')
-            
-            cfg_doc = db.collection('system').document('config').get()
-            curr_id = cfg_doc.to_dict().get("verify_start_id", "") if cfg_doc.exists else ""
+            cfg = get_sys_config()
+            active_sem = cfg.get('current_semester', '2025/2026-2')
+            curr_id = cfg.get("verify_start_id", "")
             
             log(f"Fetching verifiable accounts from {curr_id or 'start'} (LIMIT 300) to protect database quota...")
-            students_ref = db.collection('students')
             if curr_id:
-                docs = list(students_ref.order_by('__name__').start_after([curr_id]).limit(300).stream())
+                docs = pg_db.query("SELECT * FROM students WHERE matric > %s ORDER BY matric LIMIT 300", (curr_id,))
             else:
-                docs = list(students_ref.order_by('__name__').limit(300).stream())
+                docs = pg_db.query("SELECT * FROM students ORDER BY matric LIMIT 300")
                 
             if not docs and curr_id:
-                db.collection('system').document('config').set({"verify_start_id": ""}, merge=True)
+                pg_db.execute("UPDATE system_config SET verify_start_id = '' WHERE id = 'config'")
                 log("Reached the end of students database. Pointer reset to beginning.")
                 return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
                 
@@ -1483,9 +1340,9 @@ def api_handler(path):
                     if time.time() - start_time > 40: 
                         log("Timeout approaching. Stopping verification early.")
                         break
-                    last_id = d.id
-                    m = d.id
-                    data = d.to_dict()
+                    last_id = d['matric']
+                    m = d['matric']
+                    data = dict(d)
                     pwd = data.get('password')
                     
                     if (not pwd or pwd == 'Unknown') and req_s:
@@ -1509,7 +1366,7 @@ def api_handler(path):
                     except Exception as e: 
                         pass
 
-            if last_id: db.collection('system').document('config').set({"verify_start_id": last_id}, merge=True)
+            if last_id: pg_db.execute("UPDATE system_config SET verify_start_id = %s WHERE id = 'config'", (last_id,))
             log(f"Batch Range: {curr_id or 'START'} -> {last_id}")
             log(f"Processed {len(results)} accounts with existing passwords.")
             log(f"Results: {login_valid_count} Valid Logins | {tt_valid_count} Valid+Timetable.")
@@ -1528,61 +1385,55 @@ def api_handler(path):
             cfg = get_sys_config()
             if req_type == 'get_data':
                 logs = []
-                for l in db.collection('logs').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(150).stream():
-                    ld = l.to_dict(); ld['id'] = l.id; logs.append(ld)
+                for l in pg_db.query("SELECT * FROM logs ORDER BY timestamp DESC LIMIT 150"):
+                    ld = dict(l); ld['id'] = str(ld.get('timestamp', '')); logs.append(ld)
                 jobs = []
-                for j in db.collection('autoscan_jobs').stream():
-                    jd = j.to_dict(); jd['id'] = j.id; jobs.append(jd)
-                banned = [d.id for d in db.collection('banned_ips').stream()]
-                ip_meta = {}
-                for d in db.collection('ip_metadata').stream(): ip_meta[d.id] = d.to_dict().get('name')
+                for j in pg_db.query("SELECT * FROM autoscan_jobs"):
+                    jd = dict(j); jd['id'] = f"{jd['matric']}_{jd['gid']}"; jobs.append(jd)
+                banned = [d['ip'] for d in pg_db.query("SELECT ip FROM banned_ips")]
+                ip_meta = {d['ip']: d['name'] for d in pg_db.query("SELECT ip, name FROM ip_metadata")}
                 
-                # --- FETCH MULTIPLE VALID ACCOUNTS FOR THE SWITCHER ---
                 auto_accounts = []
-                refs = [db.collection('system').document(f"dir_cache_{format(i, 'x')}") for i in range(16)]
-                chunks = [doc for doc in db.get_all(refs) if doc.exists]
-                for c in chunks:
-                    cd = c.to_dict()
-                    if "students" in cd:
-                        for s in cd['students'].values():
-                            p = s.get('pwd')
-                            if p and p != 'Unknown' and s.get('t') is True:
-                                auto_accounts.append({"matric": s.get('m'), "password": p})
+                for s in pg_db.query("SELECT matric, password FROM students WHERE timetable_ready = true AND password IS NOT NULL AND password != 'Unknown'"):
+                    auto_accounts.append({"matric": s['matric'], "password": s['password']})
                 auto_accounts.sort(key=lambda x: int(x['matric']) if str(x['matric']).isdigit() else 0, reverse=True)
+
+                def json_serial(obj):
+                    if isinstance(obj, (datetime, datetime)): return obj.isoformat()
+                    raise TypeError("Type %s not serializable" % type(obj))
 
                 return Response(json.dumps({
                     "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
                     "ip_meta": ip_meta, "auto_accounts": auto_accounts
-                }), headers=headers)
+                }, default=json_serial), headers=headers)
             
             elif req_type == 'save_settings':
-                update = {}
-                if data.get('scan_limit'): update["scan_limit"] = int(data['scan_limit'])
-                if data.get('last_scanned') is not None: update["last_scanned_id"] = int(data['last_scanned'])
-                if data.get('student_sync_batch'): update["student_sync_batch"] = int(data['student_sync_batch'])
-                if data.get('act_scan_limit'): update["act_scan_limit"] = int(data['act_scan_limit'])
-                if data.get('act_start_id') is not None: update["act_last_scanned_id"] = int(data['act_start_id'])
-                if data.get('act_months'): update["act_time_threshold"] = int(data['act_months'])
+                fields, values = [], []
+                if data.get('scan_limit'): fields.append('scan_limit = %s'); values.append(int(data['scan_limit']))
+                if data.get('last_scanned') is not None: fields.append('last_scanned_id = %s'); values.append(int(data['last_scanned']))
+                if data.get('student_sync_batch'): fields.append('student_sync_batch = %s'); values.append(int(data['student_sync_batch']))
+                if data.get('act_scan_limit'): fields.append('act_scan_limit = %s'); values.append(int(data['act_scan_limit']))
+                if data.get('act_start_id') is not None: fields.append('act_last_scanned_id = %s'); values.append(int(data['act_start_id']))
+                if data.get('act_months'): fields.append('act_time_threshold = %s'); values.append(int(data['act_months']))
                 
-                if 'priority_courses' in data: update["priority_courses"] = data['priority_courses']
-                if 'system_matric' in data: update["system_matric"] = data['system_matric']
-                if 'system_pwd' in data: update["system_pwd"] = data['system_pwd']
-                if 'force_student_sync' in data: update["force_student_sync"] = data['force_student_sync'] 
-                if 'verify_start_id' in data: update["verify_start_id"] = data['verify_start_id']
+                if 'priority_courses' in data: fields.append('priority_courses = %s'); values.append(data['priority_courses'])
+                if 'system_matric' in data: fields.append('system_matric = %s'); values.append(data['system_matric'])
+                if 'system_pwd' in data: fields.append('system_pwd = %s'); values.append(data['system_pwd'])
+                if 'force_student_sync' in data: fields.append('force_student_sync = %s'); values.append(data['force_student_sync']) 
+                if 'verify_start_id' in data: fields.append('verify_start_id = %s'); values.append(data['verify_start_id'])
                 
-                db.collection('system').document('config').set(update, merge=True)
+                if fields:
+                    pg_db.execute(f"UPDATE system_config SET {', '.join(fields)} WHERE id = 'config'", tuple(values))
                 return jsonify({"status": "Settings Saved"})
                 
             elif req_type == 'delete_all_jobs':
-                batch = db.batch(); count = 0
-                for j in db.collection('autoscan_jobs').stream():
-                    batch.delete(j.reference); count += 1
-                    if count >= 400: batch.commit(); batch = db.batch(); count = 0
-                if count > 0: batch.commit()
-                return jsonify({"status": f"Deleted {count} jobs"})
+                pg_db.execute("TRUNCATE autoscan_jobs")
+                return jsonify({"status": "Deleted all jobs"})
                 
             elif req_type == 'delete_single_job':
-                db.collection('autoscan_jobs').document(data.get('job_id')).delete()
+                j_parts = data.get('job_id').split('_')
+                if len(j_parts) == 2:
+                    pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (j_parts[0], j_parts[1]))
                 return jsonify({"status": "Deleted"})
                 
             elif req_type == 'trigger_jobs':
@@ -1593,11 +1444,11 @@ def api_handler(path):
                 today_str = now_my.strftime('%Y-%m-%d')
                 
                 if job_category == 'autoscan':
-                    jobs = list(db.collection('autoscan_jobs').stream())
+                    jobs = list(pg_db.query("SELECT * FROM autoscan_jobs"))
                     out_logs.append(f"Found {len(jobs)} active autoscan jobs.")
                     for j in jobs:
-                        d = j.to_dict(); matric = d['matric']; target = d.get('gid', '')
-                        t = d.get('job_type', 'class')
+                        matric = j['matric']; target = j.get('gid', '')
+                        t = j.get('job_type', 'class')
                         if t == 'class':
                             res = core_api.scan_qr(target, matric, req_session)
                             out_logs.append(f"[{matric}] Class {target}: {res[:60]}")
@@ -1605,17 +1456,17 @@ def api_handler(path):
                             r1 = core_api.scan_activity_qr(target, matric, 'i')
                             out_logs.append(f"[{matric}] Act {target} CI: {r1[:60]}")
                 else:
-                    jobs = list(db.collection('auto_register_jobs').stream())
+                    jobs = list(pg_db.query("SELECT * FROM auto_register_jobs"))
                     out_logs.append(f"Found {len(jobs)} auto-register jobs.")
                     sem = cfg.get('current_semester', '2025/2026-2')
                     for j in jobs:
-                        d = j.to_dict(); matric = d['matric']; gid = d['gid']
-                        stud = db.collection('students').document(matric).get()
-                        if stud.exists:
-                            pwd = stud.to_dict().get('password')
-                            course = db.collection('courses').document(str(gid)).get()
-                            code = course.to_dict().get('code', 'Unknown') if course.exists else 'Unknown'
-                            grp = course.to_dict().get('group', '') if course.exists else ''
+                        matric = j['matric']; gid = j['gid']
+                        stud = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (matric,))
+                        if stud:
+                            pwd = stud.get('password')
+                            course = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (str(gid),))
+                            code = course.get('code', 'Unknown') if course else 'Unknown'
+                            grp = course.get('course_group', '') if course else ''
                             if pwd and pwd != 'Unknown':
                                 st, rp = core_api.register_course(matric, pwd, code, str(gid), sem, grp, "P")
                                 out_logs.append(f"[{matric}] AR {code} {grp}: {rp[:60]}")
@@ -1627,26 +1478,21 @@ def api_handler(path):
                 
             elif req_type == 'ban_ip':
                 ip, act = data.get('ip'), data.get('action')
-                if act == 'ban': db.collection('banned_ips').document(ip).set({"banned_at": get_malaysia_time().isoformat()})
-                else: db.collection('banned_ips').document(ip).delete()
+                if act == 'ban': 
+                    pg_db.execute("INSERT INTO banned_ips (ip) VALUES (%s) ON CONFLICT DO NOTHING", (ip,))
+                else: 
+                    pg_db.execute("DELETE FROM banned_ips WHERE ip = %s", (ip,))
                 return jsonify({"status": "ok"})
                 
             elif req_type == 'set_ip_name':
-                db.collection('ip_metadata').document(data.get('ip')).set({"name": data.get('name')}, merge=True)
+                pg_db.execute("INSERT INTO ip_metadata (ip, name) VALUES (%s, %s) ON CONFLICT (ip) DO UPDATE SET name = EXCLUDED.name", (data.get('ip'), data.get('name')))
                 return jsonify({"status": "Saved"})
             
             elif req_type == 'delete_device_logs':
                 target_id = data.get('target_id')
-                db.collection('banned_ips').document(target_id).delete()
-                logs_ref = db.collection('system_logs')
-                batch = db.batch(); cnt = 0
-                for doc in logs_ref.where(filter=FieldFilter("device_id", "==", target_id)).stream():
-                    batch.delete(doc.reference); cnt += 1
-                    if cnt >= 400: batch.commit(); batch = db.batch(); cnt = 0
-                for doc in logs_ref.where(filter=FieldFilter("ip", "==", target_id)).stream():
-                    batch.delete(doc.reference); cnt += 1
-                    if cnt >= 400: batch.commit(); batch = db.batch(); cnt = 0
-                if cnt > 0: batch.commit()
+                pg_db.execute("DELETE FROM banned_ips WHERE ip = %s", (target_id,))
+                pg_db.execute("DELETE FROM system_logs WHERE message LIKE %s OR message LIKE %s", (f"%{target_id}%", f"%{target_id}%"))
+                pg_db.execute("DELETE FROM logs WHERE ip = %s OR device_id = %s", (target_id, target_id))
                 return jsonify({"status": "Device logs cleared & unbanned"})
         except Exception as e:
             traceback.print_exc()

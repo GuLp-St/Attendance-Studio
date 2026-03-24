@@ -1,4 +1,4 @@
 flask
-firebase-admin
-requests
-google-cloud-firestore
+flask_cors
+psycopg2-binary
+requestsle-cloud-firestore
