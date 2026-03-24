@@ -15,6 +15,16 @@ import requests
 import traceback
 import core_api
 import base64
+from decimal import Decimal
+
+def json_serial(obj):
+    if isinstance(obj, (datetime, datetime)):
+        return obj.isoformat()
+    if isinstance(obj, timedelta):
+        return str(obj)
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError("Type %s not serializable" % type(obj))
 
 # ==========================================
 #  INITIALIZATION
@@ -342,7 +352,7 @@ def api_handler(path):
                 "total_pages": (total + limit - 1) // limit,
                 "hierarchy": hierarchy,
                 "intakes": intakes
-            }), headers=headers)
+            }, default=json_serial), headers=headers)
         except Exception as e:
             traceback.print_exc()
             return jsonify({"error": str(e)}), 500
@@ -353,11 +363,12 @@ def api_handler(path):
         results = []
         try:
             q = f"%{query}%"
-            # Return same structure as Search.jsx expects
+            # Fixed: Include grouped courses in results
             docs = pg_db.query("SELECT matric as m, name as n, 's' as t FROM students WHERE matric ILIKE %s OR name ILIKE %s LIMIT 10", (q, q))
-            results = list(docs)
+            courses = pg_db.query("SELECT MIN(id) as m, CONCAT(code, ' ', name) as n, 'c' as t FROM courses WHERE code ILIKE %s OR name ILIKE %s GROUP BY code, name LIMIT 10", (q, q))
+            results = list(docs) + list(courses)
         except: pass
-        return Response(json.dumps(results), headers=headers)
+        return Response(json.dumps(results, default=json_serial), headers=headers)
 
     elif path == '/dashboard':
         matric = args.get('matric')
@@ -431,7 +442,7 @@ def api_handler(path):
                 "timetable": consolidate_timetable(raw_timetable),
                 "following": following_ids,
                 "auto_register": active_auto_register
-            }), headers=headers)
+            }, default=json_serial), headers=headers)
         except Exception as e:
             traceback.print_exc()
             return jsonify({"error": str(e)}), 500
@@ -503,7 +514,7 @@ def api_handler(path):
                         else: st = "Present"
                     else: st = "Present"
                 res = {"type": "activity", "id": str(det['id']), "name": det.get('name'), "date": det.get('eventDate'), "start": det.get('startTime'), "end": det.get('endTime'), "status": st, "log_id": lid, "require_checkout": det.get('requireCheckout', False), "can_checkout": cco}
-            return Response(json.dumps(res), headers=headers)
+            return Response(json.dumps(res, default=json_serial), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/action' and request.method == 'POST':
@@ -530,6 +541,7 @@ def api_handler(path):
                 msg = "Autoscan Deactivated."
             elif d['type'] == 'follow_org':
                 pg_db.execute("UPDATE students SET following = array_append(COALESCE(following, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(following, '{}')))", (d['sid'], d['matric'], d['sid']))
+                # Use current semester courses timestamp update to trigger sync? No, just follow.
                 msg = "Followed"
             elif d['type'] == 'unfollow_org':
                 pg_db.execute("UPDATE students SET following = array_remove(following, %s) WHERE matric = %s", (d['sid'], d['matric']))
@@ -550,13 +562,11 @@ def api_handler(path):
             req_session = get_authorized_session()
             now_my = get_malaysia_time()
             today_str = now_my.strftime('%Y-%m-%d')
-
+            # Cleanup old logs (moved here to save a route)
             cutoff = now_my - timedelta(days=7)
             pg_db.execute("DELETE FROM system_logs WHERE timestamp < %s", (cutoff,))
-
             jobs = pg_db.query("SELECT * FROM autoscan_jobs")
             results = []
-
             def process_autoscan_job(job):
                 d = dict(job)
                 job_time = d['createdAt'] if isinstance(d['createdAt'], datetime) else datetime.fromisoformat(str(d['createdAt']).replace("Z", "+00:00"))
@@ -564,21 +574,17 @@ def api_handler(path):
                     create_notification(d['matric'], d.get('job_type','class'), d.get('gid', 'Unknown'), 'FAILED', 'Autoscan Expired (24h)', d.get('mode','crowd'))
                     pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (d['matric'], d['gid']))
                     return "Cleaned (Expired)"
-
                 matric, target_id = d['matric'], str(d['gid'])
                 mode, j_type = d.get('mode', 'crowd'), d.get('job_type', 'class')
-
                 if j_type == 'class':
                     sessions = core_api.get_sessions(target_id, req_session)
                     target = next((s for s in sessions if datetime.fromtimestamp(s['eventDate']/1000).strftime('%Y-%m-%d') == today_str), None)
                     if not target: return "No Class"
-
                     my_log = core_api.get_log(target['id'], matric, req_session)
                     if my_log and my_log.get('status') == 'P':
                         create_notification(matric, 'class', f"Class {target_id}", 'SUCCESS', 'Already marked Present', mode)
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return "Already Present"
-
                     should_scan = False
                     if mode == 'crowd' and core_api.get_attendance_count(target['id'], req_session) >= 5: should_scan = True
                     elif mode == 'time':
@@ -586,7 +592,6 @@ def api_handler(path):
                             dt_end = datetime.strptime(f"{today_str} {target['endTime']}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
                             if (dt_end.timestamp() - 1200) <= now_my.timestamp(): should_scan = True
                         except: pass
-
                     if should_scan:
                         res = core_api.scan_qr(target['id'], matric, req_session)
                         is_success = ("Success" in res or "taken" in res.lower() or ("Server:" in res and "Server Error" not in res))
@@ -595,21 +600,17 @@ def api_handler(path):
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return f"Attempted ({status})"
                     return f"Pending ({mode})"
-
                 elif j_type == 'activity':
                     events = core_api.get_organizer_events(target_id, req_session)
                     target = next((e for e in events if e['eventDate'] == today_str), None)
                     if not target: return "No Event"
-
                     log = core_api.get_activity_log(target['id'], matric, req_session)
                     is_ci, is_co = (log and log.get('checkInTime')), (log and log.get('checkOutTime'))
                     req_co = target.get('requireCheckout', False)
-
                     if (req_co and is_ci and is_co) or (not req_co and is_ci):
                         create_notification(matric, 'activity', target.get('name'), 'SUCCESS', 'Activity Completed', mode)
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return "Completed"
-
                     scan_ci, scan_co = False, False
                     if mode == 'crowd':
                         stats = core_api.get_event_stats(target['id'], req_session)
@@ -624,7 +625,6 @@ def api_handler(path):
                                 if not is_ci: scan_ci = True
                                 if is_ci and not is_co and req_co: scan_co = True
                         except: pass
-
                     if scan_ci:
                         r = core_api.scan_activity_qr(target['id'], matric, 'i')
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
@@ -634,7 +634,6 @@ def api_handler(path):
                             pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                             return f"CI Attempted ({status}) - Job Deleted"
                         return f"CI Attempted ({status}) - Job Kept for CO"
-
                     if scan_co:
                         r = core_api.scan_activity_qr(target['id'], matric, 'o')
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
@@ -642,22 +641,17 @@ def api_handler(path):
                         create_notification(matric, 'activity', target.get('name'), status, f"Check-Out: {r}", mode)
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return f"CO Attempted ({status}) - Job Deleted"
-
                     return f"Pending ({mode})"
                 return "Invalid Type"
 
             with ThreadPoolExecutor(max_workers=5) as ex:
-                f_map = {}
-                for j in jobs:
-                    if time.time() - start_time > 45: break
-                    f_map[ex.submit(process_autoscan_job, j)] = j
+                f_map = {ex.submit(process_autoscan_job, j): j for j in jobs if time.time() - start_time < 45}
                 for f in as_completed(f_map):
                     try: results.append(f.result())
                     except Exception as e: results.append(f"Error: {str(e)}")
 
-            # === AUTO REGISTER JOBS ===
+            # --- AUTO REGISTER JOBS ---
             ar_jobs = pg_db.query("SELECT * FROM auto_register_jobs")
-
             def process_auto_register_job(job):
                 d = dict(job)
                 matric, gid = d['matric'], str(d['gid'])
@@ -668,42 +662,28 @@ def api_handler(path):
                     return "AR Expired"
                 try:
                     course_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (gid,))
-                    code, group = ('Unknown', '') if not course_doc else (course_doc.get('code', 'Unknown'), course_doc.get('course_group', ''))
+                    code, group = (course_doc.get('code', 'Unknown'), course_doc.get('course_group', '')) if course_doc else ('Unknown', '')
                     stud_doc = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (matric,))
                     pwd = stud_doc.get('password') if stud_doc else ''
-
-                    if not pwd or pwd == 'Unknown':
-                        return "AR Pending (No Password)"
-
+                    if not pwd or pwd == 'Unknown': return "AR Pending (No Password)"
                     sem = get_sys_config().get('current_semester', '2025/2026-2')
                     status_c, resp_c = core_api.register_course(matric, pwd, code, gid, sem, group, "P")
-                    is_success = status_c == 200 and ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
-
+                    is_success = ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
                     if not is_success and ("error\":true" in resp_c.replace(" ", "").lower() or "taraf" in resp_c.lower() or "syarat" in resp_c.lower()):
                         status_c, resp_c = core_api.register_course(matric, pwd, code, gid, sem, group, "T")
-                        is_success = status_c == 200 and ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
-
+                        is_success = ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
                     status = 'SUCCESS' if is_success else 'FAILED'
                     create_notification(matric, 'class', f'{code} {group}', status, f'Auto Register: {str(resp_c)[:80]}', 'auto')
-
                     if is_success:
                         pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, matric, gid))
-                        pg_db.execute("UPDATE courses SET last_student_sync = 0 WHERE id = %s", (gid,))
                         pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (matric, gid))
-
                     return f"AR {status}"
-                except Exception as e:
-                    return f"AR Error: {str(e)}"
-
+                except Exception as e: return f"AR Error: {str(e)}"
             with ThreadPoolExecutor(max_workers=5) as ex:
-                ar_map = {}
-                for j in ar_jobs:
-                    if time.time() - start_time > 45: break
-                    ar_map[ex.submit(process_auto_register_job, j)] = j
+                ar_map = {ex.submit(process_auto_register_job, j): j for j in ar_jobs if time.time() - start_time < 45}
                 for f in as_completed(ar_map):
                     try: results.append(f.result())
                     except Exception as e: results.append(f"AR Error: {str(e)}")
-
             return Response(f"Jobs: {len(jobs)} | AR Jobs: {len(ar_jobs)} | Processed: {len(results)}", headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -713,57 +693,36 @@ def api_handler(path):
             docs = pg_db.query("SELECT * FROM notifications WHERE matric = %s ORDER BY timestamp DESC", (matric,))
             res = [{"id": str(d.get('id', '')), **dict(d)} for d in docs]
             for r in res:
-                if 'timestamp' in r and isinstance(r['timestamp'], datetime):
-                    r['timestamp'] = r['timestamp'].isoformat()
-            return Response(json.dumps(res), headers=headers)
+                if 'timestamp' in r and isinstance(r['timestamp'], datetime): r['timestamp'] = r['timestamp'].isoformat()
+            return Response(json.dumps(res, default=json_serial), headers=headers)
         elif request.method == 'DELETE':
-            nid = args.get('id')
-            pg_db.execute("DELETE FROM notifications WHERE id = %s", (nid,))
+            nid = args.get('id'); pg_db.execute("DELETE FROM notifications WHERE id = %s", (nid,))
             return jsonify({"status": "deleted"})
 
     elif path == '/profile':
         try:
             req_session = get_authorized_session()
             data = core_api.get_student_biodata(args.get('matric'), req_session)
-            if data: return Response(json.dumps(data), headers=headers)
+            if data: return Response(json.dumps(data, default=json_serial), headers=headers)
             else: return jsonify({"error": "No Data"}), 404
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/cron_verify':
         try:
-            cfg = get_sys_config()
-            curr_id = cfg.get("verify_start_id", "")
-
-            if curr_id:
-                docs = pg_db.query("SELECT * FROM students WHERE matric > %s ORDER BY matric LIMIT 100", (curr_id,))
-            else:
-                docs = pg_db.query("SELECT * FROM students ORDER BY matric LIMIT 100")
-
+            cfg = get_sys_config(); curr_id = cfg.get("verify_start_id", "")
+            if curr_id: docs = pg_db.query("SELECT * FROM students WHERE matric > %s ORDER BY matric LIMIT 100", (curr_id,))
+            else: docs = pg_db.query("SELECT * FROM students ORDER BY matric LIMIT 100")
             if not docs and curr_id:
                 pg_db.execute("UPDATE system_config SET verify_start_id = '' WHERE id = 'config'")
                 return Response("Reset verify pointer.", headers=headers)
-
-            results = []
-            last_id = curr_id
-            start_time = time.time()
-            active_sem = cfg.get('current_semester', '2025/2026-2')
-
-            def verify_student_wrapper(m, data, pwd, active_sem):
-                success, msg = verify_and_save_student(m, data, pwd, active_sem)
-                return msg
-
+            results, last_id, start_time, active_sem = [], curr_id, time.time(), cfg.get('current_semester', '2025/2026-2')
             with ThreadPoolExecutor(max_workers=10) as ex:
                 futures = {}
                 try: req_s = get_authorized_session()
                 except: req_s = None
-
                 for d in docs:
                     if time.time() - start_time > 45: break
-                    last_id = d['matric']
-                    m = d['matric']
-                    data = dict(d)
-                    pwd = data.get('password')
-
+                    last_id, m, data, pwd = d['matric'], d['matric'], dict(d), d.get('password')
                     if (not pwd or pwd == 'Unknown') and req_s:
                         try:
                             bio = core_api.get_student_biodata(m, req_s)
@@ -771,36 +730,28 @@ def api_handler(path):
                                 ic = bio.get('noKadPengenalan') or bio.get('noIc')
                                 if ic: pwd = f"Unimas!{ic}"
                         except: pass
-
-                    futures[ex.submit(verify_student_wrapper, m, data, pwd, active_sem)] = m
-
-            tt_valid = 0
-            login_valid = 0
+                    futures[ex.submit(verify_and_save_student, m, data, pwd, active_sem)] = m
+            tt_valid, login_valid = 0, 0
             for f in as_completed(futures):
                 try:
-                    msg = f.result()
-                    if "Valid -" in msg: login_valid += 1
+                    success, msg = f.result()
+                    if success: login_valid += 1
                     if "TT: True" in msg: tt_valid += 1
                 except: pass
-
             if last_id: pg_db.execute("UPDATE system_config SET verify_start_id = %s WHERE id = 'config'", (last_id,))
             log_str = f"Processed: {len(futures)} | Valid Logins: {login_valid} | Valid+TT: {tt_valid} | Pointer: {curr_id or 'START'} -> {last_id}"
             save_sys_log("CRON VERIFY", "SUCCESS", len(futures))
-            return Response(json.dumps({"processed": len(futures), "details": log_str}), headers=headers)
+            return Response(json.dumps({"processed": len(futures), "details": log_str}, default=json_serial), headers=headers)
         except Exception as e:
             save_sys_log("CRON VERIFY", "ERROR", 0)
             return jsonify({"error": str(e)}), 500
-
 
     elif path == '/student_details_proxy':
         m, pwd = args.get('matric'), args.get('password')
         if not pwd:
             doc = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (m,))
             pwd = doc.get('password') if doc else None
-
-        if not pwd or pwd == 'Unknown':
-            return jsonify({"error": "No valid password"}), 401
-
+        if not pwd or pwd == 'Unknown': return jsonify({"error": "No valid password"}), 401
         try:
             results = {}
             with ThreadPoolExecutor(max_workers=7) as ex:
@@ -816,197 +767,120 @@ def api_handler(path):
                 for key, f in futures.items():
                     try: results[key] = f.result()
                     except: results[key] = None
-
-            return Response(json.dumps(results), headers=headers)
+            return Response(json.dumps(results, default=json_serial), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
-    # ==========================================
-    #  TOOLS & MASTER API
-    # ==========================================
+    elif path == '/directory_dump':
+        try:
+            # High-performance full directory dump for client-side filtering
+            # Fetches only essential fields to minimize bandwidth.
+            # Compressed m=matric, n=name, f=faculty, p=program, i=intake, c=cgpa, pw=password (for status check)
+            sql = "SELECT matric as m, name as n, faculty as f, program as p, intake_year as i, cgpa as c, password as pw FROM students ORDER BY matric"
+            data = pg_db.query(sql)
+            return Response(json.dumps(list(data), default=json_serial), headers=headers)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
     elif path == '/tools/details':
-        query, q_type = args.get('q'), args.get('t') # t = 's' (student) or 'c' (course)
+        query, q_type = args.get('q'), args.get('t')
         try:
             res = []
             if q_type == 'c':
-                # Fixed: Support both Code (string) and ID (numeric)
                 if query.isdigit():
-                    docs = pg_db.query("SELECT * FROM courses WHERE id = %s", (query,))
-                else:
-                    docs = pg_db.query("SELECT * FROM courses WHERE code = %s", (query,))
-                
-                # Live Fallback: if no groups in DB, fetch from API
-                if not docs and not query.isdigit():
-                    try:
-                        req_s = get_authorized_session()
-                        # This will populate courses table if valid groups are found
-                        # For now, just return empty so it doesn't crash, 
-                        # but real fix would be a core_api.search_course
-                        pass
-                    except: pass
-
-                for data in docs:
-                    res.append({"id": str(data['id']), "group": data.get('course_group'), "name": data.get('name'), "code": data.get('code'), "students": len(data.get('enrolled_students') or [])})
+                    c_rec = pg_db.query_one("SELECT code FROM courses WHERE id = %s", (query,))
+                    docs = pg_db.query("SELECT * FROM courses WHERE code = %s", (c_rec['code'],)) if c_rec else []
+                else: docs = pg_db.query("SELECT * FROM courses WHERE code = %s", (query,))
+                for d in docs: res.append({"id": str(d['id']), "group": d.get('course_group'), "name": d.get('name'), "code": d.get('code'), "students": len(d.get('enrolled_students') or [])})
             elif q_type == 's':
                 s_data = pg_db.query_one("SELECT * FROM students WHERE matric = %s", (query,))
                 if s_data:
                     for gid in (s_data.get('groups') or []):
                         c_data = pg_db.query_one("SELECT * FROM courses WHERE id = %s", (gid,))
-                        if c_data:
-                            res.append({"id": str(gid), "group": c_data.get('course_group'), "name": c_data.get('name'), "code": c_data.get('code'), "students": len(c_data.get('enrolled_students') or [])})
-            return Response(json.dumps(res), headers=headers)
+                        if c_data: res.append({"id": str(gid), "group": c_data.get('course_group'), "name": c_data.get('name'), "code": c_data.get('code'), "students": len(c_data.get('enrolled_students') or [])})
+            return Response(json.dumps(res, default=json_serial), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/tools/timetable':
         gid = args.get('gid')
         try:
-            req_s = get_authorized_session()
-            slots = core_api.get_timetable(gid, req_s)
-            if not slots or not isinstance(slots, list):
-                return Response(json.dumps({"timetable": "No Timetable"}), headers=headers)
-            # Build a compact textual timetable summary
+            req_s = get_authorized_session(); slots = core_api.get_timetable(gid, req_s)
+            if not slots or not isinstance(slots, list): return Response(json.dumps({"error": "No Timetable"}, default=json_serial), headers=headers)
             day_map = {}
             for s in slots:
                 if not isinstance(s, dict): continue
-                day = s.get('KETERANGAN_HARI', '')
-                start = s.get('MASA_MULA', '')
-                end = s.get('MASA_TAMAT', '')
-                loc = s.get('LOKASI', '')
-                key = (day, start, end, loc)
+                key = (s.get('KETERANGAN_HARI', ''), s.get('MASA_MULA', ''), s.get('MASA_TAMAT', ''), s.get('LOKASI', ''))
                 day_map[key] = True
             parts = [f"{d} {st}-{en} | {lc}" for (d, st, en, lc) in sorted(day_map.keys())]
-            summary = " | ".join(parts) if parts else "No Timetable"
-            return Response(json.dumps({"timetable": summary}), headers=headers)
-        except Exception as e: return jsonify({"error": str(e)}), 500
+            return Response(json.dumps({"timetable": " | ".join(parts) if parts else "No Timetable"}, default=json_serial), headers=headers)
+        except: return Response(json.dumps({"timetable": "No Timetable"}, default=json_serial), headers=headers)
 
     elif path == '/tools/session_master':
-
         sid = args.get('sid')
         try:
-            req_s = get_authorized_session()
-            logs = core_api.get_all_session_logs(sid, req_s)
-            return Response(json.dumps(logs), headers=headers)
+            req_s = get_authorized_session(); logs = core_api.get_all_session_logs(sid, req_s)
+            return Response(json.dumps(logs, default=json_serial), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/tools/roster':
         gid = args.get('gid')
         try:
-            req_s = get_authorized_session()
-            students = core_api.get_students(gid, req_s)
-            roster = []
-
-            # --- SUPER FAST FIREBASE BATCH READ ---
+            req_s = get_authorized_session(); students = core_api.get_students(gid, req_s)
             matrics = [s.get("NOMATRIK") for s in students if s.get("NOMATRIK")]
             pwd_map = {}
             if matrics:
                 format_strings = ','.join(['%s'] * len(matrics))
                 docs = pg_db.query(f"SELECT matric, password FROM students WHERE matric IN ({format_strings})", tuple(matrics))
                 pwd_map = {d['matric']: d.get('password', '') for d in docs}
-
-            for s in students:
-                m = s.get("NOMATRIK")
-                pwd = pwd_map.get(m, '')
-                # If password exists, mark as valid automatically
-                roster.append({"matric": m, "name": s.get("NAMAPELAJAR"), "password": pwd, "valid": bool(pwd)})
-
-            return Response(json.dumps(roster), headers=headers)
+            roster = [{"matric": s.get("NOMATRIK"), "name": s.get("NAMAPELAJAR"), "password": pwd_map.get(s.get("NOMATRIK"), ''), "valid": bool(pwd_map.get(s.get("NOMATRIK"), ''))} for s in students]
+            return Response(json.dumps(roster, default=json_serial), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/tools/validate' and request.method == 'POST':
         data = request.get_json()
         m, pwd, auto_fetch, initiator = data.get('matric'), data.get('password'), data.get('auto'), data.get('initiator', 'unknown')
-        req_s = get_authorized_session()
-
         if auto_fetch:
             try:
-                bio = core_api.get_student_biodata(m, req_s)
+                req_s = get_authorized_session(); bio = core_api.get_student_biodata(m, req_s)
                 if bio:
                     ic = bio.get('noKadPengenalan') or bio.get('noIc')
                     if ic: pwd = f"Unimas!{ic}"
             except: pass
-
         if not pwd: return jsonify({"valid": False})
-
-        is_valid = core_api.validate_login(m, pwd)
-        if is_valid:
+        if core_api.validate_login(m, pwd):
             active_sem = get_sys_config().get('current_semester', '2025/2026-2')
             try:
                 student_doc = pg_db.query_one("SELECT * FROM students WHERE matric = %s", (m,))
-                s_data = dict(student_doc) if student_doc else {}
-                verify_and_save_student(m, s_data, pwd, active_sem)
-                log_action("SYSTEM", initiator, "AUTH_VERIFIED", f"System verified new valid credential for user {m} and saved to Directory Cache.")
-            except Exception as e:
-                print("Silent error verifying valid directory manually:", str(e))
-
+                verify_and_save_student(m, dict(student_doc) if student_doc else {}, pwd, active_sem)
+            except: pass
             pg_db.execute("UPDATE students SET password = %s WHERE matric = %s", (pwd, m))
-            log_action(client_ip, initiator, "TOOL_VALIDATE_PWD", f"Target:{m}")
             return jsonify({"valid": True, "password": pwd})
         else:
-            if auto_fetch:
-                # Save as Unknown so it doesn't re-test next time
-                pg_db.execute("INSERT INTO students (matric, password) VALUES (%s, %s) ON CONFLICT (matric) DO UPDATE SET password = EXCLUDED.password", (m, "Unknown"))
+            if auto_fetch: pg_db.execute("INSERT INTO students (matric, password) VALUES (%s, %s) ON CONFLICT (matric) DO UPDATE SET password = EXCLUDED.password", (m, "Unknown"))
             return jsonify({"valid": False})
 
     elif path == '/tools/action' and request.method == 'POST':
         d = request.get_json()
         action, m, pwd, code, cid, group_name, initiator = d.get('action'), d.get('matric'), d.get('password'), d.get('code'), d.get('cid'), d.get('group_name', 'G01'), d.get('initiator', 'unknown')
         sem = get_sys_config().get('current_semester', '2025/2026-2')
-        
-        log_action(client_ip, initiator, f"TOOL_MASTER_{action}", f"Target:{m} Course:{code}({cid})")
-        
         try:
             if not pwd:
                 doc = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (m,))
                 pwd = doc.get('password') if doc else None
-            
-            if not pwd or pwd == 'Unknown':
-                return jsonify({"needs_password": True})
-
-            is_success = False
-
+            if not pwd or pwd == 'Unknown': return jsonify({"needs_password": True})
             if action == "DROP":
                 status, resp = core_api.drop_course(m, pwd, code, cid, sem)
-                is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower() or 'gugur' in resp.lower())
-                
-                if is_success:
-                    pg_db.execute("UPDATE students SET groups = array_remove(groups, %s), password = %s WHERE matric = %s", (str(cid), pwd, m))
-                    pg_db.execute("UPDATE courses SET last_student_sync = 0 WHERE id = %s", (str(cid),))
+                is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or "gugur" in resp.lower())
+                if is_success: pg_db.execute("UPDATE students SET groups = array_remove(groups, %s), password = %s WHERE matric = %s", (str(cid), pwd, m))
             else:
                 status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "P")
-                is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower())
-                
-                if not is_success and ("error\":true" in resp.replace(" ", "").lower() or "taraf" in resp.lower() or "syarat" in resp.lower()):
+                is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower())
+                if not is_success and ("taraf" in resp.lower() or "syarat" in resp.lower()):
                     status, resp = core_api.register_course(m, pwd, code, cid, sem, group_name, "T")
-                    is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower() or '"error":false' in resp.replace(" ", "").lower())
-                
-                if is_success:
-                    # FIX: Enforce str(cid)
-                    pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s), password = %s WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (str(cid), pwd, m, str(cid)))
-                    pg_db.execute("UPDATE courses SET last_student_sync = 0 WHERE id = %s", (str(cid),))
-            
+                    is_success = status == 200 and ("berjaya" in resp.lower() or "success" in resp.lower())
+                if is_success: pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s), password = %s WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (str(cid), pwd, m, str(cid)))
             return jsonify({"status": status, "response": resp, "success": is_success})
         except Exception as e: return jsonify({"error": str(e)}), 500
-        
-    elif path == '/tools/timetable':
-        gid = args.get('gid')
-        try:
-            req_s = get_authorized_session()
-            slots = core_api.get_timetable(gid, req_s)
-            
-            # Format slots for the consolidate function
-            fmt_slots = []
-            for s in (slots or []):
-                fmt_slots.append({"day": s.get('KETERANGAN_HARI'), "start": s.get('MASA_MULA'), "end": s.get('MASA_TAMAT'), "loc": s.get('LOKASI'), "code": "", "name": ""})
-            
-            merged = consolidate_timetable(fmt_slots)
-            tt_str = " | ".join([f"{s['day']} {s['start']}-{s['end']}" for s in merged]) if merged else "No Timetable"
-            return Response(json.dumps({"timetable": tt_str}), headers=headers)
-        except: return Response(json.dumps({"timetable": "No Timetable"}), headers=headers)
 
-    # ==========================================
-    #  ADMIN SYNC CRONS (OPTIMIZED)
-    # ==========================================
-    
     elif path == '/admin_sync_class':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
         log_buffer = []
@@ -1405,7 +1279,7 @@ def api_handler(path):
                                 else: st = "Present"
                             else: st = "Present"
                         evt['status'] = st; evt['log_id'] = lid; evt['can_checkout'] = cco
-            return Response(json.dumps(data), headers=headers)
+            return Response(json.dumps(data, default=json_serial), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/admin_test_system_account':
