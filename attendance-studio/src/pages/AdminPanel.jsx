@@ -35,7 +35,7 @@ export default function AdminPanel() {
   useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}) }, []);
 
   const [formSync, setFormSync] = useState({ 
-      limit: 5000, classStart: 0, studentBatch: 50, actLimit: 5000, actStart: 0, actMonths: 6, forceStudentSync: false 
+      classStart: 0, studentBatch: 50, actStart: 0, actMonths: 6, forceStudentSync: false 
   });
   const [priorityCourses, setPriorityCourses] = useState([]);
   const [courseSearch, setCourseSearch] = useState('');
@@ -75,8 +75,8 @@ export default function AdminPanel() {
 
       if (res.config) {
         setFormSync({
-          limit: res.config.scan_limit || 5000, classStart: res.config.start_id || 100000,
-          studentBatch: res.config.student_sync_batch || 50, actLimit: res.config.act_scan_limit || 5000,
+          classStart: res.config.start_id || 100000,
+          studentBatch: res.config.student_sync_batch || 50,
           actStart: res.config.act_start_id || 107000, actMonths: res.config.act_months || 6,
           forceStudentSync: res.config.force_student_sync || false,
           verifyStartId: res.config.verify_start_id || ""
@@ -101,8 +101,8 @@ export default function AdminPanel() {
   const saveSyncSettings = async () => {
     try {
       await api.post('/admin_dashboard', {
-        key, type: 'save_settings', scan_limit: formSync.limit, last_scanned: formSync.classStart,
-        student_sync_batch: formSync.studentBatch, act_scan_limit: formSync.actLimit,
+        key, type: 'save_settings', last_scanned: formSync.classStart,
+        student_sync_batch: formSync.studentBatch,
         act_start_id: formSync.actStart, act_months: formSync.actMonths, 
         priority_courses: priorityCourses, force_student_sync: formSync.forceStudentSync
       });
@@ -245,8 +245,6 @@ export default function AdminPanel() {
       <div className="admin-section">
         <div className="admin-title">SYNC MANAGER</div>
         <div className="admin-config-grid">
-          <div><label>CLASS LIMIT</label><input type="number" className="t-input" value={formSync.limit} onChange={e => setFormSync({ ...formSync, limit: e.target.value })} /></div>
-          <div><label>ACT LIMIT</label><input type="number" className="t-input" value={formSync.actLimit} onChange={e => setFormSync({ ...formSync, actLimit: e.target.value })} /></div>
           <div><label>STUDENT BATCH</label><input type="number" className="t-input" value={formSync.studentBatch} onChange={e => setFormSync({ ...formSync, studentBatch: e.target.value })} /></div>
         </div>
 

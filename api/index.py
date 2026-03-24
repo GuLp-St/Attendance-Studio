@@ -1000,17 +1000,21 @@ def api_handler(path):
                 pg_db.execute("UPDATE system_config SET current_semester = %s WHERE id = 'config'", (active_sem,))
                 
             curr = cfg['start_id']
-            limit = cfg['scan_limit']
             highest_valid_id = curr
+            last_scanned_id = curr  # tracks progress even if no current-sem courses found
             discovered = []
+            timed_out = False
+            i = curr
             
-            log(f"Scanning from {curr} to {curr + limit}...")
+            log(f"Scanning from {curr} onwards until timeout...")
             start_time = time.time()
-            for i in range(curr, curr + limit, 100):
+            while True:
                 if time.time() - start_time > 45: 
-                    log("Timeout reached. Stopping scan early.")
+                    timed_out = True
+                    log(f"Timeout reached. Stopped at ID {i}. Scanned {i - curr} IDs this run.")
                     break
-                end = min(i + 100, curr + limit)
+                end = i + 100
+                last_scanned_id = end  # always advance, even if no results
                 with ThreadPoolExecutor(max_workers=10) as ex:
                     futures = {ex.submit(core_api.get_group_info, j, req_session): j for j in range(i, end)}
                     for f in as_completed(futures):
@@ -1019,6 +1023,7 @@ def api_handler(path):
                             if not active_sem or res.get('semester') == active_sem:
                                 discovered.append(res)
                                 if res_id > highest_valid_id: highest_valid_id = res_id
+                i = end
                                 
             if discovered:
                 upsert_sql = """
@@ -1033,8 +1038,12 @@ def api_handler(path):
                     tuples.append((str(d['id']), d['code'], d['name'], d['semester'], d['group']))
                 pg_db.execute_batch(upsert_sql, tuples)
 
-            log("Bypassing unified directory rebuilding (Relational Table mapping dynamically).")
-            pg_db.execute("UPDATE system_config SET last_scanned_id = %s WHERE id = 'config'", (highest_valid_id,))
+            # Always advance pointer to where we actually scanned to,
+            # so next run continues forward even if nothing current-sem was found.
+            # Use highest_valid_id if we found something, otherwise use last_scanned_id.
+            next_pointer = highest_valid_id if discovered else last_scanned_id
+            log(f"Pointer advanced to {next_pointer} (discovered {len(discovered)} current-semester courses).")
+            pg_db.execute("UPDATE system_config SET last_scanned_id = %s WHERE id = 'config'", (next_pointer,))
             save_sync_log("CLASS", "SUCCESS", log_buffer, len(discovered))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
@@ -1186,16 +1195,17 @@ def api_handler(path):
             req_session = get_authorized_session() # <--- FIXED
             
             curr = cfg['act_start_id']
-            limit = cfg.get('act_scan_limit', 5000)
             highest_valid_id = curr
             organizers = set()
             start_time = time.time()
+            i = curr
             
-            for i in range(curr, curr + limit, 100):
+            log(f"Scanning activity IDs from {curr} onwards until timeout...")
+            while True:
                 if time.time() - start_time > 45: 
-                    log("Timeout reached. Stopping scan early.")
+                    log(f"Timeout reached. Stopped at ID {i}. Scanned {i - curr} IDs this run.")
                     break
-                end = min(i + 100, curr + limit)
+                end = i + 100
                 with ThreadPoolExecutor(max_workers=20) as ex:
                     futures = {ex.submit(core_api.get_activity_details, j, req_session): j for j in range(i, end)}
                     for f in as_completed(futures):
@@ -1203,6 +1213,7 @@ def api_handler(path):
                             res_id = int(res['id'])
                             if res.get('organizeBy'): organizers.add(res['organizeBy'])
                             if res_id > highest_valid_id: highest_valid_id = res_id
+                i = end
                             
             cutoff = datetime.now() - timedelta(days=30 * cfg['act_months'])
             for org_id in organizers:
@@ -1232,6 +1243,7 @@ def api_handler(path):
                 """, (str(org_id), name, latest, json.dumps(top10)))
                 log(f"Synced {name} - Updated {len(top10)} recent activities")
                 
+            log(f"Pointer advanced to {highest_valid_id} (found {len(organizers)} organizers).")
             pg_db.execute("UPDATE system_config SET act_last_scanned_id = %s WHERE id = 'config'", (highest_valid_id,))
             save_sync_log("ACTIVITY", "SUCCESS", log_buffer, len(organizers))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
