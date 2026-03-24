@@ -39,12 +39,12 @@ import db_pgsql as pg_db
 ADMIN_SECRET_KEY = "nexus"
 FALLBACK_USER = "85699"
 FALLBACK_PASS = "Unimas!010914011427"
-FALLBACK_START_ID = 100000 
+FALLBACK_START_ID = 100000
 FALLBACK_LIMIT = 5000
 FALLBACK_STUDENT_BATCH = 50
 FALLBACK_ACT_START = 107000
 FALLBACK_ACT_LIMIT = 5000
-FALLBACK_ACT_MONTHS = 6 
+FALLBACK_ACT_MONTHS = 6
 
 # ==========================================
 #  HELPERS
@@ -55,10 +55,10 @@ def get_malaysia_time():
 
 def get_sys_config():
     conf = pg_db.query_one("SELECT * FROM system_config WHERE id = 'config'")
-    if not conf: 
+    if not conf:
         pg_db.execute("INSERT INTO system_config (id) VALUES ('config') ON CONFLICT DO NOTHING")
         conf = {}
-    
+
     return {
         "start_id": int(conf.get("last_scanned_id") or 100000),
         "scan_limit": int(conf.get("scan_limit") or 5000),
@@ -78,17 +78,17 @@ def get_authorized_session():
     cfg = get_sys_config()
     sys_m = cfg.get("system_matric")
     pwd = cfg.get("system_pwd")  # Use password stored directly in system_config
-        
+
     if not pwd or pwd == "Unknown":
         # Fallback: find any valid student credential
         docs = pg_db.query("SELECT matric, password FROM students WHERE password IS NOT NULL AND password != 'Unknown' LIMIT 1")
         if docs:
             sys_m = docs[0]['matric']
             pwd = docs[0]['password']
-                
+
     if not sys_m or not pwd:
         raise Exception("CRITICAL: No valid system credentials found in database.")
-        
+
     s = requests.Session()
     core_api.configure_session(s, sys_m, pwd)
     return s
@@ -154,7 +154,7 @@ def consolidate_timetable(slots):
                         if next_s['dt_end'] > curr['dt_end']:
                             curr['dt_end'] = next_s['dt_end']
                             curr['end'] = next_s['end']
-                        continue 
+                        continue
                 merged.append(curr)
                 curr = next_s
             merged.append(curr)
@@ -166,7 +166,7 @@ def consolidate_timetable(slots):
 
 def verify_and_save_student(m, data, pwd, active_sem):
     is_currently_unknown = data.get('password') == 'Unknown'
-    
+
     if not pwd or pwd == 'Unknown':
         if not is_currently_unknown:
             pg_db.execute("UPDATE students SET password = 'Unknown' WHERE matric = %s", (m,))
@@ -177,7 +177,7 @@ def verify_and_save_student(m, data, pwd, active_sem):
         if not is_currently_unknown:
             pg_db.execute("UPDATE students SET password = 'Unknown' WHERE matric = %s", (m,))
         return False, f"{m}: Invalid Data/Credential"
-    
+
     prog = bio.get('namaProgram', 'Unknown')
     transcript = core_api.spc_fetch(f"api/v1/result/transcript/{m}", m, pwd)
     cgpa = 0.0
@@ -186,20 +186,20 @@ def verify_and_save_student(m, data, pwd, active_sem):
             try: cgpa = float(transcript[0]['cgpa'])
             except: pass
     is_timetableable = core_api.validate_login(m, pwd)
-    
+
     faculty = bio.get('Fakulti') or bio.get('fakulti') or bio.get('namaFakulti') or data.get('faculty') or 'Unknown Faculty'
     intake = bio.get('Sesi Pelan') or bio.get('sesiPelan') or data.get('intake') or 'Unknown Intake'
     name = bio.get('nama', data.get('name', 'Unknown'))
-    
+
     pg_db.execute("""
         INSERT INTO students (matric, name, cgpa, program, password, faculty, intake_year, timetable_ready)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (matric) DO UPDATE SET 
-            name = EXCLUDED.name, cgpa = EXCLUDED.cgpa, program = EXCLUDED.program, 
-            password = EXCLUDED.password, faculty = EXCLUDED.faculty, 
+        ON CONFLICT (matric) DO UPDATE SET
+            name = EXCLUDED.name, cgpa = EXCLUDED.cgpa, program = EXCLUDED.program,
+            password = EXCLUDED.password, faculty = EXCLUDED.faculty,
             intake_year = EXCLUDED.intake_year, timetable_ready = EXCLUDED.timetable_ready
     """, (m, name, cgpa, prog, pwd, faculty, intake, is_timetableable))
-    
+
     return True, f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}"
 
 # ==========================================
@@ -215,7 +215,7 @@ def api_handler(path):
         'Access-Control-Allow-Headers': 'Content-Type, X-Device-ID',
         'Content-Type': 'application/json'
     }
-    
+
     if request.method == 'OPTIONS': return Response("", status=204, headers=headers)
 
     actual_path = request.path
@@ -251,13 +251,13 @@ def api_handler(path):
                     if isinstance(acts, str):
                         try: acts = json.loads(acts)
                         except: acts = []
-                    
+
                     act_names = []
                     if isinstance(acts, list):
                         for a in acts:
                             if isinstance(a, dict) and 'name' in a: act_names.append(a['name'])
                             elif isinstance(a, str): act_names.append(a)
-                    
+
                     results.append({
                         "m": org['m'],
                         "n": org['n'],
@@ -275,13 +275,13 @@ def api_handler(path):
             limit = int(d.get('row_limit', 10))
             offset = (page - 1) * limit
             q = args.get('q', '').strip()
-            
+
             # Filters
             faculty = d.get('faculty')
             prog = d.get('programme')
             intake = d.get('intake_year')
             include_unverified = d.get('include_unverified', False)
-            
+
             # Sort
             sort_by = d.get('sort_by', 'name')
             if sort_by not in ['name', 'matric', 'cgpa']: sort_by = 'name'
@@ -293,38 +293,38 @@ def api_handler(path):
 
             if not include_unverified:
                 where_clauses.append("password != 'Unknown' AND password IS NOT NULL")
-            
+
             if q:
                 where_clauses.append("(matric ILIKE %s OR name ILIKE %s)")
                 params.extend([f"%{q}%", f"%{q}%"])
-            
+
             if faculty:
                 where_clauses.append("faculty = %s")
                 params.append(faculty)
-            
+
             if prog:
                 where_clauses.append("program = %s")
                 params.append(prog)
-                
+
             if intake:
                 where_clauses.append("intake_year = %s")
                 params.append(intake)
 
             where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-            
+
             sql = f"""
                 SELECT matric, name, faculty, program as programme, intake_year, cgpa, timetable_ready, password
-                FROM students 
+                FROM students
                 {where_sql}
                 ORDER BY {sort_by} {order}
                 LIMIT %s OFFSET %s
             """
             data = pg_db.query(sql, params + [limit, offset])
-            
+
             count_sql = f"SELECT COUNT(*) as count FROM students {where_sql}"
             count_res = pg_db.query_one(count_sql, params)
             total = count_res['count'] if count_res else 0
-            
+
             # Hierarchy for filters
             hierarchy = {}
             h_data = pg_db.query("SELECT faculty, program, COUNT(*) as count FROM students GROUP BY faculty, program")
@@ -332,7 +332,7 @@ def api_handler(path):
                 f, p, c = row['faculty'], row['program'], row['count']
                 if f not in hierarchy: hierarchy[f] = {}
                 hierarchy[f][p] = c
-                
+
             # Intakes list
             intakes = [r['intake_year'] for r in pg_db.query("SELECT DISTINCT intake_year FROM students WHERE intake_year IS NOT NULL ORDER BY intake_year DESC")]
 
@@ -364,7 +364,7 @@ def api_handler(path):
         log_action(client_ip, matric, "VIEW_DASHBOARD")
         try:
             doc = pg_db.query_one("SELECT * FROM students WHERE matric = %s", (matric,))
-            
+
             # NEW: If student doesn't exist, try to fetch basic identity publicly via system creds
             if not doc:
                 try:
@@ -381,12 +381,12 @@ def api_handler(path):
                 except: pass
 
             if not doc: return jsonify({"error": "User not found in system directory"}), 404
-            
+
             req_session = get_authorized_session()
             user_data = dict(doc)
             group_ids = user_data.get('groups') or []
             following_ids = user_data.get('following') or []
-            
+
             active_autoscan = set()
             try:
                 for j in pg_db.query("SELECT gid FROM autoscan_jobs WHERE matric = %s AND status = 'pending'", (matric,)):
@@ -411,7 +411,7 @@ def api_handler(path):
                 futures = {ex.submit(fetch_group, gid): gid for gid in group_ids}
                 for f in as_completed(futures):
                     gid, info, slots = f.result()
-                    if info: 
+                    if info:
                         info['autoscan_active'] = (gid in active_autoscan)
                         info['gid'] = gid
                         info['sessions'] = None
@@ -421,14 +421,14 @@ def api_handler(path):
                                 if isinstance(s, dict):
                                     raw_timetable.append({"day": s.get('KETERANGAN_HARI'), "start": s.get('MASA_MULA'), "end": s.get('MASA_TAMAT'), "loc": s.get('LOKASI'), "code": info['code'], "name": info['name'], "group": info['group'], "gid": gid})
 
-            
+
             final_courses = list(courses.values())
             final_courses.sort(key=lambda x: x['code'])
-            
+
             return Response(json.dumps({
-                "name": user_data['name'], 
-                "courses": final_courses, 
-                "timetable": consolidate_timetable(raw_timetable), 
+                "name": user_data['name'],
+                "courses": final_courses,
+                "timetable": consolidate_timetable(raw_timetable),
                 "following": following_ids,
                 "auto_register": active_auto_register
             }), headers=headers)
@@ -442,15 +442,15 @@ def api_handler(path):
             req_session = get_authorized_session()
             info = core_api.get_group_info(gid, req_session)
             if not info: raise Exception("Info Fail")
-            
+
             with ThreadPoolExecutor(max_workers=4) as ex:
                 f_m = ex.submit(core_api.get_sessions, gid, req_session)
                 f_h = ex.submit(core_api.get_student_history, matric, info['code'], gid, req_session)
                 ml, hl = f_m.result() or [], f_h.result() or []
-            
+
             ml.sort(key=lambda x: x['eventDate'], reverse=True)
             h_map = {h['jadualKehadiran']['id']: h for h in hl if 'jadualKehadiran' in h and 'id' in h['jadualKehadiran']}
-            
+
             c_sess = []
             for s in ml:
                 st, lid = "Absent", None
@@ -459,7 +459,7 @@ def api_handler(path):
                     sc = ld.get('status')
                     st = "Present (Scan)" if sc == 'P' else "Present (Manual)" if sc == 'M' else "Exempted" if sc == 'L' else sc
                     lid = ld.get('id')
-                
+
                 # FIXED DATE PARSING
                 try:
                     date_str = datetime.fromtimestamp(int(s['eventDate'])/1000).strftime('%Y-%m-%d')
@@ -469,7 +469,7 @@ def api_handler(path):
                 c_sess.append({
                     "id": s['id'], "date": date_str, "start": s['startTime'], "end": s.get('endTime', ''),
                     "location": s.get('venue') or s.get('location') or "Unknown Venue",
-                    "name": s.get('topic') or s.get('description') or "", 
+                    "name": s.get('topic') or s.get('description') or "",
                     "status": st, "log_id": lid
                 })
             return Response(json.dumps(c_sess), headers=headers)
@@ -550,7 +550,7 @@ def api_handler(path):
             req_session = get_authorized_session()
             now_my = get_malaysia_time()
             today_str = now_my.strftime('%Y-%m-%d')
-            
+
             cutoff = now_my - timedelta(days=7)
             pg_db.execute("DELETE FROM system_logs WHERE timestamp < %s", (cutoff,))
 
@@ -564,7 +564,7 @@ def api_handler(path):
                     create_notification(d['matric'], d.get('job_type','class'), d.get('gid', 'Unknown'), 'FAILED', 'Autoscan Expired (24h)', d.get('mode','crowd'))
                     pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (d['matric'], d['gid']))
                     return "Cleaned (Expired)"
-                
+
                 matric, target_id = d['matric'], str(d['gid'])
                 mode, j_type = d.get('mode', 'crowd'), d.get('job_type', 'class')
 
@@ -572,13 +572,13 @@ def api_handler(path):
                     sessions = core_api.get_sessions(target_id, req_session)
                     target = next((s for s in sessions if datetime.fromtimestamp(s['eventDate']/1000).strftime('%Y-%m-%d') == today_str), None)
                     if not target: return "No Class"
-                    
+
                     my_log = core_api.get_log(target['id'], matric, req_session)
                     if my_log and my_log.get('status') == 'P':
                         create_notification(matric, 'class', f"Class {target_id}", 'SUCCESS', 'Already marked Present', mode)
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return "Already Present"
-                    
+
                     should_scan = False
                     if mode == 'crowd' and core_api.get_attendance_count(target['id'], req_session) >= 5: should_scan = True
                     elif mode == 'time':
@@ -586,7 +586,7 @@ def api_handler(path):
                             dt_end = datetime.strptime(f"{today_str} {target['endTime']}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
                             if (dt_end.timestamp() - 1200) <= now_my.timestamp(): should_scan = True
                         except: pass
-                    
+
                     if should_scan:
                         res = core_api.scan_qr(target['id'], matric, req_session)
                         is_success = ("Success" in res or "taken" in res.lower() or ("Server:" in res and "Server Error" not in res))
@@ -595,21 +595,21 @@ def api_handler(path):
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return f"Attempted ({status})"
                     return f"Pending ({mode})"
-                
+
                 elif j_type == 'activity':
                     events = core_api.get_organizer_events(target_id, req_session)
                     target = next((e for e in events if e['eventDate'] == today_str), None)
                     if not target: return "No Event"
-                    
+
                     log = core_api.get_activity_log(target['id'], matric, req_session)
                     is_ci, is_co = (log and log.get('checkInTime')), (log and log.get('checkOutTime'))
                     req_co = target.get('requireCheckout', False)
-                    
+
                     if (req_co and is_ci and is_co) or (not req_co and is_ci):
                         create_notification(matric, 'activity', target.get('name'), 'SUCCESS', 'Activity Completed', mode)
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return "Completed"
-                        
+
                     scan_ci, scan_co = False, False
                     if mode == 'crowd':
                         stats = core_api.get_event_stats(target['id'], req_session)
@@ -624,8 +624,8 @@ def api_handler(path):
                                 if not is_ci: scan_ci = True
                                 if is_ci and not is_co and req_co: scan_co = True
                         except: pass
-                    
-                    if scan_ci: 
+
+                    if scan_ci:
                         r = core_api.scan_activity_qr(target['id'], matric, 'i')
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
                         status = "SUCCESS" if is_success else "FAILED"
@@ -635,14 +635,14 @@ def api_handler(path):
                             return f"CI Attempted ({status}) - Job Deleted"
                         return f"CI Attempted ({status}) - Job Kept for CO"
 
-                    if scan_co: 
+                    if scan_co:
                         r = core_api.scan_activity_qr(target['id'], matric, 'o')
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
                         status = "SUCCESS" if is_success else "FAILED"
                         create_notification(matric, 'activity', target.get('name'), status, f"Check-Out: {r}", mode)
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return f"CO Attempted ({status}) - Job Deleted"
-                    
+
                     return f"Pending ({mode})"
                 return "Invalid Type"
 
@@ -671,26 +671,26 @@ def api_handler(path):
                     code, group = ('Unknown', '') if not course_doc else (course_doc.get('code', 'Unknown'), course_doc.get('course_group', ''))
                     stud_doc = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (matric,))
                     pwd = stud_doc.get('password') if stud_doc else ''
-                    
+
                     if not pwd or pwd == 'Unknown':
                         return "AR Pending (No Password)"
-                        
+
                     sem = get_sys_config().get('current_semester', '2025/2026-2')
                     status_c, resp_c = core_api.register_course(matric, pwd, code, gid, sem, group, "P")
                     is_success = status_c == 200 and ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
-                    
+
                     if not is_success and ("error\":true" in resp_c.replace(" ", "").lower() or "taraf" in resp_c.lower() or "syarat" in resp_c.lower()):
                         status_c, resp_c = core_api.register_course(matric, pwd, code, gid, sem, group, "T")
                         is_success = status_c == 200 and ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
 
                     status = 'SUCCESS' if is_success else 'FAILED'
                     create_notification(matric, 'class', f'{code} {group}', status, f'Auto Register: {str(resp_c)[:80]}', 'auto')
-                    
+
                     if is_success:
                         pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, matric, gid))
                         pg_db.execute("UPDATE courses SET last_student_sync = 0 WHERE id = %s", (gid,))
                         pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (matric, gid))
-                        
+
                     return f"AR {status}"
                 except Exception as e:
                     return f"AR Error: {str(e)}"
@@ -733,21 +733,21 @@ def api_handler(path):
         try:
             cfg = get_sys_config()
             curr_id = cfg.get("verify_start_id", "")
-            
+
             if curr_id:
                 docs = pg_db.query("SELECT * FROM students WHERE matric > %s ORDER BY matric LIMIT 100", (curr_id,))
             else:
                 docs = pg_db.query("SELECT * FROM students ORDER BY matric LIMIT 100")
-            
+
             if not docs and curr_id:
                 pg_db.execute("UPDATE system_config SET verify_start_id = '' WHERE id = 'config'")
                 return Response("Reset verify pointer.", headers=headers)
-                
+
             results = []
             last_id = curr_id
             start_time = time.time()
             active_sem = cfg.get('current_semester', '2025/2026-2')
-            
+
             def verify_student_wrapper(m, data, pwd, active_sem):
                 success, msg = verify_and_save_student(m, data, pwd, active_sem)
                 return msg
@@ -756,14 +756,14 @@ def api_handler(path):
                 futures = {}
                 try: req_s = get_authorized_session()
                 except: req_s = None
-                
+
                 for d in docs:
                     if time.time() - start_time > 45: break
                     last_id = d['matric']
                     m = d['matric']
                     data = dict(d)
                     pwd = data.get('password')
-                    
+
                     if (not pwd or pwd == 'Unknown') and req_s:
                         try:
                             bio = core_api.get_student_biodata(m, req_s)
@@ -771,18 +771,18 @@ def api_handler(path):
                                 ic = bio.get('noKadPengenalan') or bio.get('noIc')
                                 if ic: pwd = f"Unimas!{ic}"
                         except: pass
-                        
+
                     futures[ex.submit(verify_student_wrapper, m, data, pwd, active_sem)] = m
-                    
+
             tt_valid = 0
             login_valid = 0
             for f in as_completed(futures):
-                try: 
+                try:
                     msg = f.result()
                     if "Valid -" in msg: login_valid += 1
                     if "TT: True" in msg: tt_valid += 1
                 except: pass
-            
+
             if last_id: pg_db.execute("UPDATE system_config SET verify_start_id = %s WHERE id = 'config'", (last_id,))
             log_str = f"Processed: {len(futures)} | Valid Logins: {login_valid} | Valid+TT: {tt_valid} | Pointer: {curr_id or 'START'} -> {last_id}"
             save_sys_log("CRON VERIFY", "SUCCESS", len(futures))
@@ -801,7 +801,7 @@ def api_handler(path):
         sort_order = req_body.get('sort_order', 'asc')
         intake_filt = req_body.get('intake_year', '')
         search_q = args.get('q', '').strip().upper()
-        
+
         try:
             db_docs = pg_db.query("SELECT * FROM students")
             all_valid = []
@@ -821,17 +821,17 @@ def api_handler(path):
                     "timetable_ready": bool(s.get('groups')),
                     "password": s.get('password')
                 })
-                        
+
             if search_q:
                 all_valid = [x for x in all_valid if search_q in x.get('name', '').upper() or search_q in x.get('matric','')]
-                
+
             if intake_filt:
                 all_valid = [x for x in all_valid if x.get('intake_year') == intake_filt]
-            
+
             # 1. Normalize fields
             for x in all_valid:
                 x['programme'] = x.get('program', x.get('programme', 'Unknown Programme'))
-            
+
             # 2. Extract hierarchy: Faculty -> { Programme: Count }
             hierarchy = {}
             for x in all_valid:
@@ -839,14 +839,14 @@ def api_handler(path):
                 p = x.get('programme')
                 if f not in hierarchy: hierarchy[f] = {}
                 hierarchy[f][p] = hierarchy[f].get(p, 0) + 1
-                
+
             # 3. Always calculate CGPA percentiles per programme FIRST (so colors are accurate globally)
             prog_groups = {}
             for v in all_valid:
                 p = v.get('programme')
                 if p not in prog_groups: prog_groups[p] = []
                 prog_groups[p].append(v)
-                
+
             for p, group in prog_groups.items():
                 group.sort(key=lambda x: x.get('cgpa', 0), reverse=True)
                 total = len(group)
@@ -855,7 +855,7 @@ def api_handler(path):
                     pct = (rank / total) * 100 if total > 0 else 0
                     v['rank'] = rank
                     v['top_pct'] = round(pct)
-                    
+
             # 4. Filter by selected program/faculty
             selected_prog = req_body.get('programme')
             selected_fac = req_body.get('faculty')
@@ -863,9 +863,9 @@ def api_handler(path):
                 all_valid = [v for v in all_valid if v.get('programme') == selected_prog]
             elif selected_fac:
                 all_valid = [v for v in all_valid if v.get('faculty') == selected_fac]
-                
+
             intakes = sorted(list({x.get('intake_year') for x in all_valid if x.get('intake_year')}), reverse=True)
-                
+
             # 5. Sort
             rev = (sort_order == 'desc')
             if sort_by == 'cgpa':
@@ -874,12 +874,12 @@ def api_handler(path):
                 all_valid.sort(key=lambda x: x.get('matric', ''), reverse=rev)
             else:
                 all_valid.sort(key=lambda x: x.get('name', ''), reverse=rev)
-                
+
             total_matches = len(all_valid)
             start_idx = (page - 1) * limit_val
             end_idx = start_idx + limit_val
             paged = all_valid[start_idx:end_idx]
-            
+
             req_matric = args.get('matric')
             if req_matric and sort_by == 'cgpa':
                 # Force visibility of own row at bottom if out of scope
@@ -889,7 +889,7 @@ def api_handler(path):
                     if owner_row:
                         owner_row['is_appended_owner'] = True
                         paged.append(owner_row)
-            
+
             res_data = {
                 "page": page, "limit": limit_val, "total": total_matches, "total_pages": max(1, (total_matches + limit_val - 1) // limit_val),
                 "hierarchy": hierarchy, "intakes": intakes, "data": paged
@@ -902,10 +902,10 @@ def api_handler(path):
         if not pwd:
             doc = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (m,))
             pwd = doc.get('password') if doc else None
-        
+
         if not pwd or pwd == 'Unknown':
             return jsonify({"error": "No valid password"}), 401
-            
+
         try:
             results = {}
             with ThreadPoolExecutor(max_workers=7) as ex:
@@ -921,7 +921,7 @@ def api_handler(path):
                 for key, f in futures.items():
                     try: results[key] = f.result()
                     except: results[key] = None
-                    
+
             return Response(json.dumps(results), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -984,7 +984,7 @@ def api_handler(path):
             req_s = get_authorized_session()
             students = core_api.get_students(gid, req_s)
             roster = []
-            
+
             # --- SUPER FAST FIREBASE BATCH READ ---
             matrics = [s.get("NOMATRIK") for s in students if s.get("NOMATRIK")]
             pwd_map = {}
@@ -992,13 +992,13 @@ def api_handler(path):
                 format_strings = ','.join(['%s'] * len(matrics))
                 docs = pg_db.query(f"SELECT matric, password FROM students WHERE matric IN ({format_strings})", tuple(matrics))
                 pwd_map = {d['matric']: d.get('password', '') for d in docs}
-            
+
             for s in students:
                 m = s.get("NOMATRIK")
                 pwd = pwd_map.get(m, '')
                 # If password exists, mark as valid automatically
                 roster.append({"matric": m, "name": s.get("NAMAPELAJAR"), "password": pwd, "valid": bool(pwd)})
-            
+
             return Response(json.dumps(roster), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -1006,7 +1006,7 @@ def api_handler(path):
         data = request.get_json()
         m, pwd, auto_fetch, initiator = data.get('matric'), data.get('password'), data.get('auto'), data.get('initiator', 'unknown')
         req_s = get_authorized_session()
-        
+
         if auto_fetch:
             try:
                 bio = core_api.get_student_biodata(m, req_s)
@@ -1014,9 +1014,9 @@ def api_handler(path):
                     ic = bio.get('noKadPengenalan') or bio.get('noIc')
                     if ic: pwd = f"Unimas!{ic}"
             except: pass
-            
+
         if not pwd: return jsonify({"valid": False})
-        
+
         is_valid = core_api.validate_login(m, pwd)
         if is_valid:
             active_sem = get_sys_config().get('current_semester', '2025/2026-2')
@@ -1027,7 +1027,7 @@ def api_handler(path):
                 log_action("SYSTEM", initiator, "AUTH_VERIFIED", f"System verified new valid credential for user {m} and saved to Directory Cache.")
             except Exception as e:
                 print("Silent error verifying valid directory manually:", str(e))
-                
+
             pg_db.execute("UPDATE students SET password = %s WHERE matric = %s", (pwd, m))
             log_action(client_ip, initiator, "TOOL_VALIDATE_PWD", f"Target:{m}")
             return jsonify({"valid": True, "password": pwd})
@@ -1315,9 +1315,10 @@ def api_handler(path):
             i = curr
             
             log(f"Scanning activity IDs from {curr} onwards until timeout...")
+            # 1. DISCOVERY PHASE
             while True:
                 if time.time() - start_time > 45: 
-                    log(f"Timeout reached. Stopped at ID {i}. Scanned {i - curr} IDs this run.")
+                    log(f"Discovery paused. Stopped at ID {i}. Found {len(organizers)} organizers.")
                     break
                 end = i + 100
                 with ThreadPoolExecutor(max_workers=20) as ex:
@@ -1328,9 +1329,18 @@ def api_handler(path):
                             if res.get('organizeBy'): organizers.add(res['organizeBy'])
                             if res_id > highest_valid_id: highest_valid_id = res_id
                 i = end
-                            
+            
+            # Save progress from discovery immediately
+            pg_db.execute("UPDATE system_config SET act_last_scanned_id = %s WHERE id = 'config'", (highest_valid_id,))
+            
+            # 2. PROCESSING PHASE
             cutoff = datetime.now() - timedelta(days=30 * cfg['act_months'])
+            processed = 0
             for org_id in organizers:
+                if time.time() - start_time > 55:
+                    log("Global timeout reached. Saving and stopping.")
+                    break
+                    
                 events = core_api.get_organizer_events(org_id, req_session)
                 if not events: continue
                 valid_events, latest = [], datetime.min
@@ -1340,12 +1350,17 @@ def api_handler(path):
                         if edate > latest: latest = edate
                         valid_events.append({"id": e['id'], "name": e['name'], "date": e['eventDate'], "start": e['startTime'], "end": e['endTime'], "location": e['location'], "require_checkout": e.get('requireCheckout', False)})
                     except: pass
+                
                 if latest < cutoff: continue
                 valid_events.sort(key=lambda x: x['date'], reverse=True)
                 top10 = valid_events[:10]
-                bio = core_api.get_student_biodata(org_id, req_session)
+                
+                # Use a generic name if biodata fetch is slow/missing
                 name = f"Organizer {org_id}"
-                if bio: name = bio.get('NAMAPELAJAR') or bio.get('namaPelajar') or bio.get('Name') or name
+                try:
+                    bio = core_api.get_student_biodata(org_id, req_session)
+                    if bio: name = bio.get('NAMAPELAJAR') or bio.get('namaPelajar') or bio.get('Name') or name
+                except: pass
                 
                 pg_db.execute("""
                     INSERT INTO organizers (id, name, last_active, activities)
@@ -1355,13 +1370,13 @@ def api_handler(path):
                         last_active = EXCLUDED.last_active, 
                         activities = EXCLUDED.activities
                 """, (str(org_id), name, latest, json.dumps(top10)))
-                log(f"Synced {name} - Updated {len(top10)} recent activities")
+                processed += 1
                 
-            log(f"Pointer advanced to {highest_valid_id} (found {len(organizers)} organizers).")
-            pg_db.execute("UPDATE system_config SET act_last_scanned_id = %s WHERE id = 'config'", (highest_valid_id,))
-            save_sync_log("ACTIVITY", "SUCCESS", log_buffer, len(organizers))
+            log(f"Sync complete. Advanced pointer to {highest_valid_id}. Processed {processed} organizers.")
+            save_sync_log("ACTIVITY", "SUCCESS", log_buffer, processed)
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
+            traceback.print_exc()
             save_sync_log("ACTIVITY", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
 
