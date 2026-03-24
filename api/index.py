@@ -968,7 +968,7 @@ def api_handler(path):
             if priority_codes:
                 log(f"Processing {len(priority_codes)} Priority Courses first...")
                 for code in priority_codes:
-                    docs = pg_db.query("SELECT id, code, name, semester, course_group AS group FROM courses WHERE code = %s AND semester = %s", (code, active_sem))
+                    docs = pg_db.query("SELECT id, code, name, semester, course_group AS group FROM courses WHERE (code = %s OR id = %s) AND semester = %s", (code, code, active_sem))
                     for d in docs:
                         target_courses.append(dict(d))
                         seen_gids.add(d['id'])
