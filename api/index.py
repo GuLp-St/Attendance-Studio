@@ -202,13 +202,13 @@ def verify_and_save_student(m, data, pwd, active_sem):
     name = bio.get('nama', data.get('name', 'Unknown'))
 
     pg_db.execute("""
-        INSERT INTO students (matric, name, cgpa, program, password, faculty, intake_year, timetable_ready)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO students (matric, name, cgpa, program, password, faculty, intake_year, timetable_ready, last_verified)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (matric) DO UPDATE SET
             name = EXCLUDED.name, cgpa = EXCLUDED.cgpa, program = EXCLUDED.program,
             password = EXCLUDED.password, faculty = EXCLUDED.faculty,
-            intake_year = EXCLUDED.intake_year, timetable_ready = EXCLUDED.timetable_ready
-    """, (m, name, cgpa, prog, pwd, faculty, intake, is_timetableable))
+            intake_year = EXCLUDED.intake_year, timetable_ready = EXCLUDED.timetable_ready, last_verified = EXCLUDED.last_verified
+    """, (m, name, cgpa, prog, pwd, faculty, intake, is_timetableable, get_malaysia_time()))
 
     return True, f"{m}: Valid - CGPA {cgpa} - TT: {is_timetableable}"
 
@@ -709,20 +709,16 @@ def api_handler(path):
 
     elif path == '/cron_verify':
         try:
-            cfg = get_sys_config(); curr_id = cfg.get("verify_start_id", "")
-            if curr_id: docs = pg_db.query("SELECT * FROM students WHERE matric > %s ORDER BY matric LIMIT 100", (curr_id,))
-            else: docs = pg_db.query("SELECT * FROM students ORDER BY matric LIMIT 100")
-            if not docs and curr_id:
-                pg_db.execute("UPDATE system_config SET verify_start_id = '' WHERE id = 'config'")
-                return Response("Reset verify pointer.", headers=headers)
-            results, last_id, start_time, active_sem = [], curr_id, time.time(), cfg.get('current_semester', '2025/2026-2')
+            cfg = get_sys_config()
+            docs = pg_db.query("SELECT * FROM students ORDER BY last_verified ASC NULLS FIRST LIMIT 100")
+            results, start_time, active_sem = [], time.time(), cfg.get('current_semester', '2025/2026-2')
             with ThreadPoolExecutor(max_workers=10) as ex:
                 futures = {}
                 try: req_s = get_authorized_session()
                 except: req_s = None
                 for d in docs:
                     if time.time() - start_time > 45: break
-                    last_id, m, data, pwd = d['matric'], d['matric'], dict(d), d.get('password')
+                    m, data, pwd = d['matric'], dict(d), d.get('password')
                     if (not pwd or pwd == 'Unknown') and req_s:
                         try:
                             bio = core_api.get_student_biodata(m, req_s)
@@ -738,8 +734,7 @@ def api_handler(path):
                     if success: login_valid += 1
                     if "TT: True" in msg: tt_valid += 1
                 except: pass
-            if last_id: pg_db.execute("UPDATE system_config SET verify_start_id = %s WHERE id = 'config'", (last_id,))
-            log_str = f"Processed: {len(futures)} | Valid Logins: {login_valid} | Valid+TT: {tt_valid} | Pointer: {curr_id or 'START'} -> {last_id}"
+            log_str = f"Processed: {len(futures)} | Valid Logins: {login_valid} | Valid+TT: {tt_valid} | Queue rotated."
             save_sys_log("CRON VERIFY", "SUCCESS", len(futures))
             return Response(json.dumps({"processed": len(futures), "details": log_str}, default=json_serial), headers=headers)
         except Exception as e:
@@ -1174,18 +1169,8 @@ def api_handler(path):
             log("Starting Directory Verification...")
             cfg = get_sys_config()
             active_sem = cfg.get('current_semester', '2025/2026-2')
-            curr_id = cfg.get("verify_start_id", "")
-            
-            log(f"Fetching verifiable accounts from {curr_id or 'start'} (LIMIT 300) to protect database quota...")
-            if curr_id:
-                docs = pg_db.query("SELECT * FROM students WHERE matric > %s ORDER BY matric LIMIT 300", (curr_id,))
-            else:
-                docs = pg_db.query("SELECT * FROM students ORDER BY matric LIMIT 300")
-                
-            if not docs and curr_id:
-                pg_db.execute("UPDATE system_config SET verify_start_id = '' WHERE id = 'config'")
-                log("Reached the end of students database. Pointer reset to beginning.")
-                return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
+            log("Fetching up to 300 of the least recently verified accounts...")
+            docs = pg_db.query("SELECT * FROM students ORDER BY last_verified ASC NULLS FIRST LIMIT 300")
                 
             start_time = time.time()
             results = []
@@ -1228,9 +1213,7 @@ def api_handler(path):
                     except Exception as e: 
                         pass
 
-            if last_id: pg_db.execute("UPDATE system_config SET verify_start_id = %s WHERE id = 'config'", (last_id,))
-            log(f"Batch Range: {curr_id or 'START'} -> {last_id}")
-            log(f"Processed {len(results)} accounts with existing passwords.")
+            log(f"Processed {len(results)} accounts from the priority queue.")
             log(f"Results: {login_valid_count} Valid Logins | {tt_valid_count} Valid+Timetable.")
             save_sys_log("MANUAL VERIFY", "SUCCESS", len(results))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
@@ -1313,9 +1296,7 @@ def api_handler(path):
                     auto_accounts.append({"matric": s['matric'], "password": s['password']})
                 auto_accounts.sort(key=lambda x: int(x['matric']) if str(x['matric']).isdigit() else 0, reverse=True)
 
-                def json_serial(obj):
-                    if isinstance(obj, (datetime, datetime)): return obj.isoformat()
-                    raise TypeError("Type %s not serializable" % type(obj))
+
 
                 return Response(json.dumps({
                     "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
@@ -1331,7 +1312,6 @@ def api_handler(path):
                 if 'priority_courses' in data: fields.append('priority_courses = %s'); values.append(data['priority_courses'])
                 if 'system_matric' in data: fields.append('system_matric = %s'); values.append(data['system_matric'])
                 if 'system_pwd' in data: fields.append('system_pwd = %s'); values.append(data['system_pwd'])
-                if 'verify_start_id' in data: fields.append('verify_start_id = %s'); values.append(data['verify_start_id'])
                 
                 if fields:
                     pg_db.execute(f"UPDATE system_config SET {', '.join(fields)} WHERE id = 'config'", tuple(values))
