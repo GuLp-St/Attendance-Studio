@@ -35,7 +35,7 @@ export default function AdminPanel() {
   useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}) }, []);
 
   const [formSync, setFormSync] = useState({ 
-      classStart: 0, studentBatch: 50, actStart: 0, actMonths: 6, forceStudentSync: false 
+      classStart: 0, actStart: 0, actMonths: 6, forceStudentSync: false 
   });
   const [priorityCourses, setPriorityCourses] = useState([]);
   const [courseSearch, setCourseSearch] = useState('');
@@ -76,7 +76,6 @@ export default function AdminPanel() {
       if (res.config) {
         setFormSync({
           classStart: res.config.start_id || 100000,
-          studentBatch: res.config.student_sync_batch || 50,
           actStart: res.config.act_start_id || 107000, actMonths: res.config.act_months || 6,
           forceStudentSync: res.config.force_student_sync || false,
           verifyStartId: res.config.verify_start_id || ""
@@ -102,7 +101,6 @@ export default function AdminPanel() {
     try {
       await api.post('/admin_dashboard', {
         key, type: 'save_settings', last_scanned: formSync.classStart,
-        student_sync_batch: formSync.studentBatch,
         act_start_id: formSync.actStart, act_months: formSync.actMonths, 
         priority_courses: priorityCourses, force_student_sync: formSync.forceStudentSync
       });
@@ -245,7 +243,6 @@ export default function AdminPanel() {
       <div className="admin-section">
         <div className="admin-title">SYNC MANAGER</div>
         <div className="admin-config-grid">
-          <div><label>STUDENT BATCH</label><input type="number" className="t-input" value={formSync.studentBatch} onChange={e => setFormSync({ ...formSync, studentBatch: e.target.value })} /></div>
         </div>
 
         <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>

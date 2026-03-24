@@ -1057,13 +1057,11 @@ def api_handler(path):
         try:
             log("Starting Student Sync...")
             cfg = get_sys_config()
-            req_session = requests.Session()
-            core_api.configure_session(req_session, cfg['system_matric'] or '85699', 'dummy') 
-            req_session = get_authorized_session() 
+            req_session = get_authorized_session()
             
             active_sem = core_api.get_active_semester(req_session)
-            batch_limit = cfg.get('student_sync_batch', 50)
-            
+            log(f"Active semester: {active_sem}")
+
             # --- THE NEW FORCE SYNC LOGIC ---
             force_sync = cfg.get('force_student_sync', False)
             if force_sync: log("FORCE HEAL ENABLED: Ignoring database memory.")
@@ -1074,73 +1072,86 @@ def api_handler(path):
             # --- PRIORITY COURSES FETCH ---
             priority_codes = cfg.get('priority_courses', [])
             if priority_codes:
-                log(f"Processing {len(priority_codes)} Priority Courses...")
+                log(f"Processing {len(priority_codes)} Priority Courses first...")
                 for code in priority_codes:
                     docs = pg_db.query("SELECT id, code, name, semester, course_group AS group FROM courses WHERE code = %s AND semester = %s", (code, active_sem))
                     for d in docs:
                         target_courses.append(dict(d))
                         seen_gids.add(d['id'])
             
-            # --- NORMAL FETCH TO FILL QUOTA ---
-            rem_limit = batch_limit - len(target_courses)
-            if rem_limit > 0:
-                courses_query = pg_db.query("SELECT id, code, name, semester, course_group AS group, last_student_sync FROM courses ORDER BY last_student_sync ASC LIMIT %s", (batch_limit + len(target_courses),))
-                
-                for c in courses_query:
-                    if rem_limit <= 0: break
-                    if c['id'] in seen_gids: continue
-                    d = dict(c)
-                    if d.get('semester') == active_sem:
-                        target_courses.append(d)
-                        seen_gids.add(c['id'])
-                        rem_limit -= 1
-                    else:
-                        pg_db.execute("UPDATE courses SET last_student_sync = 9999999999 WHERE id = %s", (c['id'],))
+            # --- FETCH ALL REMAINING COURSES, STALEST FIRST (no limit) ---
+            courses_query = pg_db.query("SELECT id, code, name, semester, course_group AS group, last_student_sync FROM courses ORDER BY last_student_sync ASC")
+            for c in courses_query:
+                if c['id'] in seen_gids: continue
+                d = dict(c)
+                if d.get('semester') == active_sem:
+                    target_courses.append(d)
+                    seen_gids.add(c['id'])
+                else:
+                    # Mark old-semester courses so they sink to bottom next run
+                    pg_db.execute("UPDATE courses SET last_student_sync = 9999999999 WHERE id = %s", (c['id'],))
             
-            if not target_courses: return Response("No courses to sync", headers=headers)
-            log(f"Selected {len(target_courses)} total courses to sync.")
+            if not target_courses: return Response("No current-semester courses to sync", headers=headers)
+            log(f"Found {len(target_courses)} current-semester courses queued (stalest first). Running until timeout...")
             
             course_students = {}
             student_names = {}
             start_time = time.time()
+            processed_courses = []
+            
             with ThreadPoolExecutor(max_workers=8) as ex:
                 futures = {}
                 for c in target_courses:
-                    if time.time() - start_time > 40: break
-                    futures[ex.submit(core_api.get_students, c['id'], req_session)] = c['id']
+                    if time.time() - start_time > 40:
+                        log(f"Timeout approaching. Queued {len(futures)} fetches, stopping submission.")
+                        break
+                    futures[ex.submit(core_api.get_students, c['id'], req_session)] = c
+                    processed_courses.append(c)
                     
                 for f in as_completed(futures):
-                    gid = futures[f]
+                    c = futures[f]
                     matrics = []
                     for s in (f.result() or []):
                         m, n = s.get("NOMATRIK"), s.get("NAMAPELAJAR")
                         if m:
                             matrics.append(m)
                             if n and n != "Unknown": student_names[m] = n
-                    course_students[gid] = matrics
-                    
+                    course_students[c['id']] = matrics
+
+            log(f"Fetched student lists for {len(processed_courses)} courses. Processing diffs...")
+
             updates_by_student = {}
             for m, name in student_names.items(): updates_by_student[m] = {"add": set(), "remove": set(), "name": name}
             
             now_ts = int(datetime.now().timestamp())
+            total_added = 0
+            total_removed = 0
             
-            for c in target_courses:
+            for c in processed_courses:
                 gid = c['id']
                 current_matrics = set(course_students.get(gid, []))
                 
                 old_enr = pg_db.query_one("SELECT enrolled_students FROM courses WHERE id = %s", (str(gid),))
                 if force_sync:
-                    previous_matrics = set() 
+                    previous_matrics = set()
                 else:
                     previous_matrics = set(old_enr['enrolled_students'] if old_enr and old_enr['enrolled_students'] else [])
                 
-                for m in (current_matrics - previous_matrics):
+                added = current_matrics - previous_matrics
+                removed = previous_matrics - current_matrics
+                total_added += len(added)
+                total_removed += len(removed)
+                
+                if added or removed:
+                    log(f"  [{c['code']} | {c['id']}]: +{len(added)} students, -{len(removed)} students (total now: {len(current_matrics)})")
+                
+                for m in added:
                     if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set()}
-                    updates_by_student[m]["add"].add(str(gid)) 
+                    updates_by_student[m]["add"].add(str(gid))
                     
-                for m in (previous_matrics - current_matrics):
+                for m in removed:
                     if m not in updates_by_student: updates_by_student[m] = {"add": set(), "remove": set()}
-                    updates_by_student[m]["remove"].add(str(gid)) 
+                    updates_by_student[m]["remove"].add(str(gid))
                     
                 pg_db.execute("UPDATE courses SET enrolled_students = %s, last_student_sync = %s WHERE id = %s", (list(current_matrics), now_ts, str(gid)))
             
@@ -1165,9 +1176,7 @@ def api_handler(path):
                         pg_db.execute("UPDATE students SET groups = %s WHERE matric = %s", (list(curr_groups), m))
             
             # --- ORPHAN STUDENT PRUNING ---
-            log("Identifying departed students for directory cleanup...")
             pruned = 0
-            
             students_to_verify = [m for m, diff in updates_by_student.items() if diff["remove"]]
             if students_to_verify:
                 for m in set(students_to_verify):
@@ -1176,14 +1185,17 @@ def api_handler(path):
                         pg_db.execute("DELETE FROM students WHERE matric = %s", (m,))
                         pruned += 1
                         
-            log(f"Pruned {pruned} departed accounts.")
+            log(f"Summary: {len(processed_courses)}/{len(target_courses)} courses synced | +{total_added} enrollments | -{total_removed} departures | {pruned} accounts pruned.")
+            elapsed = round(time.time() - start_time, 1)
+            log(f"Completed in {elapsed}s.")
 
-            save_sync_log("STUDENT", "SUCCESS", log_buffer, len(target_courses))
+            save_sync_log("STUDENT", "SUCCESS", log_buffer, len(processed_courses))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
             traceback.print_exc()
             save_sync_log("STUDENT", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
+
 
     elif path == '/admin_sync_activity':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
