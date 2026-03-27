@@ -70,8 +70,11 @@ export default function DirectoryView({ user }) {
             if (intakeYear && u.i !== intakeYear) return false;
 
             if (searchQuery) {
-                const s = searchQuery.toLowerCase();
-                return (u.n || '').toLowerCase().includes(s) || (u.m || '').toLowerCase().includes(s);
+                const s = searchQuery.toUpperCase().replace(/\s+/g, '');
+                const name = (u.n || '').toUpperCase().replace(/\s+/g, '');
+                const matric = (u.m || '').toUpperCase();
+                const prog = (u.p || '').toUpperCase().replace(/\s+/g, '');
+                return name.includes(s) || matric.includes(s) || prog.includes(s);
             }
             return true;
         });

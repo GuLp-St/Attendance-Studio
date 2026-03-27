@@ -245,11 +245,21 @@ export default function AdminPanel() {
   }, [data]);
 
   const courseMatches = courseSearch.length >= 2
-    ? directory.filter(u => u.t === 'c' && ((u.m || '').toUpperCase().includes(courseSearch.toUpperCase()) || (u.n || '').toUpperCase().includes(courseSearch.toUpperCase().replace(/\s+/g, '')))).slice(0, 5)
+    ? directory.filter(u => {
+        if (u.t !== 'c') return false;
+        const q = courseSearch.toUpperCase().replace(/\s+/g, '');
+        return (u.m || '').toUpperCase().replace(/\s+/g, '').includes(q) ||
+               (u.n || '').toUpperCase().replace(/\s+/g, '').includes(q);
+      }).slice(0, 5)
     : [];
 
-  const studentMatches = studentIdSearch.length >= 3
-    ? directory.filter(u => u.t === 's' && ((u.m || '').includes(studentIdSearch) || (u.n || '').toUpperCase().includes(studentIdSearch.toUpperCase()))).slice(0, 5)
+  const studentMatches = studentIdSearch.length >= 2
+    ? directory.filter(u => {
+        if (u.t !== 's') return false;
+        const q = studentIdSearch.toUpperCase().replace(/\s+/g, '');
+        return (u.m || '').toUpperCase().includes(q) ||
+               (u.n || '').toUpperCase().replace(/\s+/g, '').includes(q);
+      }).slice(0, 5)
     : [];
 
   if (!isAuthenticated) return (
