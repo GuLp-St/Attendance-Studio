@@ -77,14 +77,18 @@ const ReadableJson = ({ data }) => {
 // ============================================================
 //  SORT HEADER HELPER
 // ============================================================
-const SortHeader = ({ label, field, sortField, sortDir, onSort, style }) => {
-    const isActive = sortField === field;
+const SortHeader = ({ label, field, sortConfig, onSort, style }) => {
+    const sortIdx = sortConfig.findIndex(s => s.field === field);
+    const isActive = sortIdx !== -1;
+    const sortDir = isActive ? sortConfig[sortIdx].dir : null;
+    
     const icon = !isActive ? <span style={{ color: '#444' }}>⇅</span>
         : sortDir === 'asc' ? <span style={{ color: 'var(--primary)' }}>▲</span>
         : <span style={{ color: 'var(--primary)' }}>▼</span>;
+    
     return (
         <div
-            onClick={() => onSort(field)}
+            onClick={(e) => onSort(field, e.shiftKey)}
             style={{
                 cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center',
                 gap: '4px', color: isActive ? 'var(--primary)' : '#aaa',
@@ -92,7 +96,15 @@ const SortHeader = ({ label, field, sortField, sortDir, onSort, style }) => {
                 ...style
             }}
         >
-            {label} {icon}
+            {label} 
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '2px' }}>
+                {icon}
+                {sortConfig.length > 1 && isActive && (
+                    <span style={{ fontSize: '0.6rem', opacity: 0.7, color: 'var(--primary)' }}>
+                        {sortIdx + 1}
+                    </span>
+                )}
+            </div>
         </div>
     );
 };
@@ -107,8 +119,7 @@ export default function DirectoryView({ user }) {
     const [includeUnverified, setIncludeUnverified] = useState(false);
     const [page, setPage] = useState(1);
     const [limit, setLimit] = useState(20);
-    const [sortField, setSortField] = useState('name'); // null | 'name' | 'matric' | 'cgpa' | 'intake'
-    const [sortDir, setSortDir] = useState('asc');       // 'asc' | 'desc'
+    const [sortConfig, setSortConfig] = useState([{ field: 'name', dir: 'asc' }]); 
     const [selectedFaculty, setSelectedFaculty] = useState('');
     const [selectedProgs, setSelectedProgs] = useState([]);
     const [detailsLoading, setDetailsLoading] = useState(false);
@@ -132,12 +143,33 @@ export default function DirectoryView({ user }) {
         setLoading(false);
     };
 
-    // Cycle sort: field click → asc → desc → neutral (null → asc again)
-    const handleSort = (field) => {
+    // Multi-sort: Click = primary sort. Shift+Click = toggle/add level.
+    const handleSort = (field, isMulti = false) => {
         setPage(1);
-        if (sortField !== field) { setSortField(field); setSortDir('asc'); }
-        else if (sortDir === 'asc') { setSortDir('desc'); }
-        else { setSortField(null); setSortDir('asc'); }
+        setSortConfig(prev => {
+            const existingIdx = prev.findIndex(s => s.field === field);
+            if (!isMulti) {
+                // If already primary, cycle asc -> desc -> remove
+                if (existingIdx === 0 && prev.length === 1) {
+                    if (prev[0].dir === 'asc') return [{ field, dir: 'desc' }];
+                    return [];
+                }
+                // Otherwise, make it the single primary sort
+                return [{ field, dir: 'asc' }];
+            } else {
+                // Toggle in sort list
+                if (existingIdx !== -1) {
+                    const next = [...prev];
+                    if (next[existingIdx].dir === 'asc') {
+                        next[existingIdx] = { field, dir: 'desc' };
+                    } else {
+                        next.splice(existingIdx, 1);
+                    }
+                    return next;
+                }
+                return [...prev, { field, dir: 'asc' }];
+            }
+        });
     };
 
     // Client-side filter + hierarchy
@@ -167,19 +199,23 @@ export default function DirectoryView({ user }) {
     }, [fullCache, searchQuery, includeUnverified, selectedFaculty, selectedProgs, intakeYear]);
 
     const sortedData = useMemo(() => {
-        if (!sortField) return filteredData;
+        if (sortConfig.length === 0) return filteredData;
         const sorted = [...filteredData];
         sorted.sort((a, b) => {
-            let va = a[sortField === 'name' ? 'n' : sortField === 'matric' ? 'm' : sortField === 'cgpa' ? 'c' : 'i'] || '';
-            let vb = b[sortField === 'name' ? 'n' : sortField === 'matric' ? 'm' : sortField === 'cgpa' ? 'c' : 'i'] || '';
-            if (typeof va === 'string') va = va.toLowerCase();
-            if (typeof vb === 'string') vb = vb.toLowerCase();
-            if (va < vb) return sortDir === 'asc' ? -1 : 1;
-            if (va > vb) return sortDir === 'asc' ? 1 : -1;
+            for (const { field, dir } of sortConfig) {
+                let va = a[field === 'name' ? 'n' : field === 'matric' ? 'm' : field === 'cgpa' ? 'c' : 'i'] || '';
+                let vb = b[field === 'name' ? 'n' : field === 'matric' ? 'm' : field === 'cgpa' ? 'c' : 'i'] || '';
+                
+                if (typeof va === 'string') va = va.toLowerCase();
+                if (typeof vb === 'string') vb = vb.toLowerCase();
+
+                if (va < vb) return dir === 'asc' ? -1 : 1;
+                if (va > vb) return dir === 'asc' ? 1 : -1;
+            }
             return 0;
         });
         return sorted;
-    }, [filteredData, sortField, sortDir]);
+    }, [filteredData, sortConfig]);
 
     const totalPages = Math.max(1, Math.ceil(sortedData.length / limit));
     const safePage = Math.min(page, totalPages);
@@ -325,12 +361,15 @@ export default function DirectoryView({ user }) {
                 {/* Header row with sortable columns */}
                 <div style={{ display: 'flex', padding: '8px 10px', background: 'rgba(255,255,255,0.05)', fontSize: '0.72rem', borderBottom: '1px solid var(--grid-line)', gap: '4px' }}>
                     <div style={{ width: '38px', flexShrink: 0 }} /> {/* avatar */}
-                    <SortHeader label="NAME / MATRIC" field="name" sortField={sortField} sortDir={sortDir} onSort={handleSort} style={{ flex: 1, minWidth: 0 }} />
-                    <div className="dir-col-prog" style={{ flex: 1, minWidth: 0 }}>
-                        <SortHeader label="PROGRAM" field={null} sortField={sortField} sortDir={sortDir} onSort={() => {}} style={{ color: '#aaa', cursor: 'default' }} />
+                    <div style={{ flex: 1, minWidth: 0, display: 'flex', gap: '10px' }}>
+                        <SortHeader label="NAME" field="name" sortConfig={sortConfig} onSort={handleSort} style={{ minWidth: '60px' }} />
+                        <SortHeader label="MATRIC" field="matric" sortConfig={sortConfig} onSort={handleSort} style={{ minWidth: '60px' }} />
                     </div>
-                    <SortHeader label="INTAKE" field="intake" sortField={sortField} sortDir={sortDir} onSort={handleSort} style={{ width: '72px', flexShrink: 0, justifyContent: 'center' }} />
-                    <SortHeader label="CGPA" field="cgpa" sortField={sortField} sortDir={sortDir} onSort={handleSort} style={{ width: '68px', flexShrink: 0, justifyContent: 'flex-end' }} />
+                    <div className="dir-col-prog" style={{ flex: 1, minWidth: 0 }}>
+                        <SortHeader label="PROGRAM" field={null} sortConfig={sortConfig} onSort={() => {}} style={{ color: '#aaa', cursor: 'default' }} />
+                    </div>
+                    <SortHeader label="INTAKE" field="intake" sortConfig={sortConfig} onSort={handleSort} style={{ width: '72px', flexShrink: 0, justifyContent: 'center' }} />
+                    <SortHeader label="CGPA" field="cgpa" sortConfig={sortConfig} onSort={handleSort} style={{ width: '68px', flexShrink: 0, justifyContent: 'flex-end' }} />
                 </div>
 
                 {/* Rows */}
