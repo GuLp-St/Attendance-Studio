@@ -628,7 +628,10 @@ def api_handler(path):
             results = []
             def process_autoscan_job(job):
                 d = dict(job)
-                job_time = d['createdAt'] if isinstance(d['createdAt'], datetime) else datetime.fromisoformat(str(d['createdAt']).replace("Z", "+00:00"))
+                job_time = d['createdAt']
+                if isinstance(job_time, str): job_time = datetime.fromisoformat(job_time.replace("Z", "+00:00"))
+                if job_time.tzinfo is None: job_time = job_time.replace(tzinfo=timezone.utc)
+                
                 if (now_my - job_time).total_seconds() > 86400:
                     create_notification(d['matric'], d.get('job_type','class'), d.get('gid', 'Unknown'), 'FAILED', 'Autoscan Expired (24h)', d.get('mode','crowd'))
                     pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (d['matric'], d['gid']))
@@ -714,7 +717,10 @@ def api_handler(path):
             def process_auto_register_job(job):
                 d = dict(job)
                 matric, gid = d['matric'], str(d['gid'])
-                job_time = d['createdAt'] if isinstance(d['createdAt'], datetime) else datetime.fromisoformat(str(d['createdAt']).replace("Z", "+00:00"))
+                job_time = d['createdAt']
+                if isinstance(job_time, str): job_time = datetime.fromisoformat(job_time.replace("Z", "+00:00"))
+                if job_time.tzinfo is None: job_time = job_time.replace(tzinfo=timezone.utc)
+
                 if (now_my - job_time).total_seconds() > 86400 * 7:
                     create_notification(matric, 'class', f'GID:{gid}', 'FAILED', 'Auto Register Expired (7d)', 'auto')
                     pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (matric, gid))
@@ -727,23 +733,34 @@ def api_handler(path):
                     if not pwd or pwd == 'Unknown': return "AR Pending (No Password)"
                     sem = get_sys_config().get('current_semester', '2025/2026-2')
                     status_c, resp_c = core_api.register_course(matric, pwd, code, gid, sem, group, "P")
-                    is_success = ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
-                    if not is_success and ("error\":true" in resp_c.replace(" ", "").lower() or "taraf" in resp_c.lower() or "syarat" in resp_c.lower()):
+                    resp_str = str(resp_c).lower()
+                    
+                    is_success = ("berjaya" in resp_str or "success" in resp_str or '"error":false' in resp_str.replace(" ", ""))
+                    # Treat "already registered" as success
+                    if not is_success and ("sudah berdaftar" in resp_str or "already registered" in resp_str): is_success = True
+                    
+                    if not is_success and ("error\":true" in resp_str.replace(" ", "") or "taraf" in resp_str or "syarat" in resp_str):
                         status_c, resp_c = core_api.register_course(matric, pwd, code, gid, sem, group, "T")
-                        is_success = ("berjaya" in resp_c.lower() or "success" in resp_c.lower() or '"error":false' in resp_c.replace(" ", "").lower())
+                        resp_str = str(resp_c).lower()
+                        is_success = ("berjaya" in resp_str or "success" in resp_str or '"error":false' in resp_str.replace(" ", ""))
+                        if not is_success and ("sudah berdaftar" in resp_str or "already registered" in resp_str): is_success = True
+                    
                     status = 'SUCCESS' if is_success else 'FAILED'
                     create_notification(matric, 'class', f'{code} {group}', status, f'Auto Register: {str(resp_c)[:80]}', 'auto')
                     if is_success:
                         pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, matric, gid))
                         pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (matric, gid))
-                    return f"AR {status}"
+                        return f"AR SUCCESS: {code} {group}"
+                    return f"AR FAILED: {code} {group} - Response: {str(resp_c)[:100]}"
                 except Exception as e: return f"AR Error: {str(e)}"
             with ThreadPoolExecutor(max_workers=5) as ex:
                 ar_map = {ex.submit(process_auto_register_job, j): j for j in ar_jobs if time.time() - start_time < 45}
                 for f in as_completed(ar_map):
                     try: results.append(f.result())
                     except Exception as e: results.append(f"AR Error: {str(e)}")
-            return Response(f"Jobs: {len(jobs)} | AR Jobs: {len(ar_jobs)} | Processed: {len(results)}", headers=headers)
+            # --- RESULTS AGGREGATION ---
+            full_log = f"Jobs: {len(jobs)} | AR Jobs: {len(ar_jobs)} | Processed: {len(results)}\n" + "\n".join(results)
+            return Response(full_log, headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/notifications':
@@ -1473,16 +1490,24 @@ def api_handler(path):
                             grp = course.get('course_group', '') if course else ''
                             if pwd and pwd != 'Unknown':
                                 st, rp = core_api.register_course(matric, pwd, code, gid, sem, grp, "P")
-                                is_success = ("berjaya" in rp.lower() or "success" in rp.lower() or '"error":false' in rp.replace(" ", "").lower())
-                                if not is_success and ("error\":\"true" in rp.replace(" ", "").lower() or "taraf" in rp.lower() or "syarat" in rp.lower()):
+                                rp_str = str(rp).lower()
+                                is_success = ("berjaya" in rp_str or "success" in rp_str or '"error":false' in rp_str.replace(" ", ""))
+                                if not is_success and ("sudah berdaftar" in rp_str or "already registered" in rp_str): is_success = True
+                                
+                                if not is_success and ("error\":\"true" in rp_str.replace(" ", "") or "taraf" in rp_str or "syarat" in rp_str):
                                     st, rp = core_api.register_course(matric, pwd, code, gid, sem, grp, "T")
-                                    is_success = ("berjaya" in rp.lower() or "success" in rp.lower() or '"error":false' in rp.replace(" ", "").lower())
+                                    rp_str = str(rp).lower()
+                                    is_success = ("berjaya" in rp_str or "success" in rp_str or '"error":false' in rp_str.replace(" ", ""))
+                                    if not is_success and ("sudah berdaftar" in rp_str or "already registered" in rp_str): is_success = True
+
                                 status_str = 'SUCCESS' if is_success else 'FAILED'
                                 _job_log('autojobs', f"[{matric}] AR {code} {grp}: {status_str} — {rp[:60]}")
                                 if is_success:
                                     pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, matric, gid))
                                     pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (matric, gid))
-                                    create_notification(matric, 'class', f'{code} {grp}', 'SUCCESS', f'Auto Register (Manual Trigger): {rp[:80]}', 'auto')
+                                    create_notification(matric, 'class', f'{code} {grp}', 'SUCCESS', f'Auto Register (Manual): {rp[:80]}', 'auto')
+                                else:
+                                    create_notification(matric, 'class', f'{code} {grp}', 'FAILED', f'Auto Register (Manual): {rp[:80]}', 'auto')
                             else:
                                 _job_log('autojobs', f"[{matric}] AR {code}: No Password")
                 

@@ -143,32 +143,24 @@ export default function DirectoryView({ user }) {
         setLoading(false);
     };
 
-    // Multi-sort: Click = primary sort. Shift+Click = toggle/add level.
-    const handleSort = (field, isMulti = false) => {
+    const handleSort = (field) => {
         setPage(1);
         setSortConfig(prev => {
-            const existingIdx = prev.findIndex(s => s.field === field);
-            if (!isMulti) {
-                // If already primary, cycle asc -> desc -> remove
-                if (existingIdx === 0 && prev.length === 1) {
-                    if (prev[0].dir === 'asc') return [{ field, dir: 'desc' }];
-                    return [];
+            const next = [...prev];
+            const idx = next.findIndex(s => s.field === field);
+            
+            if (idx !== -1) {
+                // Cycle: ASC -> DESC -> REMOVE
+                if (next[idx].dir === 'asc') {
+                    next[idx] = { ...next[idx], dir: 'desc' };
+                } else {
+                    next.splice(idx, 1);
                 }
-                // Otherwise, make it the single primary sort
-                return [{ field, dir: 'asc' }];
             } else {
-                // Toggle in sort list
-                if (existingIdx !== -1) {
-                    const next = [...prev];
-                    if (next[existingIdx].dir === 'asc') {
-                        next[existingIdx] = { field, dir: 'desc' };
-                    } else {
-                        next.splice(existingIdx, 1);
-                    }
-                    return next;
-                }
-                return [...prev, { field, dir: 'asc' }];
+                // Add as new sort priority
+                next.push({ field, dir: 'asc' });
             }
+            return next;
         });
     };
 
@@ -203,14 +195,13 @@ export default function DirectoryView({ user }) {
         const sorted = [...filteredData];
         sorted.sort((a, b) => {
             for (const { field, dir } of sortConfig) {
-                let va = a[field === 'name' ? 'n' : field === 'matric' ? 'm' : field === 'cgpa' ? 'c' : 'i'] || '';
-                let vb = b[field === 'name' ? 'n' : field === 'matric' ? 'm' : field === 'cgpa' ? 'c' : 'i'] || '';
+                const key = field === 'name' ? 'n' : field === 'matric' ? 'm' : field === 'cgpa' ? 'c' : 'i';
+                const va = String(a[key] || '');
+                const vb = String(b[key] || '');
                 
-                if (typeof va === 'string') va = va.toLowerCase();
-                if (typeof vb === 'string') vb = vb.toLowerCase();
-
-                if (va < vb) return dir === 'asc' ? -1 : 1;
-                if (va > vb) return dir === 'asc' ? 1 : -1;
+                // Use numeric-aware localeCompare
+                const res = va.localeCompare(vb, undefined, { numeric: true, sensitivity: 'base' });
+                if (res !== 0) return dir === 'asc' ? res : -res;
             }
             return 0;
         });
