@@ -3,6 +3,7 @@
 import sys
 import os
 import time
+import threading
 
 # Fix Path for Vercel
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -16,6 +17,37 @@ import traceback
 import core_api
 import base64
 from decimal import Decimal
+
+# ==========================================
+#  JOB LOCK & STATUS (in-process, per job type)
+# ==========================================
+_JOB_TYPES = ['class', 'student', 'activity', 'verify', 'autojobs']
+_job_locks = {t: threading.Lock() for t in _JOB_TYPES}
+_job_status = {t: {'running': False, 'lines': [], 'lock': threading.Lock()} for t in _JOB_TYPES}
+
+def _job_start(job_type):
+    """Returns True if lock acquired (job can run). False if already running."""
+    if not _job_locks[job_type].acquire(blocking=False):
+        return False
+    with _job_status[job_type]['lock']:
+        _job_status[job_type]['running'] = True
+        _job_status[job_type]['lines'] = []
+    return True
+
+def _job_log(job_type, msg):
+    ts = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime('%H:%M:%S')
+    line = f"[{ts}] {msg}"
+    with _job_status[job_type]['lock']:
+        _job_status[job_type]['lines'].append(line)
+    return line
+
+def _job_end(job_type):
+    with _job_status[job_type]['lock']:
+        _job_status[job_type]['running'] = False
+    try:
+        _job_locks[job_type].release()
+    except RuntimeError:
+        pass
 
 def json_serial(obj):
     if isinstance(obj, (datetime, datetime)):
@@ -78,10 +110,10 @@ def get_sys_config():
         "act_scan_limit": int(conf.get("act_scan_limit") or 5000),
         "act_months": int(conf.get("act_time_threshold") or 6),
         "priority_courses": conf.get("priority_courses", []),
+        "priority_student_ids": conf.get("priority_student_ids", []),
         "system_matric": conf.get("system_matric", ""),
         "system_pwd": conf.get("system_pwd", ""),
         "force_student_sync": conf.get("force_student_sync", False),
-        "verify_start_id": conf.get("verify_start_id", "")
     }
 
 def get_authorized_session():
@@ -122,22 +154,49 @@ def create_notification(matric, type, title, status, details, mode):
             (get_malaysia_time(), matric, type, title, status, details, mode))
     except: pass
 
-def save_sync_log(type, status, messages, items_count):
+def save_sync_log(log_type_key, status, messages, items_count):
+    """Saves a sync log and trims to keep only top 10 per category."""
     try:
-        pg_db.execute("INSERT INTO logs (timestamp, log_type, category, status, log_text, items_found) VALUES (%s, %s, %s, %s, %s, %s)",
-            (get_malaysia_time(), "SYNC", type, status, "\n".join(messages), items_count))
+        # Map job type keys to log_type + category for DB storage
+        _type_map = {
+            'CLASS': ('SYNC', 'CLASS'), 'STUDENT': ('SYNC', 'STUDENT'),
+            'ACTIVITY': ('SYNC', 'ACTIVITY'), 'VERIFY': ('SYS', 'VERIFY'),
+            'MANUAL VERIFY': ('SYS', 'VERIFY')
+        }
+        db_log_type, db_category = _type_map.get(log_type_key, ('SYNC', log_type_key))
+        pg_db.execute(
+            "INSERT INTO logs (timestamp, log_type, category, status, log_text, items_found) VALUES (%s, %s, %s, %s, %s, %s)",
+            (get_malaysia_time(), db_log_type, db_category, status, "\n".join(messages), items_count)
+        )
+        # Trim: keep only 10 most recent rows per (log_type, category)
+        pg_db.execute("""
+            DELETE FROM logs WHERE id IN (
+                SELECT id FROM logs WHERE log_type = %s AND category = %s
+                ORDER BY timestamp DESC OFFSET 10
+            )
+        """, (db_log_type, db_category))
     except: pass
 
 def save_sys_log(action, status, items_processed):
     try:
-        pg_db.execute("INSERT INTO logs (timestamp, log_type, action, status, items_processed) VALUES (%s, %s, %s, %s, %s)",
-            (get_malaysia_time(), "SYS", action, status, items_processed))
+        pg_db.execute(
+            "INSERT INTO logs (timestamp, log_type, action, status, items_processed) VALUES (%s, %s, %s, %s, %s)",
+            (get_malaysia_time(), "SYS", action, status, items_processed)
+        )
     except: pass
 
-def save_job_log(category, status, items_processed):
+def save_job_log(category, status, items_processed, log_text=""):
     try:
-        pg_db.execute("INSERT INTO logs (timestamp, log_type, category, status, items_processed) VALUES (%s, %s, %s, %s, %s)",
-            (get_malaysia_time(), "JOB", category, status, items_processed))
+        pg_db.execute(
+            "INSERT INTO logs (timestamp, log_type, category, status, items_processed, log_text) VALUES (%s, %s, %s, %s, %s, %s)",
+            (get_malaysia_time(), "JOB", category, status, items_processed, log_text)
+        )
+        pg_db.execute("""
+            DELETE FROM logs WHERE id IN (
+                SELECT id FROM logs WHERE log_type = 'JOB' AND category = %s
+                ORDER BY timestamp DESC OFFSET 10
+            )
+        """, (category,))
     except: pass
 
 def consolidate_timetable(slots):
@@ -876,10 +935,29 @@ def api_handler(path):
             return jsonify({"status": status, "response": resp, "success": is_success})
         except Exception as e: return jsonify({"error": str(e)}), 500
 
+    elif path == '/admin_job_status':
+        if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+        job_type = args.get('type', 'class')
+        offset = int(args.get('offset', 0))
+        if job_type not in _job_status:
+            return jsonify({"error": "Invalid type"}), 400
+        with _job_status[job_type]['lock']:
+            all_lines = list(_job_status[job_type]['lines'])
+            running = _job_status[job_type]['running']
+        new_lines = all_lines[offset:]
+        return Response(json.dumps({
+            "running": running, "lines": new_lines, "total": len(all_lines)
+        }), headers={**headers, 'Content-Type': 'application/json'})
+
     elif path == '/admin_sync_class':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+
+        if not _job_start('class'):
+            return Response("[BUSY] Class sync is already running. Try again later.", mimetype='text/plain', headers=headers)
         log_buffer = []
-        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
+        def log(msg):
+            line = _job_log('class', msg)
+            log_buffer.append(line)
         try:
             log("Starting Class Discovery...")
             cfg = get_sys_config()
@@ -943,11 +1021,17 @@ def api_handler(path):
         except Exception as e:
             save_sync_log("CLASS", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
+        finally:
+            _job_end('class')
 
     elif path == '/admin_sync_student':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+        if not _job_start('student'):
+            return Response("[BUSY] Student sync is already running. Try again later.", mimetype='text/plain', headers=headers)
         log_buffer = []
-        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
+        def log(msg):
+            line = _job_log('student', msg)
+            log_buffer.append(line)
         try:
             log("Starting Student Sync...")
             cfg = get_sys_config()
@@ -973,8 +1057,8 @@ def api_handler(path):
                         target_courses.append(dict(d))
                         seen_gids.add(d['id'])
             
-            # --- FETCH COURSES, STALEST FIRST (LIMIT 250 per run to prevent bloat) ---
-            courses_query = pg_db.query("SELECT id, code, name, semester, course_group AS group, last_student_sync FROM courses WHERE semester = %s ORDER BY last_student_sync ASC LIMIT 250", (active_sem,))
+            # --- FETCH ALL COURSES, STALEST FIRST (no hard limit; timeout controls actual work done) ---
+            courses_query = pg_db.query("SELECT id, code, name, semester, course_group AS group, last_student_sync FROM courses WHERE semester = %s ORDER BY last_student_sync ASC", (active_sem,))
             for c in courses_query:
                 if c['id'] in seen_gids: continue
                 target_courses.append(dict(c))
@@ -1073,12 +1157,18 @@ def api_handler(path):
             traceback.print_exc()
             save_sync_log("STUDENT", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
+        finally:
+            _job_end('student')
 
 
     elif path == '/admin_sync_activity':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+        if not _job_start('activity'):
+            return Response("[BUSY] Activity sync is already running. Try again later.", mimetype='text/plain', headers=headers)
         log_buffer = []
-        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
+        def log(msg):
+            line = _job_log('activity', msg)
+            log_buffer.append(line)
         try:
             log("Starting Activity Sync...")
             cfg = get_sys_config()
@@ -1091,9 +1181,9 @@ def api_handler(path):
             i = curr
             
             log(f"Scanning activity IDs from {curr} onwards until timeout...")
-            # 1. DISCOVERY PHASE
+            # 1. DISCOVERY PHASE (max 28s so processing gets adequate time)
             while True:
-                if time.time() - start_time > 45: 
+                if time.time() - start_time > 28: 
                     log(f"Discovery paused. Stopped at ID {i}. Found {len(organizers)} organizers.")
                     break
                 end = i + 100
@@ -1109,9 +1199,10 @@ def api_handler(path):
             # Save progress from discovery immediately
             pg_db.execute("UPDATE system_config SET act_last_scanned_id = %s WHERE id = 'config'", (highest_valid_id,))
             
-            # 2. PROCESSING PHASE
+            # 2. PROCESSING PHASE (gets remaining ~27s)
             cutoff = datetime.now() - timedelta(days=30 * cfg['act_months'])
             processed = 0
+            log(f"Processing {len(organizers)} organizers...")
             for org_id in organizers:
                 if time.time() - start_time > 55:
                     log("Global timeout reached. Saving and stopping.")
@@ -1155,25 +1246,47 @@ def api_handler(path):
             traceback.print_exc()
             save_sync_log("ACTIVITY", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
+        finally:
+            _job_end('activity')
 
 
 
     elif path == '/admin_verify_directory':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+        if not _job_start('verify'):
+            return Response("[BUSY] Verification is already running. Try again later.", mimetype='text/plain', headers=headers)
         log_buffer = []
-        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
+        def log(msg):
+            line = _job_log('verify', msg)
+            log_buffer.append(line)
         try:
             log("Starting Directory Verification...")
             cfg = get_sys_config()
             active_sem = cfg.get('current_semester', '2025/2026-2')
-            log("Fetching up to 300 of the least recently verified accounts...")
-            docs = pg_db.query("SELECT * FROM students ORDER BY last_verified ASC NULLS FIRST LIMIT 300")
+            priority_ids = cfg.get('priority_student_ids', [])
+            if priority_ids:
+                log(f"Priority mode: {len(priority_ids)} student IDs will be verified first.")
+                # Fetch priority students first, then the rest ordered by last_verified
+                priority_placeholders = ','.join(['%s'] * len(priority_ids))
+                docs = pg_db.query(
+                    f"""SELECT * FROM students WHERE matric IN ({priority_placeholders}) """,
+                    tuple(priority_ids)
+                )
+                rest = pg_db.query(
+                    f"""SELECT * FROM students WHERE matric NOT IN ({priority_placeholders})
+                        ORDER BY last_verified ASC NULLS FIRST LIMIT 300""",
+                    tuple(priority_ids)
+                )
+                docs = list(docs) + list(rest)
+            else:
+                log("Fetching up to 300 of the least recently verified accounts...")
+                docs = pg_db.query("SELECT * FROM students ORDER BY last_verified ASC NULLS FIRST LIMIT 300")
                 
             start_time = time.time()
             results = []
             tt_valid_count = 0
             login_valid_count = 0
-            last_id = curr_id
+            last_id = None
             
             with ThreadPoolExecutor(max_workers=10) as ex:
                 futures = {}
@@ -1212,12 +1325,14 @@ def api_handler(path):
 
             log(f"Processed {len(results)} accounts from the priority queue.")
             log(f"Results: {login_valid_count} Valid Logins | {tt_valid_count} Valid+Timetable.")
-            save_sys_log("MANUAL VERIFY", "SUCCESS", len(results))
+            save_sync_log("MANUAL VERIFY", "SUCCESS", log_buffer, len(results))
             return Response("\n".join(log_buffer), mimetype='text/plain', headers=headers)
         except Exception as e:
             traceback.print_exc()
             save_sync_log("VERIFY", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
+        finally:
+            _job_end('verify')
 
     elif path == '/organizer_details':
         oid, matric = args.get('oid'), args.get('matric')
@@ -1272,6 +1387,21 @@ def api_handler(path):
         
         return jsonify({"valid": True})
 
+    elif path == '/admin_job_status':
+        """Polling endpoint for real-time job log updates."""
+        if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
+        job_type = args.get('type', 'class')
+        offset = int(args.get('offset', 0))
+        if job_type not in _job_status:
+            return jsonify({"error": "Invalid type"}), 400
+        with _job_status[job_type]['lock']:
+            all_lines = list(_job_status[job_type]['lines'])
+            running = _job_status[job_type]['running']
+        new_lines = all_lines[offset:]
+        return Response(json.dumps({
+            "running": running, "lines": new_lines, "total": len(all_lines)
+        }), headers={**headers, 'Content-Type': 'application/json'})
+
     elif path == '/admin_dashboard' and request.method == 'POST':
         try:
             data = request.get_json()
@@ -1279,8 +1409,22 @@ def api_handler(path):
             req_type = data.get('type')
             cfg = get_sys_config()
             if req_type == 'get_data':
+                # Structured logs per category (top 10 each)
+                _cat_map = {
+                    'class':    ("log_type = 'SYNC' AND category = 'CLASS'"),
+                    'student':  ("log_type = 'SYNC' AND category = 'STUDENT'"),
+                    'activity': ("log_type = 'SYNC' AND category = 'ACTIVITY'"),
+                    'verify':   ("log_type = 'SYS' AND category = 'VERIFY'"),
+                    'autojobs': ("log_type = 'JOB'"),
+                }
+                system_logs = {}
+                for cat, where in _cat_map.items():
+                    rows = pg_db.query(f"SELECT * FROM logs WHERE {where} ORDER BY timestamp DESC LIMIT 10")
+                    system_logs[cat] = [dict(r) for r in rows]
+
+                # User-action logs for network activity
                 logs = []
-                for l in pg_db.query("SELECT * FROM logs ORDER BY timestamp DESC LIMIT 150"):
+                for l in pg_db.query("SELECT * FROM logs WHERE log_type = 'USER_ACTION' OR log_type IS NULL ORDER BY timestamp DESC LIMIT 100"):
                     ld = dict(l); ld['id'] = str(ld.get('timestamp', '')); logs.append(ld)
                 jobs = []
                 for j in pg_db.query("SELECT * FROM autoscan_jobs"):
@@ -1293,11 +1437,13 @@ def api_handler(path):
                     auto_accounts.append({"matric": s['matric'], "password": s['password']})
                 auto_accounts.sort(key=lambda x: int(x['matric']) if str(x['matric']).isdigit() else 0, reverse=True)
 
-
+                # Also include current job running states
+                job_running = {t: _job_status[t]['running'] for t in _JOB_TYPES}
 
                 return Response(json.dumps({
-                    "config": cfg, "logs": logs, "jobs": jobs, "banned_ips": banned, 
-                    "ip_meta": ip_meta, "auto_accounts": auto_accounts
+                    "config": cfg, "logs": logs, "system_logs": system_logs,
+                    "jobs": jobs, "banned_ips": banned, "ip_meta": ip_meta,
+                    "auto_accounts": auto_accounts, "job_running": job_running
                 }, default=json_serial), headers=headers)
             
             elif req_type == 'save_settings':
@@ -1305,11 +1451,10 @@ def api_handler(path):
                 if data.get('last_scanned') is not None: fields.append('last_scanned_id = %s'); values.append(int(data['last_scanned']))
                 if data.get('act_start_id') is not None: fields.append('act_last_scanned_id = %s'); values.append(int(data['act_start_id']))
                 if data.get('act_months'): fields.append('act_time_threshold = %s'); values.append(int(data['act_months']))
-                
                 if 'priority_courses' in data: fields.append('priority_courses = %s'); values.append(data['priority_courses'])
+                if 'priority_student_ids' in data: fields.append('priority_student_ids = %s'); values.append(data['priority_student_ids'])
                 if 'system_matric' in data: fields.append('system_matric = %s'); values.append(data['system_matric'])
                 if 'system_pwd' in data: fields.append('system_pwd = %s'); values.append(data['system_pwd'])
-                
                 if fields:
                     pg_db.execute(f"UPDATE system_config SET {', '.join(fields)} WHERE id = 'config'", tuple(values))
                 return jsonify({"status": "Settings Saved"})
@@ -1326,26 +1471,29 @@ def api_handler(path):
                 
             elif req_type == 'trigger_jobs':
                 job_category = data.get('job_category', 'autoscan')
+                if not _job_start('autojobs'):
+                    return jsonify({"error": "An auto-job trigger is already in progress. Try again later."}), 409
                 out_logs = [f"--- MANUAL TRIGGER: {job_category.upper()} ---"]
+                _job_log('autojobs', f"Manual trigger: {job_category}")
                 req_session = get_authorized_session()
                 now_my = get_malaysia_time()
                 today_str = now_my.strftime('%Y-%m-%d')
                 
                 if job_category == 'autoscan':
                     jobs = list(pg_db.query("SELECT * FROM autoscan_jobs"))
-                    out_logs.append(f"Found {len(jobs)} active autoscan jobs.")
+                    _job_log('autojobs', f"Found {len(jobs)} active autoscan jobs.")
                     for j in jobs:
                         matric = j['matric']; target = j.get('gid', '')
                         t = j.get('job_type', 'class')
                         if t == 'class':
                             res = core_api.scan_qr(target, matric, req_session)
-                            out_logs.append(f"[{matric}] Class {target}: {res[:60]}")
+                            _job_log('autojobs', f"[{matric}] Class {target}: {res[:80]}")
                         else:
                             r1 = core_api.scan_activity_qr(target, matric, 'i')
-                            out_logs.append(f"[{matric}] Act {target} CI: {r1[:60]}")
+                            _job_log('autojobs', f"[{matric}] Act {target} CI: {r1[:80]}")
                 else:
                     jobs = list(pg_db.query("SELECT * FROM auto_register_jobs"))
-                    out_logs.append(f"Found {len(jobs)} auto-register jobs.")
+                    _job_log('autojobs', f"Found {len(jobs)} auto-register jobs.")
                     sem = cfg.get('current_semester', '2025/2026-2')
                     for j in jobs:
                         matric = j['matric']; gid = j['gid']
@@ -1357,12 +1505,14 @@ def api_handler(path):
                             grp = course.get('course_group', '') if course else ''
                             if pwd and pwd != 'Unknown':
                                 st, rp = core_api.register_course(matric, pwd, code, str(gid), sem, grp, "P")
-                                out_logs.append(f"[{matric}] AR {code} {grp}: {rp[:60]}")
+                                _job_log('autojobs', f"[{matric}] AR {code} {grp}: {rp[:80]}")
                             else:
-                                out_logs.append(f"[{matric}] AR {code}: No Password")
+                                _job_log('autojobs', f"[{matric}] AR {code}: No Password")
                 
-                save_job_log(job_category, "SUCCESS", len(jobs))
-                return jsonify({"log": "\n".join(out_logs)})
+                _job_log('autojobs', f"Done. Processed {len(jobs)} jobs.")
+                save_job_log(job_category, "SUCCESS", len(jobs), "\n".join(_job_status['autojobs']['lines']))
+                _job_end('autojobs')
+                return jsonify({"status": "ok", "count": len(jobs)})
                 
             elif req_type == 'ban_ip':
                 ip, act = data.get('ip'), data.get('action')

@@ -551,3 +551,81 @@ button { font-family: inherit; }
    }
    .hub-title { font-size: 1rem; color: #fff; font-weight: bold; margin-bottom: 2px; }
    .hub-meta { font-size: 0.75rem; color: var(--primary); margin-bottom: 10px; }
+
+/* ==========================================================================
+   9. ADMIN PANEL v2 - LOG TABS, FLOATING SAVE, JOB STATES
+   ========================================================================== */
+
+/* Log Tab Bar */
+.log-tab-bar {
+    display: flex; border-bottom: 1px solid rgba(255,255,255,0.1);
+    margin-bottom: 10px; gap: 0;
+}
+.log-tab {
+    flex: 1; text-align: center; padding: 7px 4px; cursor: pointer;
+    color: var(--text-dim); font-size: 0.65rem; letter-spacing: 1px;
+    text-transform: uppercase; transition: 0.2s; position: relative;
+    border-bottom: 2px solid transparent;
+}
+.log-tab:hover { background: rgba(255,255,255,0.03); color: #fff; }
+.log-tab.active { font-weight: bold; }
+.log-tab-dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: #0f0; margin-left: 4px; vertical-align: middle;
+    animation: pulse 1s infinite; box-shadow: 0 0 6px #0f0;
+}
+
+/* System Log Entries */
+.sys-log-entry {
+    padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    cursor: pointer; transition: background 0.15s; font-size: 0.7rem;
+}
+.sys-log-entry:hover { background: rgba(255,255,255,0.04); }
+.sys-log-detail {
+    margin: 8px 0 0 0; padding: 8px; background: #000;
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 4px;
+    font-family: monospace; font-size: 0.65rem; white-space: pre-wrap;
+    word-break: break-word; max-height: 200px; overflow-y: auto;
+    line-height: 1.5;
+}
+
+/* Floating Save Button */
+.floating-save-btn {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000;
+    background: rgba(0, 10, 10, 0.96);
+    border-top: 2px solid var(--primary);
+    box-shadow: 0 -4px 20px rgba(0, 243, 255, 0.25);
+    padding: 14px 20px;
+    display: flex; justify-content: space-between; align-items: center;
+    cursor: pointer; transition: 0.2s; backdrop-filter: blur(10px);
+}
+.floating-save-btn:hover {
+    background: rgba(0, 243, 255, 0.08);
+    box-shadow: 0 -4px 30px rgba(0, 243, 255, 0.4);
+}
+.floating-save-count {
+    font-size: 0.8rem; color: var(--primary); font-family: monospace;
+}
+.floating-save-label {
+    font-size: 0.75rem; font-weight: bold; letter-spacing: 2px;
+    color: var(--primary); text-shadow: 0 0 8px var(--primary);
+}
+
+/* Job Running Spinner */
+.job-spinner {
+    display: inline-block; width: 8px; height: 8px;
+    border: 2px solid transparent; border-top-color: #555;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+
+/* Admin Run Button - disabled state override */
+.admin-run-btn:disabled {
+    opacity: 0.5; cursor: not-allowed !important;
+    background: transparent !important;
+}
+.admin-run-btn:disabled:hover {
+    background: transparent !important;
+    box-shadow: none !important;
+    color: #555 !important;
+    border-color: #555 !important;
+}

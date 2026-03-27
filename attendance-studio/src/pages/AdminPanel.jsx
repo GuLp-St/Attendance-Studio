@@ -1,26 +1,29 @@
 // --- START OF FILE AdminPanel.jsx ---
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { api, getDirectory } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import Modal from '../components/Modal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
+const ADMIN_KEY_STORAGE = 'admin_key_cache';
+
 export default function AdminPanel() {
   const { showToast } = useToast();
   const { confirm } = useConfirm();
 
-  const [key, setKey] = useState('');
+  const [key, setKey] = useState(() => sessionStorage.getItem(ADMIN_KEY_STORAGE) || '');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState(null); 
-  const [consoleOutput, setConsoleOutput] = useState("Ready...");
-  const [sysConsoleOutput, setSysConsoleOutput] = useState("Ready...");
-  const [jobLogs, setJobLogs] = useState("Awaiting manual trigger...");
+  const [data, setData] = useState(null);
   const [expandedIps, setExpandedIps] = useState({});
-  const [tagModalData, setTagModalData] = useState(null); 
-  
+  const [tagModalData, setTagModalData] = useState(null);
+
+  // System Log Tab
+  const [logTab, setLogTab] = useState('class');
+  const [expandedLogs, setExpandedLogs] = useState({});
+
   // Auto System State
   const [autoAccounts, setAutoAccounts] = useState([]);
   const [autoIndex, setAutoIndex] = useState(0);
@@ -29,329 +32,616 @@ export default function AdminPanel() {
   const [manualMode, setManualMode] = useState(false);
   const [manualMatric, setManualMatric] = useState('');
   const [manualPwd, setManualPwd] = useState('');
-  const [manualTestStatus, setManualTestStatus] = useState('none');
+  const [manualTestStatus, setManualTestStatus] = useState('none'); // none|testing|valid|invalid
 
   const [directory, setDirectory] = useState([]);
-  useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}) }, []);
+  useEffect(() => { getDirectory().then(setDirectory).catch(() => {}) }, []);
 
-  const [formSync, setFormSync] = useState({ 
-      classStart: 0, actStart: 0, actMonths: 6 
-  });
+  // Sync Manager State
+  const [formSync, setFormSync] = useState({ classStart: 0, actStart: 0, actMonths: 6 });
   const [priorityCourses, setPriorityCourses] = useState([]);
   const [courseSearch, setCourseSearch] = useState('');
 
+  // Priority Student IDs
+  const [priorityStudentIds, setPriorityStudentIds] = useState([]);
+  const [studentIdSearch, setStudentIdSearch] = useState('');
+
+  // Dirty state tracking for floating save button
+  const [dirty, setDirty] = useState({});
+  const markDirty = (key) => setDirty(prev => ({ ...prev, [key]: true }));
+
+  // Per-job running state (from server)
+  const [jobRunning, setJobRunning] = useState({
+    class: false, student: false, activity: false, verify: false, autojobs: false
+  });
+
+  // Per-job log lines displayed in textareas
+  const [jobLogs, setJobLogs] = useState({
+    class: 'Ready...', student: 'Ready...', activity: 'Ready...', verify: 'Ready...', autojobs: 'Awaiting trigger...'
+  });
+  const pollingRefs = useRef({});
+  const logOffsets = useRef({ class: 0, student: 0, activity: 0, verify: 0, autojobs: 0 });
+  const logTextRefs = useRef({});
+
+  // Modal
   const openTagModal = (id, name) => { window.history.pushState({ level: 'admin_tag' }, '', '#tag'); setTagModalData({ id, name }); };
   const closeTagModal = () => window.history.back();
-
   useEffect(() => {
     const handlePopState = (e) => { if (tagModalData && (!e.state || e.state.level !== 'admin_tag')) setTagModalData(null); };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, [tagModalData]);
 
+  // Auto-scroll log textareas
+  const appendJobLog = useCallback((type, lines) => {
+    if (!lines.length) return;
+    setJobLogs(prev => {
+      const base = (prev[type] === 'Ready...' || prev[type] === 'Awaiting trigger...') ? '' : prev[type];
+      return { ...prev, [type]: (base ? base + '\n' : '') + lines.join('\n') };
+    });
+    setTimeout(() => {
+      const el = logTextRefs.current[type];
+      if (el) el.scrollTop = el.scrollHeight;
+    }, 50);
+  }, []);
+
+  // Polling function for a job type
+  const startPolling = useCallback((type) => {
+    logOffsets.current[type] = 0;
+    setJobRunning(prev => ({ ...prev, [type]: true }));
+    setJobLogs(prev => ({ ...prev, [type]: '' }));
+
+    const poll = async () => {
+      try {
+        const offset = logOffsets.current[type];
+        const res = await fetch(`/api/admin_job_status?key=${key}&type=${type}&offset=${offset}`);
+        const d = await res.json();
+        if (d.lines && d.lines.length > 0) {
+          logOffsets.current[type] = d.total;
+          appendJobLog(type, d.lines);
+        }
+        if (!d.running) {
+          setJobRunning(prev => ({ ...prev, [type]: false }));
+          clearInterval(pollingRefs.current[type]);
+          loadData();
+        }
+      } catch (e) {
+        setJobRunning(prev => ({ ...prev, [type]: false }));
+        clearInterval(pollingRefs.current[type]);
+      }
+    };
+
+    if (pollingRefs.current[type]) clearInterval(pollingRefs.current[type]);
+    pollingRefs.current[type] = setInterval(poll, 2000);
+    poll(); // immediate first poll
+  }, [key, appendJobLog]);
+
   const loadData = async () => {
     setLoading(true);
     try {
       const res = await api.post('/admin_dashboard', { key, type: 'get_data' });
       if (res.error) throw new Error(res.error);
-
       setData(res);
       setIsAuthenticated(true);
+      sessionStorage.setItem(ADMIN_KEY_STORAGE, key);
 
       if (res.auto_accounts) {
-          const validAccs = res.auto_accounts.sort((a,b) => parseInt(b.matric) - parseInt(a.matric));
-          setAutoAccounts(validAccs);
-          if (res.config?.system_matric) {
-              const idx = validAccs.findIndex(a => a.matric === res.config.system_matric);
-              if (idx !== -1) { setAutoIndex(idx); setManualMode(false); }
-              else {
-                  setManualMode(true);
-                  setManualMatric(res.config.system_matric);
-                  setManualPwd(res.config.system_pwd);
-                  setManualTestStatus('valid');
-              }
+        const validAccs = res.auto_accounts.sort((a, b) => parseInt(b.matric) - parseInt(a.matric));
+        setAutoAccounts(validAccs);
+        if (res.config?.system_matric) {
+          const idx = validAccs.findIndex(a => a.matric === res.config.system_matric);
+          if (idx !== -1) { setAutoIndex(idx); setManualMode(false); }
+          else {
+            setManualMode(true);
+            setManualMatric(res.config.system_matric);
+            setManualPwd(res.config.system_pwd || '');
+            setManualTestStatus('valid');
           }
+        }
       }
 
       if (res.config) {
         setFormSync({
           classStart: res.config.start_id || 100000,
-          actStart: res.config.act_start_id || 107000, actMonths: res.config.act_months || 6,
-          verifyStartId: res.config.verify_start_id || ""
+          actStart: res.config.act_start_id || 107000,
+          actMonths: res.config.act_months || 6,
         });
         setPriorityCourses(res.config.priority_courses || []);
+        setPriorityStudentIds(res.config.priority_student_ids || []);
       }
-    } catch (e) { showToast(e.message || "Invalid Key", "error"); setIsAuthenticated(false); } finally { setLoading(false); }
+
+      if (res.job_running) {
+        setJobRunning(prev => {
+          const next = { ...prev };
+          Object.keys(res.job_running).forEach(t => {
+            if (res.job_running[t] && !prev[t]) {
+              next[t] = true;
+              startPolling(t);
+            }
+          });
+          return next;
+        });
+      }
+    } catch (e) {
+      showToast(e.message || 'Invalid Key', 'error');
+      setIsAuthenticated(false);
+    } finally { setLoading(false); }
   };
 
-  const saveSystemSettings = async () => {
+  // Unified save that collects all dirty fields
+  const saveAllSettings = async () => {
     try {
-      await api.post('/admin_dashboard', {
-        key, type: 'save_settings', 
-        system_matric: manualMode ? manualMatric : (autoAccounts[autoIndex]?.matric || ""), 
-        system_pwd: manualMode ? manualPwd : (autoAccounts[autoIndex]?.password || ""),
-        verify_start_id: formSync.verifyStartId
-      });
-      showToast("System Saved", "success");
-    } catch (e) { showToast(e.message, "error"); }
+      const payload = { key, type: 'save_settings' };
+      let hasSomething = false;
+
+      if (dirty.sync_class) { payload.last_scanned = formSync.classStart; hasSomething = true; }
+      if (dirty.sync_activity) { payload.act_start_id = formSync.actStart; payload.act_months = formSync.actMonths; hasSomething = true; }
+      if (dirty.priority_courses) { payload.priority_courses = priorityCourses; hasSomething = true; }
+      if (dirty.priority_students) { payload.priority_student_ids = priorityStudentIds; hasSomething = true; }
+      if (dirty.system_account || dirty.manual_mode) {
+        payload.system_matric = manualMode ? manualMatric : (autoAccounts[autoIndex]?.matric || '');
+        payload.system_pwd = manualMode ? manualPwd : (autoAccounts[autoIndex]?.password || '');
+        hasSomething = true;
+      }
+
+      if (!hasSomething) return;
+      await api.post('/admin_dashboard', payload);
+      showToast('Settings saved!', 'success');
+      setDirty({});
+    } catch (e) { showToast(e.message, 'error'); }
   };
 
-  const saveSyncSettings = async () => {
+  const pendingCount = Object.values(dirty).filter(Boolean).length;
+
+  const triggerSync = async (type) => {
+    if (jobRunning[type]) return;
+    if (!await confirm(`Start ${type.toUpperCase()} Sync?`)) return;
+    startPolling(type);
     try {
-      await api.post('/admin_dashboard', {
-        key, type: 'save_settings', last_scanned: formSync.classStart,
-        act_start_id: formSync.actStart, act_months: formSync.actMonths, 
-        priority_courses: priorityCourses
-      });
-      showToast("Sync Saved", "success");
-    } catch (e) { showToast(e.message, "error"); }
+      const endpoint = type === 'class' ? '/admin_sync_class' : type === 'student' ? '/admin_sync_student' : '/admin_sync_activity';
+      fetch(`/api${endpoint}?key=${key}`).catch(() => {});
+    } catch (e) { appendJobLog(type, [`Error: ${e.message}`]); setJobRunning(prev => ({ ...prev, [type]: false })); }
   };
 
-  const triggerDirectoryVerify = async () => {
-    if (!await confirm(`Start DIRECTORY VERIFY?`)) return;
-    setSysConsoleOutput("Initializing Directory Verification...");
+  const triggerVerify = async () => {
+    if (jobRunning.verify) return;
+    if (!await confirm('Start Directory Verification?')) return;
+    startPolling('verify');
     try {
-      const text = await (await fetch(`/api/admin_verify_directory?key=${key}`)).text();
-      setSysConsoleOutput(text); loadData();
-    } catch (e) { setSysConsoleOutput("Error: " + e.message); }
+      fetch(`/api/admin_verify_directory?key=${key}`).catch(() => {});
+    } catch (e) { appendJobLog('verify', [`Error: ${e.message}`]); setJobRunning(prev => ({ ...prev, verify: false })); }
+  };
+
+  const triggerAutoJobs = async (jobType) => {
+    if (jobRunning.autojobs) return;
+    startPolling('autojobs');
+    try {
+      const res = await api.post('/admin_dashboard', { key, type: 'trigger_jobs', job_category: jobType });
+      if (res.error) appendJobLog('autojobs', [`Error: ${res.error}`]);
+    } catch (e) { appendJobLog('autojobs', [`Exception: ${e.message}`]); }
+    setJobRunning(prev => ({ ...prev, autojobs: false }));
   };
 
   const handleTestManualSys = async () => {
     if (!manualMatric || !manualPwd) return;
     setManualTestStatus('testing');
     try {
-        const res = await (await fetch(`/api/admin_test_system_account?key=${key}&matric=${manualMatric}&password=${encodeURIComponent(manualPwd)}`)).json();
-        if (res.valid) {
-            setManualTestStatus('valid');
-            showToast("Credential & Timetable Valid!", "success");
-        } else {
-            setManualTestStatus('invalid');
-            showToast(res.error || "Invalid Credentials", "error");
-        }
-    } catch {
+      const res = await (await fetch(`/api/admin_test_system_account?key=${key}&matric=${manualMatric}&password=${encodeURIComponent(manualPwd)}`)).json();
+      if (res.valid) {
+        setManualTestStatus('valid');
+        markDirty('system_account');
+        showToast('Credential & Timetable Valid!', 'success');
+      } else {
         setManualTestStatus('invalid');
-        showToast("Server Error during test", "error");
-    }
+        showToast(res.error || 'Invalid Credentials', 'error');
+      }
+    } catch { setManualTestStatus('invalid'); showToast('Server Error during test', 'error'); }
   };
 
-  const triggerSync = async (type) => {
-    if (!await confirm(`Start ${type.toUpperCase()} Sync?`)) return;
-    setConsoleOutput("Initializing Sync...");
-    try {
-      let endpoint = type === 'class' ? '/admin_sync_class' : type === 'student' ? '/admin_sync_student' : '/admin_sync_activity';
-      const text = await (await fetch(`/api${endpoint}?key=${key}`)).text();
-      setConsoleOutput(text); loadData();
-    } catch (e) { setConsoleOutput("Error: " + e.message); }
+  const handleJobAction = async (action, jobId = null) => {
+    if (!await confirm('Delete?')) return;
+    try { await api.post('/admin_dashboard', { key, type: action, job_id: jobId }); loadData(); showToast('Updated', 'success'); } catch (e) {}
   };
 
-  const handleJobAction = async (action, jobId = null) => { if (!await confirm("Delete?")) return; try { await api.post('/admin_dashboard', { key, type: action, job_id: jobId }); loadData(); showToast("Updated", "success"); } catch (e) {} };
-  
-  const triggerAutoJobs = async (jobType) => {
-      setJobLogs(`Starting ${jobType.toUpperCase()} trigger...`);
-      try {
-          const res = await api.post('/admin_dashboard', { key, type: 'trigger_jobs', job_category: jobType });
-          if (res.error) setJobLogs(`Error: ${res.error}`);
-          else {
-              setJobLogs(res.log || "Completed.");
-              loadData();
-          }
-      } catch (e) { setJobLogs(`Exception: ${e.message}`); }
+  const handleDeviceDelete = async (id) => {
+    if (!await confirm('Delete logs & Unban?')) return;
+    try { await api.post('/admin_dashboard', { key, type: 'delete_device_logs', target_id: id }); loadData(); showToast('Cleared', 'success'); } catch (e) {}
   };
 
-  const handleDeviceDelete = async (id) => { if (!await confirm("Delete logs & Unban?")) return; try { await api.post('/admin_dashboard', { key, type: 'delete_device_logs', target_id: id }); loadData(); showToast("Cleared", "success"); } catch (e) {} };
-  const handleIpAction = async (ip, action) => { if (!await confirm(`BAN IP: ${ip}?`)) return; try { await api.post('/admin_dashboard', { key, type: 'ban_ip', ip, action }); loadData(); showToast(`IP ${action}ned`, "success"); } catch (e) {} };
-  const saveIpTag = async () => { if (!tagModalData) return; try { await api.post('/admin_dashboard', { key, type: 'set_ip_name', ip: tagModalData.id, name: tagModalData.name }); closeTagModal(); loadData(); showToast("Saved", "success"); } catch (e) {} };
+  const handleIpAction = async (ip, action) => {
+    if (!await confirm(`${action.toUpperCase()} IP: ${ip}?`)) return;
+    try { await api.post('/admin_dashboard', { key, type: 'ban_ip', ip, action }); loadData(); showToast(`IP ${action}ned`, 'success'); } catch (e) {}
+  };
+
+  const saveIpTag = async () => {
+    if (!tagModalData) return;
+    try { await api.post('/admin_dashboard', { key, type: 'set_ip_name', ip: tagModalData.id, name: tagModalData.name }); closeTagModal(); loadData(); showToast('Saved', 'success'); } catch (e) {}
+  };
 
   const networkGroups = useMemo(() => {
     if (!data) return [];
     const groups = {};
-    data.logs.filter(l => !l.log_type || l.log_type === 'USER_ACTION').forEach(l => {
+    (data.logs || []).filter(l => !l.log_type || l.log_type === 'USER_ACTION').forEach(l => {
       const id = l.device_id && l.device_id !== 'unknown' ? l.device_id : l.ip;
       if (!groups[id]) groups[id] = { id, logs: [], banned: false, name: '', recentIdentity: 'Unknown User', lastActive: '', lastIdentityTime: '' };
       groups[id].logs.push(l);
       if (l.timestamp > groups[id].lastActive) groups[id].lastActive = l.timestamp;
       if (l.matric && l.matric !== 'undefined' && l.matric !== 'null') {
-          if (l.timestamp > groups[id].lastIdentityTime) { groups[id].recentIdentity = `User: ${l.matric}`; groups[id].lastIdentityTime = l.timestamp; }
+        if (l.timestamp > groups[id].lastIdentityTime) { groups[id].recentIdentity = `User: ${l.matric}`; groups[id].lastIdentityTime = l.timestamp; }
       } else if (l.action === 'TARGET_SEARCH' && groups[id].recentIdentity === 'Unknown User') {
-          if (l.timestamp > groups[id].lastIdentityTime) { groups[id].recentIdentity = `Searched: ${l.details}`; }
+        if (l.timestamp > groups[id].lastIdentityTime) { groups[id].recentIdentity = `Searched: ${l.details}`; }
       }
     });
-    data.banned_ips.forEach(ip => { if (!groups[ip]) groups[ip] = { id: ip, logs: [], banned: true, name: '', recentIdentity: 'Banned', lastActive: '9999' }; groups[ip].banned = true; });
+    (data.banned_ips || []).forEach(ip => {
+      if (!groups[ip]) groups[ip] = { id: ip, logs: [], banned: true, name: '', recentIdentity: 'Banned', lastActive: '9999' };
+      groups[ip].banned = true;
+    });
     Object.keys(data.ip_meta || {}).forEach(k => { if (groups[k]) groups[k].name = data.ip_meta[k]; });
-    return Object.values(groups).sort((a, b) => (b.lastActive || "").localeCompare(a.lastActive || ""));
+    return Object.values(groups).sort((a, b) => (b.lastActive || '').localeCompare(a.lastActive || ''));
   }, [data]);
 
-  const courseMatches = courseSearch.length >= 2 ? directory.filter(u => (u.t === 'c') && ((u.m || "").toUpperCase().includes(courseSearch.toUpperCase()) || (u.n || "").toUpperCase().includes(courseSearch.toUpperCase().replace(/\s+/g, '')))).slice(0,5) : [];
+  const courseMatches = courseSearch.length >= 2
+    ? directory.filter(u => u.t === 'c' && ((u.m || '').toUpperCase().includes(courseSearch.toUpperCase()) || (u.n || '').toUpperCase().includes(courseSearch.toUpperCase().replace(/\s+/g, '')))).slice(0, 5)
+    : [];
+
+  const studentMatches = studentIdSearch.length >= 3
+    ? directory.filter(u => u.t === 's' && ((u.m || '').includes(studentIdSearch) || (u.n || '').toUpperCase().includes(studentIdSearch.toUpperCase()))).slice(0, 5)
+    : [];
 
   if (!isAuthenticated) return (
-      <div style={{ textAlign: 'center', padding: '50px 0' }}><input type="password" className="t-input" placeholder="ENTER KEY" style={{ borderColor: '#f00', color: '#f00', marginBottom: '10px' }} value={key} onChange={(e) => setKey(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && loadData()} /><button className="btn" style={{ borderColor: '#f00', color: '#f00', width: '100%' }} onClick={loadData} disabled={loading}>{loading ? "VERIFYING..." : "UNLOCK"}</button></div>
+    <div style={{ textAlign: 'center', padding: '50px 0' }}>
+      <input type="password" className="t-input" placeholder="ENTER KEY"
+        style={{ borderColor: '#f00', color: '#f00', marginBottom: '10px' }}
+        value={key} onChange={e => setKey(e.target.value)} onKeyDown={e => e.key === 'Enter' && loadData()} />
+      <button className="btn" style={{ borderColor: '#f00', color: '#f00', width: '100%' }} onClick={loadData} disabled={loading}>
+        {loading ? 'VERIFYING...' : 'UNLOCK'}
+      </button>
+    </div>
   );
+
+  const systemLogs = data?.system_logs || {};
+  const LOG_TABS = [
+    { key: 'class', label: 'CLASS', color: 'var(--primary)' },
+    { key: 'student', label: 'STUDENT', color: '#0f0' },
+    { key: 'activity', label: 'ACTIVITY', color: 'var(--accent)' },
+    { key: 'verify', label: 'VERIFY', color: '#0ff' },
+    { key: 'autojobs', label: 'AUTO JOBS', color: '#f0f' },
+  ];
+
+  const formatTs = (ts) => ts ? String(ts).substring(0, 19).replace('T', ' ') : '';
+
+  const RunBtn = ({ type, color, label, onClick }) => {
+    const running = jobRunning[type];
+    return (
+      <button className="btn admin-run-btn" disabled={running}
+        style={{ borderColor: running ? '#555' : color, color: running ? '#555' : color, cursor: running ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}
+        onClick={onClick}>
+        {running ? <><span className="job-spinner" />RUNNING...</> : label}
+      </button>
+    );
+  };
 
   return (
     <ErrorBoundary>
-    <div className="admin-grid">
+      <div className="admin-grid" style={{ paddingBottom: pendingCount > 0 ? '90px' : '0' }}>
 
-      <div className="admin-section">
-        <div className="admin-title">
-            <span>SYSTEM ACCOUNT</span>
-            <button className="btn" onClick={triggerDirectoryVerify} style={{ borderColor: 'var(--primary)', color: 'var(--primary)', padding: '2px 8px', fontSize: '0.7rem' }}>RUN VERIFY</button>
-        </div>
-        
-        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.8rem', color: '#ccc', cursor: 'pointer', marginBottom: '10px' }}>
-            <input type="checkbox" checked={manualMode} onChange={e => setManualMode(e.target.checked)} />
-            Enable Manual Input
-        </label>
-        
-        {!manualMode ? (
-            <div className="ctrl-row" style={{marginBottom: 0}}>
-                <div style={{ flex: 1, background: 'rgba(0,0,0,0.4)', padding: '10px', borderRadius: '4px', border: '1px solid var(--primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                        <span style={{ color: 'var(--primary)', fontWeight: 'bold', marginRight: '10px' }}>AUTO:</span>
-                        <span style={{ color: '#fff' }}>{autoAccounts[autoIndex]?.matric || "NO VALID ACCOUNTS"}</span>
-                    </div>
-                </div>
-                <div style={{ display: 'flex', gap: '5px'}}>
-                    <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex(0)}>DEFAULT</button>
-                    <button className="btn" style={{height: '38px'}} onClick={() => setAutoIndex((autoIndex + 1) % autoAccounts.length)}>SWITCH</button>
-                </div>
-            </div>
-        ) : (
-            <div className="ctrl-row" style={{marginBottom: 0}}>
-                <input type="text" className="t-input" placeholder="Matric" value={manualMatric} onChange={e => {setManualMatric(e.target.value); setManualTestStatus('none');}} style={{flex: 1}} />
-                <input type="text" className="t-input" placeholder="Password" value={manualPwd} onChange={e => {setManualPwd(e.target.value); setManualTestStatus('none');}} style={{flex: 1}} />
-                {manualTestStatus === 'valid' ? (
-                    <button className="btn" style={{height: '38px', borderColor: '#0f0', color: '#0f0'}} onClick={saveSystemSettings}>CONFIRM</button>
-                ) : (
-                    <button className="btn" style={{height: '38px', borderColor: manualTestStatus === 'invalid' ? '#f00' : 'var(--primary)'}} onClick={handleTestManualSys} disabled={manualTestStatus === 'testing' || !manualMatric || !manualPwd}>
-                        {manualTestStatus === 'testing' ? 'TEST...' : 'TEST'}
-                    </button>
-                )}
-            </div>
-        )}
-        
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '15px' }}>
-            <span style={{ fontSize: '0.75rem', color: '#aaa', fontWeight: 'bold' }}>POINTER:</span>
-            <input type="text" className="t-input" placeholder="Start ID (e.g. 100000)" value={formSync.verifyStartId || ""} onChange={e => setFormSync({ ...formSync, verifyStartId: e.target.value })} style={{ flex: 1 }} />
-        </div>
-        <button className="btn" style={{ width: '100%', marginTop: '10px', borderColor: 'var(--primary)', color: 'var(--primary)' }} onClick={saveSystemSettings}>SAVE SYSTEM SETTINGS</button>
-        
-        <textarea readOnly style={{ width: '100%', height: '80px', background: '#000', color: 'var(--primary)', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginTop: '15px', boxSizing: 'border-box' }} value={sysConsoleOutput} />
-        
-      </div>
-
-      <div className="admin-section">
-        <div className="admin-title">SYNC MANAGER</div>
-        <div className="admin-config-grid">
-        </div>
-
-        <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
-          <div style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 'bold', marginBottom: '8px' }}>CLASS SYNC (DISCOVERY)</div>
-          <div className="ctrl-row"><input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID" value={formSync.classStart} onChange={e => setFormSync({ ...formSync, classStart: e.target.value })} /><button className="btn" onClick={() => triggerSync('class')}>RUN</button></div>
-        </div>
-
-        <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
-          <div style={{ fontSize: '0.7rem', color: '#0f0', fontWeight: 'bold', marginBottom: '8px' }}>STUDENT SYNC (FILL DB)</div>
-          <div style={{ background: 'rgba(0,0,0,0.3)', padding: '10px', borderRadius: '4px', marginBottom: '10px' }}>
-              <div style={{ fontSize: '0.65rem', color: '#aaa', marginBottom: '5px' }}>PRIORITY COURSES</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '10px' }}>
-                  {priorityCourses.length === 0 && <span style={{ color: '#555', fontSize: '0.7rem' }}>None Set</span>}
-                  {priorityCourses.map(c => (<div key={c} style={{ background: 'rgba(0,255,0,0.1)', border: '1px solid #0f0', color: '#0f0', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '5px' }}>{c} <span style={{ cursor: 'pointer', color: '#f00' }} onClick={() => setPriorityCourses(prev => prev.filter(x => x !== c))}>✕</span></div>))}
-              </div>
-              <div style={{ position: 'relative' }}>
-                  <input type="text" className="t-input" placeholder="Add Priority Course Code..." value={courseSearch} onChange={e => setCourseSearch(e.target.value)} style={{ padding: '6px', fontSize: '0.8rem' }} />
-                  {courseMatches.length > 0 && (
-                      <div className="results-list" style={{ display: 'block', zIndex: 10, border: '1px solid #0f0' }}>
-                          {courseMatches.map(u => (<div key={u.m} className="result-item" onClick={() => { if(!priorityCourses.includes(u.m)) setPriorityCourses(prev => [...prev, u.m]); setCourseSearch(''); }}><span style={{ color: '#0f0' }}>{u.n}</span> <span style={{ color: '#fff' }}>{u.m}</span></div>))}
-                      </div>
-                  )}
-              </div>
-          </div>
-          <div className="ctrl-row">
-            <div style={{ flex: 1 }}></div>
-            <button className="btn" style={{ borderColor: '#0f0', color: '#0f0' }} onClick={() => triggerSync('student')}>RUN</button>
-          </div>
-        </div>
-
-        <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
-          <div style={{ fontSize: '0.7rem', color: 'var(--accent)', fontWeight: 'bold', marginBottom: '8px' }}>ACTIVITY SYNC</div>
-          <div className="ctrl-row"><div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: '0 0 auto' }}><label>MTH:</label><input type="number" className="t-input" style={{ width: '50px' }} value={formSync.actMonths} onChange={e => setFormSync({ ...formSync, actMonths: e.target.value })} /></div><input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID" value={formSync.actStart} onChange={e => setFormSync({ ...formSync, actStart: e.target.value })} /><button className="btn" style={{ '--accent': '1' }} onClick={() => triggerSync('activity')}>RUN</button></div>
-        </div>
-
-        <button className="btn" style={{ width: '100%', marginTop: '15px' }} onClick={saveSyncSettings}>SAVE SETTINGS</button>
-        <textarea readOnly style={{ width: '100%', height: '100px', background: '#000', color: '#0f0', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginTop: '10px', boxSizing: 'border-box' }} value={consoleOutput} />
-
-      </div>
-
-      <div className="admin-section">
-        <div className="admin-title">
-            <span>ACTIVE AUTO-JOBS</span>
-            <button onClick={() => handleJobAction('delete_all_jobs')} style={{ background: 'none', border: 'none', color: '#f00', cursor: 'pointer', fontSize: '0.7rem' }}>PURGE ALL</button>
-        </div>
-        
-        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-            <button className="btn" style={{ flex: 1, borderColor: 'var(--accent)', color: 'var(--accent)' }} onClick={() => triggerAutoJobs('autoscan')}>TRIGGER AUTOSCAN</button>
-            <button className="btn" style={{ flex: 1, borderColor: '#f0f', color: '#f0f' }} onClick={() => triggerAutoJobs('autoregister')}>TRIGGER AUTO REG</button>
-        </div>
-        <textarea readOnly style={{ width: '100%', height: '80px', background: '#000', color: '#0f0', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginBottom: '15px', boxSizing: 'border-box' }} value={jobLogs} />
-        
-        <div style={{ maxHeight: '200px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', border: '1px solid #333', marginBottom: '15px' }}>
-            {data.jobs?.length === 0 && <div style={{ padding: '10px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No Active Auto-Jobs</div>}
-            {data.jobs?.map(job => {
-                const isReg = job.type === 'register';
-                const title = isReg ? `AUTO-REGISTER (${job.code || job.group_id || 'Course'})` : `AUTOSCAN (${job.target || job.code || 'Activity/Class'})`;
-                const userDesc = job.matric || job.id.split('_')[0];
-                return (
-                    <div key={job.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px', borderBottom: '1px solid #333', alignItems: 'center' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            <span style={{ color: isReg ? '#f0f' : 'var(--accent)', fontWeight: 'bold', fontSize: '0.8rem' }}>{title}</span>
-                            <span style={{ fontSize: '0.7rem', color: '#fff' }}>User: {userDesc}</span>
-                        </div>
-                        <button className="btn" style={{ color: '#f00', padding: '4px 10px', height: '28px', minWidth: 'auto', borderColor: '#f00' }} onClick={() => handleJobAction('delete_single_job', job.id)}>DEL</button>
-                    </div>
-                );
-            })}
-        </div>
-        
-        <div style={{ borderTop: '1px solid #333', paddingTop: '10px' }}>
-          <div className="admin-title" style={{ border: 'none', padding: 0, marginBottom: '5px' }}>GLOBAL SYSTEM LOGS</div>
-          <div style={{ maxHeight: '150px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)' }}>
-            {data.logs?.filter(l => l.log_type && l.log_type !== 'USER_ACTION').length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No system logs found</div>}
-            {data.logs?.filter(l => l.log_type && l.log_type !== 'USER_ACTION').map(h => (
-              <div key={h.id} style={{ padding: '6px 0', borderBottom: '1px solid #333', fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between', gap: '5px' }}>
-                <span style={{ color: '#888', flex: '0 0 120px' }}>{(h.timestamp || "").substring(0, 19).replace('T', ' ')}</span>
-                <span style={{ color: h.log_type === 'JOB' ? '#f0f' : h.log_type === 'SYNC' ? '#0f0' : 'var(--primary)', fontWeight: 'bold', flex: '0 0 40px' }}>{h.log_type}</span>
-                <span style={{ color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.action || h.category || h.type}</span>
-                <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00', flex: '0 0 auto' }}>{h.status} ({h.items_processed || h.items_found || 0})</span>
+        {/* ================================================================ */}
+        {/* GLOBAL SYSTEM LOGS - TOP SECTION */}
+        {/* ================================================================ */}
+        <div className="admin-section">
+          <div className="admin-title">GLOBAL SYSTEM LOGS</div>
+          <div className="log-tab-bar">
+            {LOG_TABS.map(t => (
+              <div key={t.key} className={`log-tab ${logTab === t.key ? 'active' : ''}`}
+                style={logTab === t.key ? { color: t.color, borderBottomColor: t.color } : {}}
+                onClick={() => setLogTab(t.key)}>
+                {t.label}
+                {jobRunning[t.key] && <span className="log-tab-dot" />}
               </div>
             ))}
           </div>
-        </div>
-      </div>
 
-      <div className="admin-section">
-        <div className="admin-title"><span>NETWORK ACTIVITY</span><button onClick={loadData} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.7rem' }}>REFRESH</button></div>
-        <div style={{ maxHeight: '350px', overflowY: 'auto', border: '1px solid #333' }}>
-          {networkGroups.map(group => {
-            const isExpanded = expandedIps[group.id];
-            const color = group.banned ? '#f00' : '#0f0';
-            return (
-              <div key={group.id} className="ip-group">
-                <div className="ip-header" onClick={() => setExpandedIps(prev => ({ ...prev, [group.id]: !prev[group.id] }))}>
-                  <div><span style={{ color, marginRight: '5px', fontSize: '1.2rem' }}>●</span><div style={{ display: 'flex', flexDirection: 'column' }}><span className="ip-addr-text">{group.id}</span><div style={{ fontSize: '0.7rem', color: '#888' }}>{group.name ? <span style={{ color: 'var(--primary)', marginRight: '5px' }}>({group.name})</span> : null}{group.recentIdentity}</div></div></div>
-                  <div className="ip-actions" onClick={e => e.stopPropagation()}><button className="btn" style={{ color: '#888', padding: '4px 8px', minWidth: 'auto' }} onClick={() => openTagModal(group.id, group.name || '')}>TAG</button><button className="btn" style={{ color: '#f00', padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleDeviceDelete(group.id)}>DEL</button><button className="btn" style={{ color: color, padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleIpAction(group.id, group.banned ? 'unban' : 'ban')}>{group.banned ? 'UNBAN' : 'BAN'}</button></div>
+          <div style={{ maxHeight: '220px', overflowY: 'auto' }}>
+            {(systemLogs[logTab] || []).length === 0 &&
+              <div style={{ padding: '15px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No logs for this category.</div>}
+            {(systemLogs[logTab] || []).map((h, i) => {
+              const isExpanded = expandedLogs[`${logTab}-${i}`];
+              const tabColor = LOG_TABS.find(t => t.key === logTab)?.color || 'var(--primary)';
+              return (
+                <div key={i} className="sys-log-entry" onClick={() => setExpandedLogs(prev => ({ ...prev, [`${logTab}-${i}`]: !prev[`${logTab}-${i}`] }))}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span style={{ color: '#888', fontSize: '0.65rem', flex: '0 0 auto' }}>{formatTs(h.timestamp)}</span>
+                    <span style={{ color: h.status === 'SUCCESS' ? '#0f0' : '#f00', fontSize: '0.7rem', fontWeight: 'bold', flex: '0 0 auto' }}>{h.status}</span>
+                    <span style={{ color: '#ccc', fontSize: '0.7rem', flex: 1 }}>{h.action || h.category || h.log_type}</span>
+                    <span style={{ color: tabColor, fontSize: '0.7rem', flex: '0 0 auto' }}>
+                      {h.items_found != null ? `${h.items_found} items` : h.items_processed != null ? `${h.items_processed} processed` : ''}
+                    </span>
+                    <span style={{ color: '#555', fontSize: '0.65rem' }}>{isExpanded ? '▲' : '▼'}</span>
+                  </div>
+                  {isExpanded && h.log_text && (
+                    <pre className="sys-log-detail" style={{ color: tabColor }}>{h.log_text}</pre>
+                  )}
                 </div>
-                {isExpanded && (<div className="ip-logs" style={{ display: 'block' }}>{group.logs.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No recent logs</div>}{group.logs.map(l => (<div key={l.id} className="log-row"><div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{(l.timestamp||"").substring(0, 19).replace('T', ' ')}</span><span style={{ color: '#fff' }}>{l.matric || '-'}</span></div><div style={{ color: '#ccc' }}>{l.action} {l.details || ''}</div></div>))}</div>)}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
+
+        {/* ================================================================ */}
+        {/* SYSTEM ACCOUNT */}
+        {/* ================================================================ */}
+        <div className="admin-section">
+          <div className="admin-title">SYSTEM ACCOUNT</div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.8rem', color: '#ccc', cursor: 'pointer', marginBottom: '10px' }}>
+            <input type="checkbox" checked={manualMode} onChange={e => { setManualMode(e.target.checked); markDirty('manual_mode'); }} />
+            Enable Manual Input
+          </label>
+
+          {!manualMode ? (
+            <div className="ctrl-row" style={{ marginBottom: 0 }}>
+              <div style={{ flex: 1, background: 'rgba(0,0,0,0.4)', padding: '10px', borderRadius: '4px', border: '1px solid var(--primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <span style={{ color: 'var(--primary)', fontWeight: 'bold', marginRight: '10px' }}>AUTO:</span>
+                  <span style={{ color: '#fff' }}>{autoAccounts[autoIndex]?.matric || 'NO VALID ACCOUNTS'}</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '5px' }}>
+                <button className="btn" style={{ height: '38px' }} onClick={() => { setAutoIndex(0); markDirty('system_account'); }}>DEFAULT</button>
+                <button className="btn" style={{ height: '38px' }} onClick={() => { setAutoIndex((autoIndex + 1) % autoAccounts.length); markDirty('system_account'); }}>SWITCH</button>
+              </div>
+            </div>
+          ) : (
+            <div className="ctrl-row" style={{ marginBottom: 0 }}>
+              <input type="text" className="t-input" placeholder="Matric" value={manualMatric}
+                onChange={e => { setManualMatric(e.target.value); setManualTestStatus('none'); }}
+                style={{ flex: 1 }} />
+              <input type="text" className="t-input" placeholder="Password" value={manualPwd}
+                onChange={e => { setManualPwd(e.target.value); setManualTestStatus('none'); }}
+                style={{ flex: 1 }} />
+              {manualTestStatus === 'valid' ? (
+                <button className="btn" style={{ height: '38px', borderColor: '#0f0', color: '#0f0' }}>✓ VALID</button>
+              ) : (
+                <button className="btn" style={{ height: '38px', borderColor: manualTestStatus === 'invalid' ? '#f00' : 'var(--primary)' }}
+                  onClick={handleTestManualSys}
+                  disabled={manualTestStatus === 'testing' || !manualMatric || !manualPwd}>
+                  {manualTestStatus === 'testing' ? 'TESTING...' : 'VALIDATE'}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Priority Student IDs */}
+          <div style={{ marginTop: '15px', background: 'rgba(0,0,0,0.3)', padding: '10px', borderRadius: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <span style={{ fontSize: '0.65rem', color: '#aaa', fontWeight: 'bold' }}>PRIORITY STUDENT IDs (VERIFY FIRST)</span>
+              <RunBtn type="verify" color="var(--primary)" label="RUN VERIFY" onClick={triggerVerify} />
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '8px' }}>
+              {priorityStudentIds.length === 0 && <span style={{ color: '#555', fontSize: '0.7rem' }}>None — LRV queue used</span>}
+              {priorityStudentIds.map(id => (
+                <div key={id} style={{ background: 'rgba(0,255,255,0.08)', border: '1px solid var(--primary)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  {id}
+                  <span style={{ cursor: 'pointer', color: '#f00' }} onClick={() => { setPriorityStudentIds(prev => prev.filter(x => x !== id)); markDirty('priority_students'); }}>✕</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ position: 'relative' }}>
+              <input type="text" className="t-input" placeholder="Search student matric/name..."
+                value={studentIdSearch} onChange={e => setStudentIdSearch(e.target.value)}
+                style={{ padding: '6px', fontSize: '0.8rem' }} />
+              {studentMatches.length > 0 && (
+                <div className="results-list" style={{ display: 'block', zIndex: 10, border: '1px solid var(--primary)' }}>
+                  {studentMatches.map(u => (
+                    <div key={u.m} className="result-item" onClick={() => {
+                      if (!priorityStudentIds.includes(u.m)) { setPriorityStudentIds(prev => [...prev, u.m]); markDirty('priority_students'); }
+                      setStudentIdSearch('');
+                    }}>
+                      <span style={{ color: 'var(--primary)' }}>{u.m}</span> <span style={{ color: '#fff' }}>{u.n}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Verify log textarea */}
+          <textarea readOnly ref={el => logTextRefs.current['verify'] = el}
+            style={{ width: '100%', height: '80px', background: '#000', color: '#0f0', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginTop: '12px', boxSizing: 'border-box', resize: 'none' }}
+            value={jobLogs.verify} />
+        </div>
+
+        {/* ================================================================ */}
+        {/* SYNC MANAGER */}
+        {/* ================================================================ */}
+        <div className="admin-section">
+          <div className="admin-title">SYNC MANAGER</div>
+
+          {/* Class Sync */}
+          <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '5px' }}>
+            <div style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 'bold', marginBottom: '8px' }}>CLASS SYNC (DISCOVERY)</div>
+            <div className="ctrl-row">
+              <input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID"
+                value={formSync.classStart} onChange={e => { setFormSync(p => ({ ...p, classStart: e.target.value })); markDirty('sync_class'); }} />
+              <RunBtn type="class" color="var(--primary)" label="RUN" onClick={() => triggerSync('class')} />
+            </div>
+            <textarea readOnly ref={el => logTextRefs.current['class'] = el}
+              style={{ width: '100%', height: '70px', background: '#000', color: 'var(--primary)', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', boxSizing: 'border-box', resize: 'none' }}
+              value={jobLogs.class} />
+          </div>
+
+          {/* Student Sync */}
+          <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
+            <div style={{ fontSize: '0.7rem', color: '#0f0', fontWeight: 'bold', marginBottom: '8px' }}>STUDENT SYNC (FILL DB)</div>
+            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '10px', borderRadius: '4px', marginBottom: '10px' }}>
+              <div style={{ fontSize: '0.65rem', color: '#aaa', marginBottom: '5px' }}>PRIORITY COURSES</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '10px' }}>
+                {priorityCourses.length === 0 && <span style={{ color: '#555', fontSize: '0.7rem' }}>None Set</span>}
+                {priorityCourses.map(c => (
+                  <div key={c} style={{ background: 'rgba(0,255,0,0.1)', border: '1px solid #0f0', color: '#0f0', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    {c} <span style={{ cursor: 'pointer', color: '#f00' }} onClick={() => { setPriorityCourses(prev => prev.filter(x => x !== c)); markDirty('priority_courses'); }}>✕</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ position: 'relative' }}>
+                <input type="text" className="t-input" placeholder="Add Priority Course Code..."
+                  value={courseSearch} onChange={e => setCourseSearch(e.target.value)}
+                  style={{ padding: '6px', fontSize: '0.8rem' }} />
+                {courseMatches.length > 0 && (
+                  <div className="results-list" style={{ display: 'block', zIndex: 10, border: '1px solid #0f0' }}>
+                    {courseMatches.map(u => (
+                      <div key={u.m} className="result-item" onClick={() => {
+                        if (!priorityCourses.includes(u.m)) { setPriorityCourses(prev => [...prev, u.m]); markDirty('priority_courses'); }
+                        setCourseSearch('');
+                      }}>
+                        <span style={{ color: '#0f0' }}>{u.n}</span> <span style={{ color: '#fff' }}>{u.m}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="ctrl-row">
+              <div style={{ flex: 1 }} />
+              <RunBtn type="student" color="#0f0" label="RUN" onClick={() => triggerSync('student')} />
+            </div>
+            <textarea readOnly ref={el => logTextRefs.current['student'] = el}
+              style={{ width: '100%', height: '70px', background: '#000', color: '#0f0', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', boxSizing: 'border-box', resize: 'none' }}
+              value={jobLogs.student} />
+          </div>
+
+          {/* Activity Sync */}
+          <div style={{ borderTop: '1px solid #333', paddingTop: '15px', marginTop: '10px' }}>
+            <div style={{ fontSize: '0.7rem', color: 'var(--accent)', fontWeight: 'bold', marginBottom: '8px' }}>ACTIVITY SYNC</div>
+            <div className="ctrl-row">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: '0 0 auto' }}>
+                <label>MTH:</label>
+                <input type="number" className="t-input" style={{ width: '50px' }} value={formSync.actMonths}
+                  onChange={e => { setFormSync(p => ({ ...p, actMonths: e.target.value })); markDirty('sync_activity'); }} />
+              </div>
+              <input type="number" className="t-input" style={{ flex: 1 }} placeholder="Start ID"
+                value={formSync.actStart} onChange={e => { setFormSync(p => ({ ...p, actStart: e.target.value })); markDirty('sync_activity'); }} />
+              <RunBtn type="activity" color="var(--accent)" label="RUN" onClick={() => triggerSync('activity')} />
+            </div>
+            <textarea readOnly ref={el => logTextRefs.current['activity'] = el}
+              style={{ width: '100%', height: '70px', background: '#000', color: 'var(--accent)', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', boxSizing: 'border-box', resize: 'none' }}
+              value={jobLogs.activity} />
+          </div>
+        </div>
+
+        {/* ================================================================ */}
+        {/* ACTIVE AUTO-JOBS */}
+        {/* ================================================================ */}
+        <div className="admin-section">
+          <div className="admin-title">
+            <span>ACTIVE AUTO-JOBS</span>
+            <button onClick={() => handleJobAction('delete_all_jobs')} style={{ background: 'none', border: 'none', color: '#f00', cursor: 'pointer', fontSize: '0.7rem' }}>PURGE ALL</button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+            <button className="btn" style={{ flex: 1, borderColor: jobRunning.autojobs ? '#555' : 'var(--accent)', color: jobRunning.autojobs ? '#555' : 'var(--accent)', cursor: jobRunning.autojobs ? 'not-allowed' : 'pointer' }}
+              disabled={jobRunning.autojobs} onClick={() => triggerAutoJobs('autoscan')}>
+              {jobRunning.autojobs ? 'RUNNING...' : 'TRIGGER AUTOSCAN'}
+            </button>
+            <button className="btn" style={{ flex: 1, borderColor: jobRunning.autojobs ? '#555' : '#f0f', color: jobRunning.autojobs ? '#555' : '#f0f', cursor: jobRunning.autojobs ? 'not-allowed' : 'pointer' }}
+              disabled={jobRunning.autojobs} onClick={() => triggerAutoJobs('autoregister')}>
+              {jobRunning.autojobs ? 'RUNNING...' : 'TRIGGER AUTO REG'}
+            </button>
+          </div>
+          <textarea readOnly ref={el => logTextRefs.current['autojobs'] = el}
+            style={{ width: '100%', height: '70px', background: '#000', color: '#f0f', fontFamily: 'monospace', border: '1px solid #333', padding: '5px', fontSize: '0.7rem', marginBottom: '12px', boxSizing: 'border-box', resize: 'none' }}
+            value={jobLogs.autojobs} />
+
+          <div style={{ maxHeight: '200px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', border: '1px solid #333', marginBottom: '15px' }}>
+            {data?.jobs?.length === 0 && <div style={{ padding: '10px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No Active Auto-Jobs</div>}
+            {data?.jobs?.map(job => {
+              const isReg = job.type === 'register';
+              const title = isReg ? `AUTO-REGISTER (${job.code || job.group_id || 'Course'})` : `AUTOSCAN (${job.target || job.code || 'Activity/Class'})`;
+              const userDesc = job.matric || job.id.split('_')[0];
+              return (
+                <div key={job.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px', borderBottom: '1px solid #333', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ color: isReg ? '#f0f' : 'var(--accent)', fontWeight: 'bold', fontSize: '0.8rem' }}>{title}</span>
+                    <span style={{ fontSize: '0.7rem', color: '#fff' }}>User: {userDesc}</span>
+                  </div>
+                  <button className="btn" style={{ color: '#f00', padding: '4px 10px', height: '28px', minWidth: 'auto', borderColor: '#f00' }} onClick={() => handleJobAction('delete_single_job', job.id)}>DEL</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ================================================================ */}
+        {/* NETWORK ACTIVITY */}
+        {/* ================================================================ */}
+        <div className="admin-section">
+          <div className="admin-title">
+            <span>NETWORK ACTIVITY</span>
+            <button onClick={loadData} style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.7rem' }}>REFRESH</button>
+          </div>
+          <div style={{ maxHeight: '350px', overflowY: 'auto', border: '1px solid #333' }}>
+            {networkGroups.map(group => {
+              const isExpanded = expandedIps[group.id];
+              const color = group.banned ? '#f00' : '#0f0';
+              return (
+                <div key={group.id} className="ip-group">
+                  <div className="ip-header" onClick={() => setExpandedIps(prev => ({ ...prev, [group.id]: !prev[group.id] }))}>
+                    <div>
+                      <span style={{ color, marginRight: '5px', fontSize: '1.2rem' }}>●</span>
+                      <div style={{ display: 'inline-flex', flexDirection: 'column' }}>
+                        <span className="ip-addr-text">{group.id}</span>
+                        <div style={{ fontSize: '0.7rem', color: '#888' }}>
+                          {group.name ? <span style={{ color: 'var(--primary)', marginRight: '5px' }}>({group.name})</span> : null}
+                          {group.recentIdentity}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="ip-actions" onClick={e => e.stopPropagation()}>
+                      <button className="btn" style={{ color: '#888', padding: '4px 8px', minWidth: 'auto' }} onClick={() => openTagModal(group.id, group.name || '')}>TAG</button>
+                      <button className="btn" style={{ color: '#f00', padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleDeviceDelete(group.id)}>DEL</button>
+                      <button className="btn" style={{ color, padding: '4px 8px', minWidth: 'auto' }} onClick={() => handleIpAction(group.id, group.banned ? 'unban' : 'ban')}>{group.banned ? 'UNBAN' : 'BAN'}</button>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div className="ip-logs" style={{ display: 'block' }}>
+                      {group.logs.length === 0 && <div style={{ padding: '5px', color: '#555', fontSize: '0.7rem' }}>No recent logs</div>}
+                      {group.logs.map(l => (
+                        <div key={l.id} className="log-row">
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span>{formatTs(l.timestamp)}</span>
+                            <span style={{ color: '#fff' }}>{l.matric || '-'}</span>
+                          </div>
+                          <div style={{ color: '#ccc' }}>{l.action} {l.details || ''}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Tag Modal */}
+        <Modal title="TAG DEVICE / IP" isOpen={!!tagModalData} onClose={closeTagModal} maxWidth="300px">
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ marginBottom: '15px', color: '#888', fontFamily: 'monospace', fontSize: '0.8rem', wordBreak: 'break-all' }}>{tagModalData?.id}</div>
+            <input type="text" className="t-input" placeholder="Nickname" style={{ width: '100%', marginBottom: '15px' }}
+              value={tagModalData?.name || ''} onChange={e => setTagModalData({ ...tagModalData, name: e.target.value })} />
+            <button className="btn" style={{ width: '100%' }} onClick={saveIpTag}>SAVE TAG</button>
+          </div>
+        </Modal>
+
+        {/* ================================================================ */}
+        {/* FLOATING SAVE BUTTON */}
+        {/* ================================================================ */}
+        {pendingCount > 0 && (
+          <div className="floating-save-btn" onClick={saveAllSettings}>
+            <span className="floating-save-count">{pendingCount} change{pendingCount > 1 ? 's' : ''} pending</span>
+            <span className="floating-save-label">CLICK TO SAVE ALL</span>
+          </div>
+        )}
       </div>
-
-      <Modal title="TAG DEVICE / IP" isOpen={!!tagModalData} onClose={closeTagModal} maxWidth="300px">
-        <div style={{ textAlign: 'center' }}><div style={{ marginBottom: '15px', color: '#888', fontFamily: 'monospace', fontSize: '0.8rem', wordBreak: 'break-all' }}>{tagModalData?.id}</div><input type="text" className="t-input" placeholder="Nickname" style={{ width: '100%', marginBottom: '15px' }} value={tagModalData?.name || ''} onChange={(e) => setTagModalData({ ...tagModalData, name: e.target.value })} /><button className="btn" style={{ width: '100%' }} onClick={saveIpTag}>SAVE TAG</button></div>
-      </Modal>
-
-    </div>
     </ErrorBoundary>
   );
 }
