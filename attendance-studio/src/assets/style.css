@@ -629,3 +629,24 @@ button { font-family: inherit; }
     color: #555 !important;
     border-color: #555 !important;
 }
+
+/* ==========================================================================
+   10. DIRECTORY VIEW — Responsive Column Visibility
+   ========================================================================== */
+
+/* The program/faculty column is shown by default */
+.dir-col-prog { display: flex; flex-direction: column; }
+
+/* Hide the program column on very narrow screens (<= 420px) */
+@media (max-width: 420px) {
+    .dir-col-prog { display: none !important; }
+}
+
+/* Hide spinner arrows on the page-jump number input */
+input[type=number].page-jump-input::-webkit-outer-spin-button,
+input[type=number].page-jump-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number].page-jump-input { -moz-appearance: textfield; appearance: textfield; }
+
+/* Details summary arrow reset for directory detail renderer */
+details > summary { list-style: none; }
+details > summary::-webkit-details-marker { display: none; }

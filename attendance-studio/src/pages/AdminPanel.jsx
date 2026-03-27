@@ -172,17 +172,20 @@ export default function AdminPanel() {
     }
   };
 
-  const triggerAutoJobs = async (jobType) => {
+  const triggerAutoJobs = async () => {
     if (jobRunning.autojobs) return;
     setJobRunning(prev => ({ ...prev, autojobs: true }));
-    setJobLogs(prev => ({ ...prev, autojobs: 'Running...' }));
+    setJobLogs(prev => ({ ...prev, autojobs: 'Running all cron jobs...' }));
     try {
-      const res = await api.post('/admin_dashboard', { key, type: 'trigger_jobs', job_category: jobType });
-      setJobLogs(prev => ({ ...prev, autojobs: res.error ? `Error: ${res.error}` : `Done. Processed ${res.count ?? 0} jobs.` }));
+      const res = await fetch(`/api/cron`);
+      const text = await res.text();
+      setJobLogs(prev => ({ ...prev, autojobs: text }));
+      setTimeout(() => { const el = logTextRefs.current['autojobs']; if (el) el.scrollTop = el.scrollHeight; }, 50);
     } catch (e) {
       setJobLogs(prev => ({ ...prev, autojobs: `Exception: ${e.message}` }));
     } finally {
       setJobRunning(prev => ({ ...prev, autojobs: false }));
+      loadData(); // refresh active jobs list
     }
   };
 
@@ -513,13 +516,9 @@ export default function AdminPanel() {
           </div>
 
           <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-            <button className="btn" style={{ flex: 1, borderColor: jobRunning.autojobs ? '#555' : 'var(--accent)', color: jobRunning.autojobs ? '#555' : 'var(--accent)', cursor: jobRunning.autojobs ? 'not-allowed' : 'pointer' }}
-              disabled={jobRunning.autojobs} onClick={() => triggerAutoJobs('autoscan')}>
-              {jobRunning.autojobs ? 'RUNNING...' : 'TRIGGER AUTOSCAN'}
-            </button>
             <button className="btn" style={{ flex: 1, borderColor: jobRunning.autojobs ? '#555' : '#f0f', color: jobRunning.autojobs ? '#555' : '#f0f', cursor: jobRunning.autojobs ? 'not-allowed' : 'pointer' }}
-              disabled={jobRunning.autojobs} onClick={() => triggerAutoJobs('autoregister')}>
-              {jobRunning.autojobs ? 'RUNNING...' : 'TRIGGER AUTO REG'}
+              disabled={jobRunning.autojobs} onClick={() => triggerAutoJobs()}>
+              {jobRunning.autojobs ? 'RUNNING...' : 'TRIGGER ALL JOBS (CRON)'}
             </button>
           </div>
           <textarea readOnly ref={el => logTextRefs.current['autojobs'] = el}
@@ -527,18 +526,20 @@ export default function AdminPanel() {
             value={jobLogs.autojobs} />
 
           <div style={{ maxHeight: '200px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', border: '1px solid #333', marginBottom: '15px' }}>
-            {data?.jobs?.length === 0 && <div style={{ padding: '10px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No Active Auto-Jobs</div>}
+            {(!data?.jobs || data.jobs.length === 0) && <div style={{ padding: '10px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No Active Auto-Jobs</div>}
             {data?.jobs?.map(job => {
               const isReg = job.type === 'register';
-              const title = isReg ? `AUTO-REGISTER (${job.code || job.group_id || 'Course'})` : `AUTOSCAN (${job.target || job.code || 'Activity/Class'})`;
-              const userDesc = job.matric || job.id.split('_')[0];
+              const title = isReg
+                ? `AUTO-REGISTER — ${job.code || job.gid || 'Course'} ${job.group_id || ''}`
+                : `AUTOSCAN — ${job.target || job.code || job.gid || 'Class/Activity'}`;
+              const userDesc = job.matric || '';
               return (
                 <div key={job.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px', borderBottom: '1px solid #333', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <span style={{ color: isReg ? '#f0f' : 'var(--accent)', fontWeight: 'bold', fontSize: '0.8rem' }}>{title}</span>
-                    <span style={{ fontSize: '0.7rem', color: '#fff' }}>User: {userDesc}</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <span style={{ color: isReg ? '#f0f' : 'var(--accent)', fontWeight: 'bold', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
+                    <span style={{ fontSize: '0.68rem', color: '#888' }}>User: {userDesc}</span>
                   </div>
-                  <button className="btn" style={{ color: '#f00', padding: '4px 10px', height: '28px', minWidth: 'auto', borderColor: '#f00' }} onClick={() => handleJobAction('delete_single_job', job.id)}>DEL</button>
+                  <button className="btn" style={{ color: '#f00', padding: '4px 10px', height: '28px', minWidth: 'auto', borderColor: '#f00', marginLeft: '8px', flexShrink: 0 }} onClick={() => handleJobAction('delete_single_job', job.id)}>DEL</button>
                 </div>
               );
             })}

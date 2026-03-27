@@ -1389,7 +1389,13 @@ def api_handler(path):
                     ld = dict(l); ld['id'] = str(ld.get('timestamp', '')); logs.append(ld)
                 jobs = []
                 for j in pg_db.query("SELECT * FROM autoscan_jobs"):
-                    jd = dict(j); jd['id'] = f"{jd['matric']}_{jd['gid']}"; jobs.append(jd)
+                    jd = dict(j); jd['id'] = f"{jd['matric']}_{jd['gid']}"; jd['type'] = 'autoscan'; jobs.append(jd)
+                for j in pg_db.query("SELECT *, 'register' as job_source FROM auto_register_jobs"):
+                    jd = dict(j); jd['id'] = f"ar_{jd['matric']}_{jd['gid']}"; jd['type'] = 'register'
+                    # Enrich with course code for display
+                    course = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (str(jd['gid']),))
+                    if course: jd['code'] = course.get('code', ''); jd['group_id'] = course.get('course_group', '')
+                    jobs.append(jd)
                 banned = [d['ip'] for d in pg_db.query("SELECT ip FROM banned_ips")]
                 ip_meta = {d['ip']: d['name'] for d in pg_db.query("SELECT ip, name FROM ip_metadata")}
                 
@@ -1422,6 +1428,7 @@ def api_handler(path):
                 
             elif req_type == 'delete_all_jobs':
                 pg_db.execute("TRUNCATE autoscan_jobs")
+                pg_db.execute("TRUNCATE auto_register_jobs")
                 return jsonify({"status": "Deleted all jobs"})
                 
             elif req_type == 'delete_single_job':
@@ -1457,16 +1464,25 @@ def api_handler(path):
                     _job_log('autojobs', f"Found {len(jobs)} auto-register jobs.")
                     sem = cfg.get('current_semester', '2025/2026-2')
                     for j in jobs:
-                        matric = j['matric']; gid = j['gid']
+                        matric = j['matric']; gid = str(j['gid'])
                         stud = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (matric,))
                         if stud:
                             pwd = stud.get('password')
-                            course = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (str(gid),))
+                            course = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (gid,))
                             code = course.get('code', 'Unknown') if course else 'Unknown'
                             grp = course.get('course_group', '') if course else ''
                             if pwd and pwd != 'Unknown':
-                                st, rp = core_api.register_course(matric, pwd, code, str(gid), sem, grp, "P")
-                                _job_log('autojobs', f"[{matric}] AR {code} {grp}: {rp[:80]}")
+                                st, rp = core_api.register_course(matric, pwd, code, gid, sem, grp, "P")
+                                is_success = ("berjaya" in rp.lower() or "success" in rp.lower() or '"error":false' in rp.replace(" ", "").lower())
+                                if not is_success and ("error\":\"true" in rp.replace(" ", "").lower() or "taraf" in rp.lower() or "syarat" in rp.lower()):
+                                    st, rp = core_api.register_course(matric, pwd, code, gid, sem, grp, "T")
+                                    is_success = ("berjaya" in rp.lower() or "success" in rp.lower() or '"error":false' in rp.replace(" ", "").lower())
+                                status_str = 'SUCCESS' if is_success else 'FAILED'
+                                _job_log('autojobs', f"[{matric}] AR {code} {grp}: {status_str} — {rp[:60]}")
+                                if is_success:
+                                    pg_db.execute("UPDATE students SET groups = array_append(COALESCE(groups, '{}'), %s) WHERE matric = %s AND NOT (%s = ANY(COALESCE(groups, '{}')))", (gid, matric, gid))
+                                    pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (matric, gid))
+                                    create_notification(matric, 'class', f'{code} {grp}', 'SUCCESS', f'Auto Register (Manual Trigger): {rp[:80]}', 'auto')
                             else:
                                 _job_log('autojobs', f"[{matric}] AR {code}: No Password")
                 
