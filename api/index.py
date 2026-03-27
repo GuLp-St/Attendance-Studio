@@ -628,7 +628,8 @@ def api_handler(path):
             results = []
             def process_autoscan_job(job):
                 d = dict(job)
-                job_time = d['createdAt']
+                job_time = d.get('createdAt', d.get('created_at', d.get('createdat')))
+                if job_time is None: job_time = now_my
                 if isinstance(job_time, str): job_time = datetime.fromisoformat(job_time.replace("Z", "+00:00"))
                 if job_time.tzinfo is None: job_time = job_time.replace(tzinfo=timezone.utc)
                 
@@ -717,7 +718,8 @@ def api_handler(path):
             def process_auto_register_job(job):
                 d = dict(job)
                 matric, gid = d['matric'], str(d['gid'])
-                job_time = d['createdAt']
+                job_time = d.get('createdAt', d.get('created_at', d.get('createdat')))
+                if job_time is None: job_time = now_my
                 if isinstance(job_time, str): job_time = datetime.fromisoformat(job_time.replace("Z", "+00:00"))
                 if job_time.tzinfo is None: job_time = job_time.replace(tzinfo=timezone.utc)
 
@@ -1482,6 +1484,8 @@ def api_handler(path):
                     sem = cfg.get('current_semester', '2025/2026-2')
                     for j in jobs:
                         matric = j['matric']; gid = str(j['gid'])
+                        job_time = j.get('createdAt', j.get('created_at', j.get('createdat')))
+                        if job_time is None: job_time = now_my
                         stud = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (matric,))
                         if stud:
                             pwd = stud.get('password')
