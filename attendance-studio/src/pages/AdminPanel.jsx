@@ -1,6 +1,6 @@
 // --- START OF FILE AdminPanel.jsx ---
 
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { api, getDirectory } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
@@ -50,17 +50,15 @@ export default function AdminPanel() {
   const [dirty, setDirty] = useState({});
   const markDirty = (key) => setDirty(prev => ({ ...prev, [key]: true }));
 
-  // Per-job running state (from server)
+  // Per-job running state (client-side lock)
   const [jobRunning, setJobRunning] = useState({
     class: false, student: false, activity: false, verify: false, autojobs: false
   });
 
-  // Per-job log lines displayed in textareas
+  // Per-job log output displayed in textareas
   const [jobLogs, setJobLogs] = useState({
     class: 'Ready...', student: 'Ready...', activity: 'Ready...', verify: 'Ready...', autojobs: 'Awaiting trigger...'
   });
-  const pollingRefs = useRef({});
-  const logOffsets = useRef({ class: 0, student: 0, activity: 0, verify: 0, autojobs: 0 });
   const logTextRefs = useRef({});
 
   // Modal
@@ -72,49 +70,6 @@ export default function AdminPanel() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [tagModalData]);
 
-  // Auto-scroll log textareas
-  const appendJobLog = useCallback((type, lines) => {
-    if (!lines.length) return;
-    setJobLogs(prev => {
-      const base = (prev[type] === 'Ready...' || prev[type] === 'Awaiting trigger...') ? '' : prev[type];
-      return { ...prev, [type]: (base ? base + '\n' : '') + lines.join('\n') };
-    });
-    setTimeout(() => {
-      const el = logTextRefs.current[type];
-      if (el) el.scrollTop = el.scrollHeight;
-    }, 50);
-  }, []);
-
-  // Polling function for a job type
-  const startPolling = useCallback((type) => {
-    logOffsets.current[type] = 0;
-    setJobRunning(prev => ({ ...prev, [type]: true }));
-    setJobLogs(prev => ({ ...prev, [type]: '' }));
-
-    const poll = async () => {
-      try {
-        const offset = logOffsets.current[type];
-        const res = await fetch(`/api/admin_job_status?key=${key}&type=${type}&offset=${offset}`);
-        const d = await res.json();
-        if (d.lines && d.lines.length > 0) {
-          logOffsets.current[type] = d.total;
-          appendJobLog(type, d.lines);
-        }
-        if (!d.running) {
-          setJobRunning(prev => ({ ...prev, [type]: false }));
-          clearInterval(pollingRefs.current[type]);
-          loadData();
-        }
-      } catch (e) {
-        setJobRunning(prev => ({ ...prev, [type]: false }));
-        clearInterval(pollingRefs.current[type]);
-      }
-    };
-
-    if (pollingRefs.current[type]) clearInterval(pollingRefs.current[type]);
-    pollingRefs.current[type] = setInterval(poll, 2000);
-    poll(); // immediate first poll
-  }, [key, appendJobLog]);
 
   const loadData = async () => {
     setLoading(true);
@@ -148,19 +103,6 @@ export default function AdminPanel() {
         });
         setPriorityCourses(res.config.priority_courses || []);
         setPriorityStudentIds(res.config.priority_student_ids || []);
-      }
-
-      if (res.job_running) {
-        setJobRunning(prev => {
-          const next = { ...prev };
-          Object.keys(res.job_running).forEach(t => {
-            if (res.job_running[t] && !prev[t]) {
-              next[t] = true;
-              startPolling(t);
-            }
-          });
-          return next;
-        });
       }
     } catch (e) {
       showToast(e.message || 'Invalid Key', 'error');
@@ -196,30 +138,52 @@ export default function AdminPanel() {
   const triggerSync = async (type) => {
     if (jobRunning[type]) return;
     if (!await confirm(`Start ${type.toUpperCase()} Sync?`)) return;
-    startPolling(type);
+    const endpoint = type === 'class' ? '/admin_sync_class' : type === 'student' ? '/admin_sync_student' : '/admin_sync_activity';
+    setJobRunning(prev => ({ ...prev, [type]: true }));
+    setJobLogs(prev => ({ ...prev, [type]: 'Running...' }));
     try {
-      const endpoint = type === 'class' ? '/admin_sync_class' : type === 'student' ? '/admin_sync_student' : '/admin_sync_activity';
-      fetch(`/api${endpoint}?key=${key}`).catch(() => {});
-    } catch (e) { appendJobLog(type, [`Error: ${e.message}`]); setJobRunning(prev => ({ ...prev, [type]: false })); }
+      const res = await fetch(`/api${endpoint}?key=${key}`);
+      const text = await res.text();
+      setJobLogs(prev => ({ ...prev, [type]: text }));
+      setTimeout(() => { const el = logTextRefs.current[type]; if (el) el.scrollTop = el.scrollHeight; }, 50);
+    } catch (e) {
+      setJobLogs(prev => ({ ...prev, [type]: `Error: ${e.message}` }));
+    } finally {
+      setJobRunning(prev => ({ ...prev, [type]: false }));
+      loadData();
+    }
   };
 
   const triggerVerify = async () => {
     if (jobRunning.verify) return;
     if (!await confirm('Start Directory Verification?')) return;
-    startPolling('verify');
+    setJobRunning(prev => ({ ...prev, verify: true }));
+    setJobLogs(prev => ({ ...prev, verify: 'Running...' }));
     try {
-      fetch(`/api/admin_verify_directory?key=${key}`).catch(() => {});
-    } catch (e) { appendJobLog('verify', [`Error: ${e.message}`]); setJobRunning(prev => ({ ...prev, verify: false })); }
+      const res = await fetch(`/api/admin_verify_directory?key=${key}`);
+      const text = await res.text();
+      setJobLogs(prev => ({ ...prev, verify: text }));
+      setTimeout(() => { const el = logTextRefs.current['verify']; if (el) el.scrollTop = el.scrollHeight; }, 50);
+    } catch (e) {
+      setJobLogs(prev => ({ ...prev, verify: `Error: ${e.message}` }));
+    } finally {
+      setJobRunning(prev => ({ ...prev, verify: false }));
+      loadData();
+    }
   };
 
   const triggerAutoJobs = async (jobType) => {
     if (jobRunning.autojobs) return;
-    startPolling('autojobs');
+    setJobRunning(prev => ({ ...prev, autojobs: true }));
+    setJobLogs(prev => ({ ...prev, autojobs: 'Running...' }));
     try {
       const res = await api.post('/admin_dashboard', { key, type: 'trigger_jobs', job_category: jobType });
-      if (res.error) appendJobLog('autojobs', [`Error: ${res.error}`]);
-    } catch (e) { appendJobLog('autojobs', [`Exception: ${e.message}`]); }
-    setJobRunning(prev => ({ ...prev, autojobs: false }));
+      setJobLogs(prev => ({ ...prev, autojobs: res.error ? `Error: ${res.error}` : `Done. Processed ${res.count ?? 0} jobs.` }));
+    } catch (e) {
+      setJobLogs(prev => ({ ...prev, autojobs: `Exception: ${e.message}` }));
+    } finally {
+      setJobRunning(prev => ({ ...prev, autojobs: false }));
+    }
   };
 
   const handleTestManualSys = async () => {

@@ -110,7 +110,7 @@ def get_sys_config():
         "act_scan_limit": int(conf.get("act_scan_limit") or 5000),
         "act_months": int(conf.get("act_time_threshold") or 6),
         "priority_courses": conf.get("priority_courses", []),
-        "priority_student_ids": conf.get("priority_student_ids", []),
+        "priority_student_ids": conf.get("priority_students", []),
         "system_matric": conf.get("system_matric", ""),
         "system_pwd": conf.get("system_pwd", ""),
         "force_student_sync": conf.get("force_student_sync", False),
@@ -935,29 +935,10 @@ def api_handler(path):
             return jsonify({"status": status, "response": resp, "success": is_success})
         except Exception as e: return jsonify({"error": str(e)}), 500
 
-    elif path == '/admin_job_status':
-        if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
-        job_type = args.get('type', 'class')
-        offset = int(args.get('offset', 0))
-        if job_type not in _job_status:
-            return jsonify({"error": "Invalid type"}), 400
-        with _job_status[job_type]['lock']:
-            all_lines = list(_job_status[job_type]['lines'])
-            running = _job_status[job_type]['running']
-        new_lines = all_lines[offset:]
-        return Response(json.dumps({
-            "running": running, "lines": new_lines, "total": len(all_lines)
-        }), headers={**headers, 'Content-Type': 'application/json'})
-
     elif path == '/admin_sync_class':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
-
-        if not _job_start('class'):
-            return Response("[BUSY] Class sync is already running. Try again later.", mimetype='text/plain', headers=headers)
         log_buffer = []
-        def log(msg):
-            line = _job_log('class', msg)
-            log_buffer.append(line)
+        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
         try:
             log("Starting Class Discovery...")
             cfg = get_sys_config()
@@ -1021,17 +1002,11 @@ def api_handler(path):
         except Exception as e:
             save_sync_log("CLASS", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
-        finally:
-            _job_end('class')
 
     elif path == '/admin_sync_student':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
-        if not _job_start('student'):
-            return Response("[BUSY] Student sync is already running. Try again later.", mimetype='text/plain', headers=headers)
         log_buffer = []
-        def log(msg):
-            line = _job_log('student', msg)
-            log_buffer.append(line)
+        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
         try:
             log("Starting Student Sync...")
             cfg = get_sys_config()
@@ -1157,18 +1132,12 @@ def api_handler(path):
             traceback.print_exc()
             save_sync_log("STUDENT", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
-        finally:
-            _job_end('student')
 
 
     elif path == '/admin_sync_activity':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
-        if not _job_start('activity'):
-            return Response("[BUSY] Activity sync is already running. Try again later.", mimetype='text/plain', headers=headers)
         log_buffer = []
-        def log(msg):
-            line = _job_log('activity', msg)
-            log_buffer.append(line)
+        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
         try:
             log("Starting Activity Sync...")
             cfg = get_sys_config()
@@ -1246,19 +1215,13 @@ def api_handler(path):
             traceback.print_exc()
             save_sync_log("ACTIVITY", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
-        finally:
-            _job_end('activity')
 
 
 
     elif path == '/admin_verify_directory':
         if args.get('key') != ADMIN_SECRET_KEY: return jsonify({"error": "Unauthorized"}), 401
-        if not _job_start('verify'):
-            return Response("[BUSY] Verification is already running. Try again later.", mimetype='text/plain', headers=headers)
         log_buffer = []
-        def log(msg):
-            line = _job_log('verify', msg)
-            log_buffer.append(line)
+        def log(msg): log_buffer.append(f"[{get_malaysia_time().strftime('%H:%M:%S')}] {msg}")
         try:
             log("Starting Directory Verification...")
             cfg = get_sys_config()
@@ -1331,8 +1294,6 @@ def api_handler(path):
             traceback.print_exc()
             save_sync_log("VERIFY", "ERROR", log_buffer + [str(e)], 0)
             return Response(f"Error: {str(e)}", status=500, headers=headers)
-        finally:
-            _job_end('verify')
 
     elif path == '/organizer_details':
         oid, matric = args.get('oid'), args.get('matric')
@@ -1452,7 +1413,7 @@ def api_handler(path):
                 if data.get('act_start_id') is not None: fields.append('act_last_scanned_id = %s'); values.append(int(data['act_start_id']))
                 if data.get('act_months'): fields.append('act_time_threshold = %s'); values.append(int(data['act_months']))
                 if 'priority_courses' in data: fields.append('priority_courses = %s'); values.append(data['priority_courses'])
-                if 'priority_student_ids' in data: fields.append('priority_student_ids = %s'); values.append(data['priority_student_ids'])
+                if 'priority_student_ids' in data: fields.append('priority_students = %s'); values.append(data['priority_student_ids'])
                 if 'system_matric' in data: fields.append('system_matric = %s'); values.append(data['system_matric'])
                 if 'system_pwd' in data: fields.append('system_pwd = %s'); values.append(data['system_pwd'])
                 if fields:
