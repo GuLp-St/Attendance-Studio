@@ -635,7 +635,13 @@ def api_handler(path):
                     pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (d['matric'], d['gid']))
                     return "Cleaned (Expired)"
                 matric, target_id = d['matric'], str(d['gid'])
-                mode, j_type = d.get('mode', 'crowd'), d.get('job_type', 'class')
+                raw_mode, j_type = d.get('mode', 'crowd'), d.get('job_type', 'class')
+                
+                # Extract trigger mode and automation mode
+                mode_parts = str(raw_mode).split('_')
+                trigger_mode = mode_parts[0]
+                auto_mode = mode_parts[1] if len(mode_parts) > 1 else 'permanent'
+                
                 if j_type == 'class':
                     sessions = core_api.get_sessions(target_id, req_session)
                     target = next((s for s in sessions if datetime.fromtimestamp(s['eventDate']/1000).strftime('%Y-%m-%d') == today_str), None)
@@ -646,20 +652,28 @@ def api_handler(path):
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return "Already Present"
                     should_scan = False
-                    if mode == 'crowd' and core_api.get_attendance_count(target['id'], req_session) >= 5: should_scan = True
-                    elif mode == 'time':
+                    if trigger_mode == 'crowd' and core_api.get_attendance_count(target['id'], req_session) >= 5: should_scan = True
+                    elif trigger_mode == 'time':
                         try:
                             dt_end = datetime.strptime(f"{today_str} {target['endTime']}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
                             if (dt_end.timestamp() - 1200) <= now_my.timestamp(): should_scan = True
                         except: pass
+                    
+                    # If auto_mode is one time, do NOT unconditionally say True, it must still trigger on crowd/time.
+                    # Wait, 'one time' means it waits for the trigger (crowd/time) just ONCE and then deletes itself.
+                    # 'permanent' means it waits for trigger and keeps the job.
+                    # So should_scan is completely dictated by trigger_mode!
+
                     if should_scan:
                         res = core_api.scan_qr(target['id'], matric, req_session)
                         is_success = ("Success" in res or "taken" in res.lower() or ("Server:" in res and "Server Error" not in res))
                         status = "SUCCESS" if is_success else "FAILED"
-                        create_notification(matric, 'class', f"Class {target_id}", status, res, mode)
-                        pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                        create_notification(matric, 'class', f"Class {target_id}", status, res, raw_mode)
+                        
+                        if auto_mode == 'onetime':
+                            pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return f"Attempted ({status})"
-                    return f"Pending ({mode})"
+                    return f"Pending ({raw_mode})"
                 elif j_type == 'activity':
                     events = core_api.get_organizer_events(target_id, req_session)
                     target = next((e for e in events if e['eventDate'] == today_str), None)
@@ -672,11 +686,11 @@ def api_handler(path):
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return "Completed"
                     scan_ci, scan_co = False, False
-                    if mode == 'crowd':
+                    if trigger_mode == 'crowd':
                         stats = core_api.get_event_stats(target['id'], req_session)
                         if not is_ci and stats[0] >= 5: scan_ci = True
                         if is_ci and not is_co and req_co and stats[1] >= 5: scan_co = True
-                    elif mode == 'time':
+                    elif trigger_mode == 'time':
                         try:
                             t_str = target['endTime']
                             try: dt_end = datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
@@ -689,19 +703,21 @@ def api_handler(path):
                         r = core_api.scan_activity_qr(target['id'], matric, 'i')
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
                         status = "SUCCESS" if is_success else "FAILED"
-                        create_notification(matric, 'activity', target.get('name'), status, f"Check-In: {r}", mode)
+                        create_notification(matric, 'activity', target.get('name'), status, f"Check-In: {r}", raw_mode)
                         if not req_co:
-                            pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                            if auto_mode == 'onetime':
+                                pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                             return f"CI Attempted ({status}) - Job Deleted"
                         return f"CI Attempted ({status}) - Job Kept for CO"
                     if scan_co:
                         r = core_api.scan_activity_qr(target['id'], matric, 'o')
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
                         status = "SUCCESS" if is_success else "FAILED"
-                        create_notification(matric, 'activity', target.get('name'), status, f"Check-Out: {r}", mode)
-                        pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                        create_notification(matric, 'activity', target.get('name'), status, f"Check-Out: {r}", raw_mode)
+                        if auto_mode == 'onetime':
+                            pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return f"CO Attempted ({status}) - Job Deleted"
-                    return f"Pending ({mode})"
+                    return f"Pending ({raw_mode})"
                 return "Invalid Type"
 
             with ThreadPoolExecutor(max_workers=5) as ex:
@@ -822,7 +838,20 @@ def api_handler(path):
         if not pwd:
             doc = pg_db.query_one("SELECT password FROM students WHERE matric = %s", (m,))
             pwd = doc.get('password') if doc else None
-        if not pwd or pwd == 'Unknown': return jsonify({"error": "No valid password"}), 401
+            
+        if not pwd or pwd == 'Unknown':
+            try:
+                # Use admin session to fetch normal biodata as fallback
+                from functions.api_session import get_authorized_session
+                s = get_authorized_session()
+                bio = core_api.get_student_biodata(m, s)
+                if not bio: return jsonify({"error": "No valid password and fallback failed"}), 401
+                
+                # We return only what we have. Frontend should handle missing 'attendance', 'activities', etc.
+                return Response(json.dumps({'biodata': bio}, default=json_serial), headers=headers)
+            except Exception as e:
+                return jsonify({"error": f"Fallback Error: {str(e)}"}), 500
+
         try:
             results = {}
             with ThreadPoolExecutor(max_workers=7) as ex:
@@ -879,10 +908,29 @@ def api_handler(path):
             day_map = {}
             for s in slots:
                 if not isinstance(s, dict): continue
-                key = (s.get('KETERANGAN_HARI', ''), s.get('MASA_MULA', ''), s.get('MASA_TAMAT', ''), s.get('LOKASI', ''))
-                day_map[key] = True
-            parts = [f"{d} {st}-{en} | {lc}" for (d, st, en, lc) in sorted(day_map.keys())]
-            return Response(json.dumps({"timetable": " | ".join(parts) if parts else "No Timetable"}, default=json_serial), headers=headers)
+                d, st, en, lc = s.get('KETERANGAN_HARI', '').strip(), s.get('MASA_MULA', '').strip(), s.get('MASA_TAMAT', '').strip(), s.get('LOKASI', '').strip()
+                if not d: continue
+                day_map[(d, st, en, lc)] = True
+            
+            from collections import defaultdict
+            grouped = defaultdict(list)
+            for d, st, en, lc in day_map.keys(): grouped[(d, lc)].append([st, en])
+            def p_time(t_str):
+                try: return datetime.strptime(t_str, '%I:%M %p')
+                except: return datetime.min
+            
+            merged_res = []
+            for (d, lc), times in grouped.items():
+                times.sort(key=lambda x: p_time(x[0]))
+                merged = []
+                for st, en in times:
+                    if not merged: merged.append([st, en])
+                    elif p_time(st) <= p_time(merged[-1][1]):
+                        if p_time(en) > p_time(merged[-1][1]): merged[-1][1] = en
+                    else: merged.append([st, en])
+                for st, en in merged: merged_res.append(f"{d} {st}-{en} | {lc}")
+            
+            return Response(json.dumps({"timetable": " | ".join(merged_res) if merged_res else "No Timetable"}, default=json_serial), headers=headers)
         except: return Response(json.dumps({"timetable": "No Timetable"}, default=json_serial), headers=headers)
 
     elif path == '/tools/session_master':

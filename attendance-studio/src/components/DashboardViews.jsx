@@ -50,94 +50,157 @@ const getStats = (sessions) => {
 // COMPONENTS
 // ============================================================================
 
-export const DashboardHeader = memo(function DashboardHeader({ user, onLoadProfile, onLogout, onOpenManager, notifCount }) {
+export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, notifCount }) {
     return (
-        <div className="nav-header">
-            <div onClick={onLoadProfile} style={{cursor: 'pointer', position: 'relative', display: 'inline-block'}}>
-                <h2 className="glitch-text">{user.name}</h2>
-                <div style={{ fontSize: '0.8rem', color: 'var(--primary)', marginTop: '2px' }}>ID: {user.matric}</div>
+        <div className="nav-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                {/* Profile Picture */}
+                <div style={{ width: '50px', height: '50px', borderRadius: '50%', overflow: 'hidden', border: '2px solid var(--primary)', background: '#111' }}>
+                    <img 
+                        src={`https://studentphotos.unimas.my/${user.matric}.jpg`} 
+                        alt="Profile" 
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        onError={(e) => { e.target.style.display = 'none'; }}
+                    />
+                </div>
+                
+                {/* User Info */}
+                <div>
+                    <h2 className="glitch-text" style={{ fontSize: '1.2rem', margin: 0 }}>{user.name}</h2>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--primary)', marginTop: '2px', fontWeight: 'bold' }}>{user.matric}</div>
+                    
+                    {/* Lazy Loaded Profile Data */}
+                    {user.profile && (
+                        <div style={{ fontSize: '0.65rem', color: '#aaa', marginTop: '2px' }}>
+                            {user.profile.namaProgramBi || '-'} • {user.profile.kodSesiSem || '-'}
+                        </div>
+                    )}
+                </div>
             </div>
             
             <div className="header-actions" style={{ alignItems: 'center' }}>
-                {/* Autoscan Manager Button with ScanLine Icon */}
-                <button className="icon-btn" onClick={onOpenManager} style={{ marginRight: '5px' }}>
-                    <ScanLine size={20} />
-                    {notifCount > 0 && <div className="notif-badge">{notifCount}</div>}
-                </button>
-
                 <button className="back-btn" onClick={onLogout}>LOGOUT</button>
             </div>
         </div>
     );
 });
 
-export const TimetableView = memo(function TimetableView({ timetable, onClassClick }) {
-    const days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
-    
-    if (!timetable || timetable.length === 0) return <div style={{textAlign:'center', color:'#555'}}>NO DATA</div>;
+import SessionRow from './DashboardModals/SessionRow';
 
-    return (
-        <div className="timetable-grid">
-            {days.map(day => {
-                const slots = timetable.filter(t => t.day === day).sort((a,b) => parseTime(a.start) - parseTime(b.start));
-                if (slots.length === 0) return null;
-                return (
-                    <div key={day}>
-                        <div className="day-header" style={{color:'var(--text-dim)', fontSize:'0.8rem', marginTop:'10px'}}>{day}</div>
-                        {slots.map((t, i) => (
-                            <div key={i} className="time-slot" onClick={() => onClassClick(t.gid)}>
-                                <div className="time-time">{t.start} - {t.end}</div>
-                                <div className="time-course">{t.code}</div>
-                                <div className="time-name" style={{color:'#aaa', fontSize:'0.75rem'}}>{t.name}</div>
-                                <div className="time-loc">({t.group}) | {t.loc}</div>
-                            </div>
-                        ))}
-                    </div>
-                );
-            })}
-        </div>
-    );
-});
-
-export const ClassList = memo(function ClassList({ courses, onSelect, loading }) {
-    // Show Full Skeleton only if the course list itself hasn't loaded at all
+export const TimetableList = memo(function TimetableList({ 
+    timetable, courses, loading,
+    expandedGid, onExpand, 
+    sessionsForExpanded, isLoadingSessions,
+    onAction, onExempt, onAutoscan, onCancelAutoscan, actionLoading 
+}) {
     if (loading) {
         return (
-            <div className="course-grid">
+            <div className="timetable-grid">
                 {[1,2,3,4].map(i => <Skeleton key={i} type="course-card" />)}
             </div>
         );
     }
 
-    return (
-        <div className="course-grid">
-            {courses.map(c => {
-                const stat = getStats(c.sessions);
-                
-                return (
-                    <div key={c.gid} className="course-card" onClick={() => onSelect(c)}>
-                        <div>
-                            <div className="cc-code">{c.code}</div>
-                            <div className="cc-group">{c.group}</div>
-                        </div>
-                        
-                        {/* Stats Badge */}
-                        <div className={`stat-badge ${stat.class}`}>
-                            {stat.text}
-                        </div>
+    const days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
+    
+    if (!timetable || timetable.length === 0) return <div style={{textAlign:'center', color:'#555', padding: '20px'}}>NO CLASSES REGISTERED</div>;
 
-                        {/* Progress Bar with Slow Grow Animation */}
-                        <div className="progress-line">
-                            <div 
-                                className="progress-fill" 
-                                style={{ 
-                                    width: `${stat.percent}%`, 
-                                    background: stat.barColor,
-                                    // CSS transition handles the 0 -> X% animation smoothly
-                                    transition: 'width 1s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.5s ease'
-                                }}
-                            ></div>
-                        </div>
+    const getCourse = (gid) => courses?.find(c => c.gid === gid);
+
+    return (
+        <div className="timetable-grid" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            {days.map(day => {
+                const slots = timetable.filter(t => t.day === day).sort((a,b) => parseTime(a.start) - parseTime(b.start));
+                if (slots.length === 0) return null;
+                return (
+                    <div key={day}>
+                        <div className="day-header" style={{color:'var(--primary)', fontSize:'0.85rem', marginBottom:'10px', fontWeight: 'bold'}}>{day}</div>
+                        {slots.map((t, i) => {
+                            const c = getCourse(t.gid);
+                            const stat = getStats(c?.sessions);
+                            
+                            const isExpanded = expandedGid === t.gid;
+                            
+                            return (
+                                <div key={i} className="time-slot course-card" style={{ cursor: 'pointer', marginBottom: '8px', border: '1px solid var(--grid-line)', overflow: 'hidden' }}>
+                                    
+                                    {/* Main Row Content */}
+                                    <div 
+                                        style={{ padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                                        onClick={() => onExpand(isExpanded ? null : t.gid)}
+                                    >
+                                        <div>
+                                            <div className="time-time" style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{t.start} - {t.end}</div>
+                                            <div className="time-course" style={{ color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <span>{t.code}</span>
+                                                <span style={{ fontSize: '0.75rem', color: '#ccc', fontWeight: 'normal' }}>{c?.name}</span>
+                                            </div>
+                                            <div className="time-loc" style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>({t.group}) | {t.loc}</div>
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '5px' }}>
+                                            <div className={`stat-badge ${stat.class}`}>
+                                                {stat.text}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Accordion Expansion */}
+                                    {isExpanded && (
+                                        <div style={{ padding: '15px', borderTop: '1px dashed var(--grid-line)', background: 'rgba(0,0,0,0.2)' }}>
+                                            
+                                            {/* Beautiful Expanded Progress Bar */}
+                                            <div style={{ marginBottom: '15px', paddingBottom: '15px', borderBottom: '1px solid var(--grid-line)' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '8px' }}>
+                                                    <span style={{ color: '#ccc' }}>ATTENDANCE PROGRESS</span>
+                                                    <span style={{ color: stat.barColor, fontWeight: 'bold' }}>{stat.text}</span>
+                                                </div>
+                                                <div style={{ height: '6px', width: '100%', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
+                                                    <div style={{ height: '100%', width: `${stat.percent}%`, background: stat.barColor, transition: 'width 1s ease' }}></div>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Autoscan Controls */}
+                                            <div style={{ marginBottom: '15px', borderBottom: '1px solid var(--grid-line)', paddingBottom: '15px' }}>
+                                                {c?.autoscan_active ? (
+                                                    <div style={{ textAlign: 'center' }}>
+                                                        <button 
+                                                            className="btn" 
+                                                            disabled={actionLoading === `autoscan_${c.gid}`}
+                                                            style={{ width: '100%', borderColor: '#f00', color: '#f00', fontWeight: 'bold', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
+                                                            onClick={() => onCancelAutoscan(c.gid, false)}
+                                                        >
+                                                            {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : '[ DEACTIVATE AUTOSCAN ]'}
+                                                        </button>
+                                                        <div style={{ color: '#f00', fontSize: '0.7rem', margin: '5px 0' }}>SCANNER ACTIVE</div>
+                                                    </div>
+                                                ) : (
+                                                    <div style={{ textAlign: 'center' }}>
+                                                        <button 
+                                                            className="btn" 
+                                                            disabled={actionLoading === `autoscan_${c.gid}`}
+                                                            style={{ width: '100%', borderColor: 'var(--primary)', color: 'var(--primary)', fontWeight: 'bold', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
+                                                            onClick={() => onAutoscan(c?.gid, false)}
+                                                        >
+                                                            {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : '[ ACTIVATE AUTOSCAN ]'}
+                                                        </button>
+                                                        <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', margin: '5px 0' }}>SYSTEM WILL AUTOSCAN</div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Session List */}
+                                            {isLoadingSessions ? (
+                                                <><Skeleton type="session-row" /><Skeleton type="session-row" /></>
+                                            ) : sessionsForExpanded?.length > 0 ? (
+                                                sessionsForExpanded.map(s => <SessionRow key={s.id} s={s} parentId={c?.gid} fallbackName={c?.code} onAction={onAction} onExempt={onExempt} />)
+                                            ) : (
+                                                <div style={{ textAlign: 'center', padding: '20px', fontSize: '0.8rem', color: '#555' }}>NO SESSIONS</div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
                     </div>
                 );
             })}

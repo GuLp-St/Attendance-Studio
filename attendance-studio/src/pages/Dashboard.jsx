@@ -8,22 +8,20 @@ import Modal from '../components/Modal';
 // UI Components
 import { 
     DashboardHeader, 
-    TimetableView, 
-    ClassList, 
+    TimetableList, 
     ActivityList 
 } from '../components/DashboardViews';
 
-import ClassView from '../components/ClassView';
 import ActivityView from '../components/ActivityView';
 import OrgSearchView from '../components/OrgSearchView';
 import ToolsView from '../components/ToolsView';
 import DirectoryView from '../components/DirectoryView';
 import Skeleton from '../components/Skeleton';
 
+import SchedulerView from '../components/SchedulerView';
+
 // Modal Components
-import ProfileModal from '../components/DashboardModals/ProfileModal';
 import PromptModal from '../components/DashboardModals/PromptModal';
-import ScheduledManagerModal from '../components/DashboardModals/ScheduledManagerModal';
 
 export default function Dashboard() {
   const { user, setUser, logout } = useAuth();
@@ -36,7 +34,6 @@ export default function Dashboard() {
 
   // UI State
   const [activeTab, setActiveTab] = useState('modules');
-  const [showTimetable, setShowTimetable] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false); 
   const [notifications, setNotifications] = useState([]);
   
@@ -45,15 +42,15 @@ export default function Dashboard() {
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [orgPreview, setOrgPreview] = useState(null); // Preview for unfollowed orgs from search
   const [courseSessions, setCourseSessions] = useState(null);
-  const [profileData, setProfileData] = useState(null);
   
   // Modal Visibility State
   const [showOrgSearch, setShowOrgSearch] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
   const [showAutoscanMode, setShowAutoscanMode] = useState(false);
-  const [showAutoscanManager, setShowAutoscanManager] = useState(false);
+  const [modalTriggerMode, setModalTriggerMode] = useState('crowd');
+  const [modalAutoMode, setModalAutoMode] = useState('onetime');
   
   // Action State
+  const [actionLoading, setActionLoading] = useState(null);
   const [pendingAutoscan, setPendingAutoscan] = useState(null);
   const [promptConfig, setPromptConfig] = useState(null); // { sid, gid }
 
@@ -110,9 +107,7 @@ export default function Dashboard() {
               setSelectedCourse(null);
               setSelectedOrg(null);
               setOrgPreview(null);
-              setShowProfile(false);
               setShowOrgSearch(false);
-              setShowAutoscanManager(false);
           }
           // ToolsView deep navigation - handled internally by ToolsView, just ignore here
           else if (hash === '#dashboard/tools') {
@@ -203,6 +198,15 @@ export default function Dashboard() {
       }
   }, [user.courses, selectedCourse]);
 
+  // E. Lazy Load Profile
+  useEffect(() => {
+      if (user?.courses && user?.timetable && !user?.profile) {
+          api.get(`/profile?matric=${user.matric}`).then(data => {
+              if (!data.error) setUser(prev => prev ? { ...prev, profile: data } : null);
+          }).catch(() => {});
+      }
+  }, [user]);
+
   // =========================================================================
   // 3. CORE ACTIONS
   // =========================================================================
@@ -261,25 +265,8 @@ export default function Dashboard() {
   // 4. UI HANDLERS
   // =========================================================================
 
-  const loadProfile = async () => {
-      openLevel3(setShowProfile, true);
-      
-      // Fetch notifications to ensure badge is up to date
-      try {
-          const notifData = await api.get(`/notifications?matric=${user.matric}`);
-          if (Array.isArray(notifData)) setNotifications(notifData);
-      } catch(e) {}
-
-      if (!profileData) {
-          try {
-              const data = await api.get(`/profile?matric=${user.matric}`);
-              if (!data.error) setProfileData(data);
-          } catch(e) { showToast("Failed to load profile", "error"); }
-      }
-  };
-
   const loadManager = async () => {
-      openLevel3(setShowAutoscanManager, true);
+      setActiveTab('scheduler');
       try { 
           const notifs = await api.get(`/notifications?matric=${user.matric}`); 
           if (Array.isArray(notifs)) setNotifications(notifs); 
@@ -307,6 +294,7 @@ export default function Dashboard() {
   };
 
   const followOrg = async (oid) => {
+      setActionLoading(`follow_${oid}`);
       try {
           await api.post('/action', { type: 'follow_org', sid: oid, matric: user.matric });
           closeCurrentLevel(); 
@@ -316,6 +304,7 @@ export default function Dashboard() {
           }
           showToast("Followed", "success");
       } catch (e) { showToast(e.message, 'error'); }
+      finally { setActionLoading(null); }
   };
 
   // Show a preview (like ActivityView) when user picks from search - before actually following
@@ -331,6 +320,7 @@ export default function Dashboard() {
 
   const unfollowOrg = async (oid) => {
       if (!await confirm("Unfollow?")) return;
+      setActionLoading(`unfollow_${oid}`);
       try {
           await api.post('/action', { type: 'unfollow_org', sid: oid, matric: user.matric });
           closeCurrentLevel();
@@ -338,6 +328,7 @@ export default function Dashboard() {
           setUser(prev => prev ? { ...prev, following: prev.following.filter(id => id !== oid) } : null);
           showToast("Unfollowed", "success");
       } catch (e) { showToast(e.message, 'error'); }
+      finally { setActionLoading(null); }
   };
   
   const initAutoscan = (id, isOrg) => { 
@@ -348,6 +339,7 @@ export default function Dashboard() {
   const confirmAutoscan = async (mode) => {
       closeCurrentLevel(); // Close Mode Selector
       const { id, isOrg } = pendingAutoscan;
+      setActionLoading(`autoscan_${id}`);
       try {
           await api.post('/action', { type: 'autoscan', gid: id, matric: user.matric, mode, job_type: isOrg ? 'activity' : 'class' });
           showToast(`Activated (${mode})`, "success");
@@ -361,10 +353,12 @@ export default function Dashboard() {
               if (selectedCourse?.gid === id) setSelectedCourse(prev => ({ ...prev, autoscan_active: true }));
           }
       } catch (e) { showToast(e.message, 'error'); }
+      finally { setActionLoading(null); }
   };
 
   const cancelAutoscan = async (id, isOrg) => {
       if (!await confirm("Stop Autoscan?")) return;
+      setActionLoading(`cancel_autoscan_${id}`);
       try {
           await api.post('/action', { type: 'cancel_autoscan', gid: id, matric: user.matric });
           showToast("Stopped", "success");
@@ -378,6 +372,7 @@ export default function Dashboard() {
               if (selectedCourse?.gid === id) setSelectedCourse(prev => ({ ...prev, autoscan_active: false }));
           }
       } catch (e) { showToast(e.message, 'error'); }
+      finally { setActionLoading(null); }
   };
 
   const openExemptPrompt = (sid, gid) => { 
@@ -411,49 +406,43 @@ export default function Dashboard() {
       
       <DashboardHeader 
           user={user} 
-          onLoadProfile={loadProfile} 
           onLogout={logout} 
           onOpenManager={loadManager} 
           notifCount={notifications.length}
       />
 
-      <button 
-          className="btn" 
-          style={{ width: '100%', marginBottom: '15px', borderColor: showTimetable ? 'var(--text-dim)' : 'var(--primary)', color: showTimetable ? 'var(--text-dim)' : 'var(--primary)' }} 
-          onClick={() => setShowTimetable(!showTimetable)}
-      >
-        {showTimetable ? 'HIDE TIMETABLE' : 'SHOW TIMETABLE'}
-      </button>
-
-      {showTimetable && (
-          <TimetableView timetable={user.timetable} onClassClick={openCourseByGid} />
-      )}
-
       <div style={{ display: 'flex', gap: '6px', marginTop: '20px', marginBottom: '15px', flexWrap: 'wrap' }}>
         <button 
             className="btn" 
-            style={activeTab === 'modules' ? { flex: 1, borderColor: 'var(--primary)', color: 'var(--primary)', background: 'rgba(0,243,255,0.1)' } : { flex: 1 }} 
+            style={activeTab === 'modules' ? { flex: 1, minWidth: '80px', borderColor: 'var(--primary)', color: 'var(--primary)', background: 'rgba(0,243,255,0.1)' } : { flex: 1, minWidth: '80px' }} 
             onClick={() => setActiveTab('modules')}
         >
             CLASSES
         </button>
         <button 
             className="btn" 
-            style={activeTab === 'org' ? { flex: 1, borderColor: 'var(--accent)', color: 'var(--accent)', background: 'rgba(255,158,0,0.1)' } : { flex: 1 }} 
+            style={activeTab === 'org' ? { flex: 1, minWidth: '80px', borderColor: 'var(--accent)', color: 'var(--accent)', background: 'rgba(255,158,0,0.1)' } : { flex: 1, minWidth: '80px' }} 
             onClick={() => setActiveTab('org')}
         >
             ACTIVITIES
         </button>
         <button 
             className="btn" 
-            style={activeTab === 'tools' ? { flex: 1, borderColor: '#0f0', color: '#0f0', background: 'rgba(0,255,0,0.1)' } : { flex: 1 }} 
+            style={activeTab === 'scheduler' ? { flex: 1, minWidth: '80px', borderColor: '#f0f', color: '#f0f', background: 'rgba(255,0,255,0.1)' } : { flex: 1, minWidth: '80px' }} 
+            onClick={() => setActiveTab('scheduler')}
+        >
+            SCHEDULER
+        </button>
+        <button 
+            className="btn" 
+            style={activeTab === 'tools' ? { flex: 1, minWidth: '80px', borderColor: '#0f0', color: '#0f0', background: 'rgba(0,255,0,0.1)' } : { flex: 1, minWidth: '80px' }} 
             onClick={() => setActiveTab('tools')}
         >
             COURSE HUB
         </button>
         <button 
             className="btn" 
-            style={activeTab === 'directory' ? { flex: 1, borderColor: '#ff6', color: '#ff6', background: 'rgba(255,255,0,0.05)' } : { flex: 1 }} 
+            style={activeTab === 'directory' ? { flex: 1, minWidth: '80px', borderColor: '#ff6', color: '#ff6', background: 'rgba(255,255,0,0.05)' } : { flex: 1, minWidth: '80px' }} 
             onClick={() => setActiveTab('directory')}
         >
             DIRECTORY
@@ -464,24 +453,20 @@ export default function Dashboard() {
       
       {/* 1. CLASSES TAB */}
       <div style={{ display: activeTab === 'modules' ? 'block' : 'none' }}>
-          {selectedCourse ? (
-              <ClassView 
-                  course={selectedCourse} 
-                  sessions={courseSessions} 
-                  onClose={closeCurrentLevel}
-                  isLoading={loadingDetail} 
-                  onAction={handleAction} 
-                  onExempt={openExemptPrompt} 
-                  onAutoscan={initAutoscan} 
-                  onCancelAutoscan={cancelAutoscan} 
-              />
-          ) : (
-              <ClassList 
-                  courses={user.courses} 
-                  onSelect={openCourseModal} 
-                  loading={!user.courses.length && user.courses !== undefined}
-              />
-          )}
+          <TimetableList 
+              timetable={user.timetable} 
+              courses={user.courses} 
+              loading={!user.courses}
+              expandedGid={selectedCourse?.gid || null}
+              onExpand={openCourseByGid}
+              sessionsForExpanded={courseSessions}
+              isLoadingSessions={loadingDetail && selectedCourse}
+              onAction={handleAction}
+              onExempt={openExemptPrompt}
+              onAutoscan={initAutoscan}
+              onCancelAutoscan={cancelAutoscan}
+              actionLoading={actionLoading}
+          />
       </div>
 
       {/* 2. ACTIVITIES TAB */}
@@ -495,6 +480,7 @@ export default function Dashboard() {
                   onAutoscan={initAutoscan} 
                   onCancelAutoscan={cancelAutoscan} 
                   onUnfollow={unfollowOrg} 
+                  actionLoading={actionLoading}
               />
           ) : orgPreview ? (
               /* Preview of an unfollowed org - show ActivityView with a FOLLOW button */
@@ -507,10 +493,11 @@ export default function Dashboard() {
                   <div style={{ fontSize: '1rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '15px', textAlign: 'center' }}>{orgPreview?.name || 'ACTIVITY'}</div>
                   <button 
                       className="btn" 
-                      style={{ width: '100%', marginBottom: '15px', borderColor: '#0f0', color: '#0f0', padding: '12px', fontWeight: 'bold' }} 
+                      disabled={actionLoading === `follow_${orgPreview.id}`}
+                      style={{ width: '100%', marginBottom: '15px', borderColor: '#0f0', color: '#0f0', padding: '12px', fontWeight: 'bold', opacity: actionLoading === `follow_${orgPreview.id}` ? 0.5 : 1 }} 
                       onClick={() => followOrg(orgPreview.id)}
                   >
-                      ＋ FOLLOW THIS SOURCE
+                      {actionLoading === `follow_${orgPreview.id}` ? 'PROCESSING...' : '＋ FOLLOW THIS SOURCE'}
                   </button>
                   {/* Show events preview */}
                   <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: '10px' }}>RECENT EVENTS</div>
@@ -561,44 +548,38 @@ export default function Dashboard() {
 
       {/* ================= REMAINING OVERLAY MODALS ================= */}
 
-      {/* PROFILE */}
-      <ProfileModal 
-          isOpen={showProfile} 
-          onClose={closeCurrentLevel} 
-          user={user} 
-          profileData={profileData} 
-      />
-      
-      {/* SCHEDULED MANAGER - Autoscan + Auto Register + Logs */}
-      <ScheduledManagerModal 
-          isOpen={showAutoscanManager} 
-          onClose={closeCurrentLevel} 
-          user={user} 
-          notifications={notifications} 
-          onDismissNotif={dismissNotification} 
-          onCancelJob={cancelAutoscan}
-          onCancelAutoReg={(gid) => handleUpdateAutoReg(gid, false)}
-      />
+      {/* SCHEDULER TAB CONTENT */}
+      {activeTab === 'scheduler' && (
+          <SchedulerView 
+              user={user} 
+              notifications={notifications} 
+              onDismissNotif={dismissNotification} 
+              onCancelJob={cancelAutoscan}
+              onCancelAutoReg={(gid) => handleUpdateAutoReg(gid, false)}
+              goToTools={() => setActiveTab('tools')}
+          />
+      )}
 
       {/* AUTOSCAN MODE SELECTOR */}
       <Modal title="SELECT MODE" isOpen={showAutoscanMode} onClose={closeCurrentLevel} maxWidth="400px">
-          <div style={{textAlign:'center'}}>
-              <div style={{marginBottom:'20px', fontSize:'0.8rem', color:'#ccc'}}>Choose trigger mode.</div>
+          <div style={{textAlign:'center', padding: '10px 0'}}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                      <button className="btn" style={{flex:1, padding:'10px', borderColor: modalTriggerMode==='crowd'?'var(--primary)':'var(--grid-line)', color: modalTriggerMode==='crowd'?'var(--primary)':'#888'}} onClick={() => setModalTriggerMode('crowd')}>CROWD</button>
+                      <button className="btn" style={{flex:1, padding:'10px', borderColor: modalTriggerMode==='time'?'var(--primary)':'var(--grid-line)', color: modalTriggerMode==='time'?'var(--primary)':'#888'}} onClick={() => setModalTriggerMode('time')}>L. MINUTE</button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                      <button className="btn" style={{flex:1, padding:'10px', borderColor: modalAutoMode==='onetime'?'var(--primary)':'var(--grid-line)', color: modalAutoMode==='onetime'?'var(--primary)':'#888'}} onClick={() => setModalAutoMode('onetime')}>ONE TIME</button>
+                      <button className="btn" style={{flex:1, padding:'10px', borderColor: modalAutoMode==='permanent'?'var(--primary)':'var(--grid-line)', color: modalAutoMode==='permanent'?'var(--primary)':'#888'}} onClick={() => setModalAutoMode('permanent')}>PERMANENT</button>
+                  </div>
+              </div>
               <button 
                   className="btn" 
-                  onClick={() => confirmAutoscan('crowd')} 
-                  style={{width:'100%', marginBottom:'10px', borderColor:'var(--accent)', color:'var(--accent)', padding:'15px'}}
+                  disabled={!!actionLoading}
+                  style={{width:'100%', borderColor:'#0f0', color:'#0f0', padding:'10px', fontWeight:'bold', opacity: actionLoading ? 0.5 : 1}} 
+                  onClick={() => confirmAutoscan(`${modalTriggerMode}_${modalAutoMode}`)}
               >
-                  <div style={{fontWeight:'bold'}}>CROWD MODE</div>
-                  <div style={{fontSize:'0.65rem', opacity:0.7}}>Scans when {'>'} 5 people present</div>
-              </button>
-              <button 
-                  className="btn" 
-                  onClick={() => confirmAutoscan('time')} 
-                  style={{width:'100%', borderColor:'var(--primary)', color:'var(--primary)', padding:'15px'}}
-              >
-                  <div style={{fontWeight:'bold'}}>LAST MINUTE MODE</div>
-                  <div style={{fontSize:'0.65rem', opacity:0.7}}>Scans in last 20 mins</div>
+                 {actionLoading ? 'PROCESSING...' : 'ACTIVATE AUTOSCAN'}
               </button>
           </div>
       </Modal>
