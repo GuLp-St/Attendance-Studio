@@ -87,6 +87,23 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
 
 import SessionRow from './DashboardModals/SessionRow';
 
+const AnimatedPercent = ({ value }) => {
+    const [display, setDisplay] = useState(0);
+    useEffect(() => {
+        if (display === value) return;
+        let start = 0;
+        const dur = 800;
+        const incr = Math.max(1, value / (dur / 16));
+        const timer = setInterval(() => {
+            start += incr;
+            if (start >= value) { setDisplay(value); clearInterval(timer); }
+            else setDisplay(Math.floor(start));
+        }, 16);
+        return () => clearInterval(timer);
+    }, [value]);
+    return <span>{display}%</span>;
+};
+
 export const TimetableList = memo(function TimetableList({ 
     timetable, courses, loading,
     expandedGid, onExpand, 
@@ -107,22 +124,66 @@ export const TimetableList = memo(function TimetableList({
 
     const getCourse = (gid) => courses?.find(c => c.gid === gid);
 
+    // Live Pointer Logic
+    const nowTime = new Date();
+    const todayIdx = nowTime.getDay() === 0 ? 6 : nowTime.getDay() - 1; // 0=Mon...6=Sun
+    const currentDay = days[todayIdx];
+    const nowMinutes = nowTime.getHours() * 60 + nowTime.getMinutes();
+
+    const parseMinutes = (tStr) => {
+        if (!tStr) return 0;
+        const match = tStr.match(/(\d+):(\d+) (AM|PM)/i);
+        if (!match) return 0;
+        let h = parseInt(match[1]), m = parseInt(match[2]);
+        if (match[3].toUpperCase() === 'PM' && h < 12) h += 12;
+        if (match[3].toUpperCase() === 'AM' && h === 12) h = 0;
+        return h * 60 + m;
+    };
+
+    let foundUpcoming = false;
+
     return (
         <div className="timetable-grid" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
             {days.map(day => {
                 const slots = timetable.filter(t => t.day === day).sort((a,b) => parseTime(a.start) - parseTime(b.start));
                 if (slots.length === 0) return null;
+                
+                const isToday = day === currentDay;
+
                 return (
                     <div key={day}>
-                        <div className="day-header" style={{color:'var(--primary)', fontSize:'0.85rem', marginBottom:'10px', fontWeight: 'bold'}}>{day}</div>
+                        <div className="day-header" style={{color:'var(--primary)', fontSize:'0.85rem', marginBottom:'10px', fontWeight: 'bold'}}>{day} {isToday && <span style={{color:'#fff', fontSize:'0.7rem', marginLeft:'8px'}}>(TODAY)</span>}</div>
                         {slots.map((t, i) => {
                             const c = getCourse(t.gid);
                             const stat = getStats(c?.sessions);
-                            
                             const isExpanded = expandedGid === t.gid;
                             
+                            // Live Pointer highlighting
+                            let isOngoing = false;
+                            let isUpcoming = false;
+                            
+                            if (isToday) {
+                                const sMin = parseMinutes(t.start);
+                                const eMin = parseMinutes(t.end);
+                                if (nowMinutes >= sMin && nowMinutes <= eMin) {
+                                    isOngoing = true;
+                                } else if (nowMinutes < sMin && !foundUpcoming) {
+                                    isUpcoming = true;
+                                    foundUpcoming = true;
+                                }
+                            }
+                            
+                            // Replace string percentages with animated ones
+                            let statContent = stat.text;
+                            if (statContent && statContent.includes('%')) {
+                                statContent = <><AnimatedPercent value={stat.percent} /></>;
+                            }
+
                             return (
-                                <div key={i} className="time-slot course-card" style={{ cursor: 'pointer', marginBottom: '8px', border: '1px solid var(--grid-line)', overflow: 'hidden' }}>
+                                <div key={i} className="time-slot course-card" style={{ 
+                                    cursor: 'pointer', marginBottom: '8px', border: '1px solid var(--grid-line)', overflow: 'hidden',
+                                    borderLeft: isOngoing ? '4px solid #ff4444' : isUpcoming ? '4px solid #44aaff' : '1px solid var(--grid-line)'
+                                }}>
                                     
                                     {/* Main Row Content */}
                                     <div 
@@ -139,7 +200,7 @@ export const TimetableList = memo(function TimetableList({
                                         </div>
                                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '5px' }}>
                                             <div className={`stat-badge ${stat.class}`}>
-                                                {stat.text}
+                                                {statContent}
                                             </div>
                                         </div>
                                     </div>
@@ -152,7 +213,7 @@ export const TimetableList = memo(function TimetableList({
                                             <div style={{ marginBottom: '15px', paddingBottom: '15px', borderBottom: '1px solid var(--grid-line)' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '8px' }}>
                                                     <span style={{ color: '#ccc' }}>ATTENDANCE PROGRESS</span>
-                                                    <span style={{ color: stat.barColor, fontWeight: 'bold' }}>{stat.text}</span>
+                                                    <span style={{ color: stat.barColor, fontWeight: 'bold' }}>{statContent} <span style={{fontSize:'0.65rem', color:'#888', marginLeft:'5px'}}>{stat.present}/{stat.total}</span></span>
                                                 </div>
                                                 <div style={{ height: '6px', width: '100%', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
                                                     <div style={{ height: '100%', width: `${stat.percent}%`, background: stat.barColor, transition: 'width 1s ease' }}></div>

@@ -288,6 +288,7 @@ export default function Dashboard() {
   };
 
   const openCourseByGid = (gid) => {
+      if (!gid) return closeCurrentLevel();
       const course = user.courses.find(c => c.gid === gid);
       if (course) openCourseModal(course);
       else showToast("Course details not found", "error");
