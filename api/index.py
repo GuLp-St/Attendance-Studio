@@ -237,14 +237,12 @@ def verify_and_save_student(m, data, pwd, active_sem):
     is_currently_unknown = data.get('password') == 'Unknown'
 
     if not pwd or pwd == 'Unknown':
-        if not is_currently_unknown:
-            pg_db.execute("UPDATE students SET password = 'Unknown' WHERE matric = %s", (m,))
+        pg_db.execute("UPDATE students SET password = 'Unknown', last_verified = %s WHERE matric = %s", (get_malaysia_time(), m))
         return False, f"{m}: Cached as Unverified"
 
     bio = core_api.spc_fetch(f"api/v1/biodata/personal-v2/{m}", m, pwd)
     if not bio:
-        if not is_currently_unknown:
-            pg_db.execute("UPDATE students SET password = 'Unknown' WHERE matric = %s", (m,))
+        pg_db.execute("UPDATE students SET password = 'Unknown', last_verified = %s WHERE matric = %s", (get_malaysia_time(), m))
         return False, f"{m}: Invalid Data/Credential"
 
     prog = bio.get('namaProgram', 'Unknown')

@@ -174,7 +174,7 @@ export default function DirectoryView({ user }) {
                 if (!facs[u.f]) facs[u.f] = {};
                 if (u.p) facs[u.f][u.p] = (facs[u.f][u.p] || 0) + 1;
             }
-            if (!includeUnverified && u.pw === 'Unknown') return false;
+            if (!includeUnverified && (u.pw === 'Unknown' || !u.pw)) return false;
             if (selectedFaculty && u.f !== selectedFaculty) return false;
             if (selectedProgs.length > 0 && !selectedProgs.includes(u.p)) return false;
             if (intakeYear && u.i !== intakeYear) return false;
