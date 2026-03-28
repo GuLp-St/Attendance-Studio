@@ -1,6 +1,7 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
 import Skeleton from './Skeleton';
 import { ScanLine } from 'lucide-react';
+import SessionRow from './DashboardModals/SessionRow';
 
 // ============================================================================
 // HELPERS
@@ -85,7 +86,6 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
     );
 });
 
-import SessionRow from './DashboardModals/SessionRow';
 
 const AnimatedPercent = ({ value, animKey }) => {
     const [display, setDisplay] = useState(0);

@@ -118,7 +118,6 @@ export default function DirectoryView({ user }) {
     const [selectedFaculty, setSelectedFaculty] = useState('');
     const [selectedProgs, setSelectedProgs] = useState([]);
     const [detailsLoading, setDetailsLoading] = useState(false);
-    const [biodataCache, setBiodataCache] = useState({}); // For "Basic Biodata" view
     const [detailsData, setDetailsData] = useState({});
     const [expandedRow, setExpandedRow] = useState(null);
     const [intakeYear, setIntakeYear] = useState('');
@@ -217,21 +216,6 @@ export default function DirectoryView({ user }) {
         setSelectedProgs(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
     };
 
-    const handleShowBiodata = async (item) => {
-        if (biodataCache[item.m]) return;
-        setDetailsLoading(true);
-        try {
-            // Using /profile API as "basic biodata" proxy
-            const res = await api.get(`/profile?matric=${item.m}`);
-            if (!res.error) {
-                setBiodataCache(prev => ({ ...prev, [item.m]: res }));
-            } else {
-                setTestErr("Failed to load biodata.");
-            }
-        } catch (e) { console.error('Failed to load biodata'); }
-        setDetailsLoading(false);
-    };
-
     const handleExpand = async (item) => {
         if (expandedRow === item.m) { setExpandedRow(null); return; }
         setExpandedRow(item.m);
@@ -265,34 +249,14 @@ export default function DirectoryView({ user }) {
     const renderDetails = (item) => {
         const m = item.m;
         if (item.pw === 'Unknown' && !detailsData[m]) {
-            const bio = biodataCache[m];
             return (
                 <div style={{ padding: '15px', background: 'rgba(0,0,0,0.3)', borderTop: '1px solid var(--grid-line)', textAlign: 'center' }}>
                     <div style={{ color: 'var(--primary)', marginBottom: '8px', fontSize: '0.8rem', letterSpacing: '1px' }}>UNVERIFIED ACCOUNT</div>
-                    
-                    {bio ? (
-                        <div style={{ background: 'rgba(0,243,255,0.05)', padding: '12px', borderRadius: '4px', marginBottom: '15px', textAlign: 'left', border: '1px solid rgba(0,243,255,0.1)' }}>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '8px' }}>BASIC BIODATA</div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '5px', fontSize: '0.72rem' }}>
-                                <span style={{ color: '#888' }}>NAME:</span> <span style={{ color: '#fff' }}>{bio.name || bio.nama || '-'}</span>
-                                <span style={{ color: '#888' }}>PROGRAM:</span> <span style={{ color: '#fff' }}>{bio.namaProgramBi || bio.program || '-'}</span>
-                                <span style={{ color: '#888' }}>FACULTY:</span> <span style={{ color: '#fff' }}>{bio.kodFakulti || bio.fakulti || '-'}</span>
-                                <span style={{ color: '#888' }}>INTAKE:</span> <span style={{ color: '#fff' }}>{bio.kodSesiSem || '-'}</span>
-                            </div>
-                        </div>
-                    ) : (
-                        <div style={{ color: '#888', fontSize: '0.72rem', marginBottom: '12px' }}>Provide password to verify and load live data, or view basic info.</div>
-                    )}
-
+                    <div style={{ color: '#888', fontSize: '0.72rem', marginBottom: '12px' }}>Provide password to verify and load live data.</div>
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
                         <input type="text" className="t-input" placeholder="Password" value={testPwd} onChange={e => setTestPwd(e.target.value)}
                             style={{ padding: '5px 10px', textAlign: 'center', flex: '1', minWidth: '120px', maxWidth: '200px' }} />
                         <button className="btn" onClick={() => submitOfflinePwd(item)} disabled={testing || !testPwd}>{testing ? '...' : 'VERIFY'}</button>
-                        {!bio && (
-                            <button className="btn" style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }} onClick={() => handleShowBiodata(item)} disabled={detailsLoading}>
-                                {detailsLoading ? '...' : 'SHOW BIODATA'}
-                            </button>
-                        )}
                     </div>
                     {testErr && <div style={{ color: testErr.includes('Verified') ? '#0f0' : '#f00', fontSize: '0.72rem', marginTop: '8px' }}>{testErr}</div>}
                 </div>
