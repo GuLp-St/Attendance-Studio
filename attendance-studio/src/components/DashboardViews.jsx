@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useState, useEffect } from 'react';
 import Skeleton from './Skeleton';
 import { ScanLine } from 'lucide-react';
 

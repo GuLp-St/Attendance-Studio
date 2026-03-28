@@ -6,14 +6,16 @@ from contextlib import contextmanager
 
 SUPABASE_POSTGRES_URL_NON_POOLING = os.environ.get("SUPABASE_POSTGRES_URL_NON_POOLING")
 if not SUPABASE_POSTGRES_URL_NON_POOLING:
-    SUPABASE_POSTGRES_URL_NON_POOLING = "postgres://postgres.gzbprvnzaxknqbpxzifa:TTksSjMC4WYgaCXM@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require"
+    # Switch to port 6543 for PgBouncer serverless connection pooler
+    SUPABASE_POSTGRES_URL_NON_POOLING = "postgres://postgres.gzbprvnzaxknqbpxzifa:TTksSjMC4WYgaCXM@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require"
 
 from psycopg2.pool import ThreadedConnectionPool
-pool = ThreadedConnectionPool(1, 20, SUPABASE_POSTGRES_URL_NON_POOLING)
+pool = ThreadedConnectionPool(1, 12, SUPABASE_POSTGRES_URL_NON_POOLING)
 
 @contextmanager
 def get_db():
     conn = pool.getconn()
+    conn.autocommit = True
     try:
         yield conn
     finally:
@@ -24,8 +26,8 @@ def query(sql, params=()):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, params)
             if cur.description:
-                return cur.fetchall()
-        conn.commit()
+                res = cur.fetchall()
+                return res
     return []
 
 def query_one(sql, params=()):
