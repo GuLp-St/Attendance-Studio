@@ -70,43 +70,42 @@ export function DashboardSkeleton() {
     return (
         <div style={{ display: 'block' }}>
             {/* Header */}
-            <div className="nav-header">
-                <div>
-                    <div className="sk-line" style={{width:'150px', height:'20px', marginBottom:'5px'}}>
+            <div className="nav-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                    <div className="sk-circle" style={{width:'50px', height:'50px'}}>
                         <div className="sk-shimmer"></div>
                     </div>
-                    <div className="sk-line" style={{width:'80px', height:'15px'}}>
-                        <div className="sk-shimmer"></div>
+                    <div>
+                        <div className="sk-line" style={{width:'120px', height:'18px', marginBottom:'5px'}}>
+                            <div className="sk-shimmer"></div>
+                        </div>
+                        <div className="sk-line" style={{width:'60px', height:'12px'}}>
+                            <div className="sk-shimmer"></div>
+                        </div>
                     </div>
                 </div>
                 <div className="header-actions">
                     <div className="sk-btn" style={{width:'80px', height:'30px', marginBottom:0}}>
                         <div className="sk-shimmer"></div>
                     </div>
-                    <div className="sk-btn" style={{width:'80px', height:'30px', marginBottom:0}}>
+                </div>
+            </div>
+
+            {/* Tabs - Now 5 tabs in a row */}
+            <div style={{ display: 'flex', gap: '4px', marginTop: '20px', marginBottom: '15px' }}>
+                {[1,2,3,4,5].map(i => (
+                    <div key={i} className="sk-btn" style={{flex:1, height:'34px', marginBottom:0, borderRadius: '4px'}}>
                         <div className="sk-shimmer"></div>
                     </div>
-                </div>
+                ))}
             </div>
 
-            {/* Timetable Toggle */}
-            <div className="sk-btn" style={{width:'100%', height:'40px', marginBottom:'15px'}}>
-                <div className="sk-shimmer"></div>
-            </div>
-
-            {/* Tabs */}
-            <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
-                <div className="sk-btn" style={{flex:1, height:'40px', marginBottom:0}}>
-                    <div className="sk-shimmer"></div>
-                </div>
-                <div className="sk-btn" style={{flex:1, height:'40px', marginBottom:0}}>
-                    <div className="sk-shimmer"></div>
-                </div>
-            </div>
+            {/* Day Header */}
+            <div className="sk-line sk-w20" style={{height:'15px', marginBottom:'15px', marginTop: '10px'}}></div>
 
             {/* Grid */}
-            <div className="course-grid">
-                {[1,2,3,4,5,6].map(i => (
+            <div className="timetable-grid" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                {[1,2,3].map(i => (
                     <Skeleton key={i} type="course-card" />
                 ))}
             </div>

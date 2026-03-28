@@ -36,6 +36,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('modules');
   const [loadingDetail, setLoadingDetail] = useState(false); 
   const [notifications, setNotifications] = useState([]);
+  const [timetableWait, setTimetableWait] = useState(true); // Wait for timetable to settle
   
   // Modal Data State
   const [selectedCourse, setSelectedCourse] = useState(null);
@@ -184,6 +185,16 @@ export default function Dashboard() {
         } catch (e) {}
     };
     fetchNotifs();
+
+    // D. Timetable Settlement Logic (Wait 2s or until timetable pops)
+    useEffect(() => {
+        if (user?.timetable?.length > 0) {
+            setTimetableWait(false);
+        } else {
+            const t = setTimeout(() => setTimetableWait(false), 2000); // 2s max wait
+            return () => clearTimeout(t);
+        }
+    }, [user?.timetable]);
 
   }, [user.following, user.matric, setUser]);
 
@@ -457,7 +468,7 @@ export default function Dashboard() {
           <TimetableList 
               timetable={user.timetable} 
               courses={user.courses} 
-              loading={!user.courses || !user.timetable}
+              loading={!user.courses || !user.timetable || (user.courses.length > 0 && user.timetable.length === 0 && timetableWait)}
               expandedGid={selectedCourse?.gid || null}
               onExpand={openCourseByGid}
               sessionsForExpanded={courseSessions}
