@@ -842,7 +842,6 @@ def api_handler(path):
         if not pwd or pwd == 'Unknown':
             try:
                 # Use admin session to fetch normal biodata as fallback
-                from functions.api_session import get_authorized_session
                 s = get_authorized_session()
                 bio = core_api.get_student_biodata(m, s)
                 if not bio: return jsonify({"error": "No valid password and fallback failed"}), 401
