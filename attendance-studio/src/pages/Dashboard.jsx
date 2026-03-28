@@ -185,18 +185,17 @@ export default function Dashboard() {
         } catch (e) {}
     };
     fetchNotifs();
-
-    // D. Timetable Settlement Logic (Wait 2s or until timetable pops)
-    useEffect(() => {
-        if (user?.timetable?.length > 0) {
-            setTimetableWait(false);
-        } else {
-            const t = setTimeout(() => setTimetableWait(false), 2000); // 2s max wait
-            return () => clearTimeout(t);
-        }
-    }, [user?.timetable]);
-
   }, [user.following, user.matric, setUser]);
+
+  // D. Timetable Settlement Logic (Wait 2s or until timetable pops)
+  useEffect(() => {
+    if (user?.timetable?.length > 0) {
+        setTimetableWait(false);
+    } else {
+        const t = setTimeout(() => setTimetableWait(false), 2000); // 2s max wait
+        return () => clearTimeout(t);
+    }
+  }, [user?.timetable]);
 
   // D. Live Update Modal (When data arrives while modal is open)
   useEffect(() => {
