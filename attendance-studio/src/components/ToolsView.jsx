@@ -378,7 +378,7 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                     <div style={{width: '100%', maxWidth: '400px'}}>
                         {/* Search input with OVERLAY dropdown */}
                         <div style={{ position: 'relative', width: '100%' }}>
-                            <input type="text" className="t-input" placeholder="COURSE or STUDENT" 
+                            <input type="text" className="t-input" placeholder="Course or Student" 
                                 value={searchQuery} onChange={(e) => handleSearch(e.target.value)} 
                                 style={{width: '100%', padding: '12px', paddingRight: '40px', paddingLeft: '40px', textAlign: 'center', background: 'rgba(255,255,255,0.05)', color: '#fff'}}/>
                             {searchQuery && (

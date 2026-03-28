@@ -289,7 +289,7 @@ export default function DirectoryView({ user }) {
         <div style={{ width: '100%', maxWidth: '860px', margin: '0 auto', display: 'flex', flexDirection: 'column' }}>
 
             {/* ---- SEARCH ---- */}
-            <input type="text" className="t-input" placeholder="Search by name, matric or program…" value={searchQuery}
+            <input type="text" className="t-input" placeholder="Search by Name, Matric or Program..." value={searchQuery}
                 onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
                 style={{ width: '100%', textAlign: 'center', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }} />
 

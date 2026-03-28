@@ -457,7 +457,7 @@ export default function Dashboard() {
           <TimetableList 
               timetable={user.timetable} 
               courses={user.courses} 
-              loading={!user.courses}
+              loading={!user.courses || !user.timetable}
               expandedGid={selectedCourse?.gid || null}
               onExpand={openCourseByGid}
               sessionsForExpanded={courseSessions}

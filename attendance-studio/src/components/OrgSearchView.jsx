@@ -46,7 +46,7 @@ export default function OrgSearchView({ onPreview }) {
                 <input 
                     type="text" 
                     className="t-input" 
-                    placeholder="ACTIVITY/HOST NAME" 
+                    placeholder="Activity/Host Name" 
                     style={{ width: '100%', textAlign: 'center', padding: '12px', paddingRight: '40px', paddingLeft: '40px', background: 'rgba(255,255,255,0.05)', color: '#fff' }}
                     value={query}
                     onChange={(e) => handleSearch(e.target.value)}
