@@ -3,7 +3,7 @@ import { api } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 
-export default function SchedulerView({ user, notifications, onDismissNotif, onCancelJob, onCancelAutoReg, goToTools, actionLoading }) {
+export default function SchedulerView({ user, notifications, onDismissNotif, onCancelJob, onCancelAutoReg, goToTools, actionLoading, onAutoscan, onGlobalRefresh }) {
     const { showToast } = useToast();
     const { confirm } = useConfirm();
     const [tab, setTab] = useState('jobs');
@@ -67,22 +67,38 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                     count++;
                 } catch(e) {}
             }
-            showToast(`Activated for ${count} courses. Refresh to see changes.`, "success");
+            showToast(`Activated for ${count} courses.`, "success");
+            if (onGlobalRefresh) onGlobalRefresh(true);
         } catch (e) {
             showToast("Error activating global scanner", "error");
         }
         setActionLoadingGlobal(false);
     };
 
+    const deactivateGlobalAutoscan = async () => {
+        if (!await confirm(`Stop Autoscan for ALL courses?`)) return;
+        setActionLoadingGlobal(true);
+        try {
+            const active = allCourses.filter(c => c.autoscan_active);
+            let count = 0;
+            for (const c of active) {
+                try {
+                    await api.post('/action', { type: 'cancel_autoscan', gid: c.gid, matric: user.matric });
+                    count++;
+                } catch(e) {}
+            }
+            showToast(`Deactivated for ${count} courses.`, "success");
+            if (onGlobalRefresh) onGlobalRefresh(false);
+        } catch (e) {
+            showToast("Error deactivating global scanner", "error");
+        }
+        setActionLoadingGlobal(false);
+    };
+
     const activateSingleAutoscan = async (gid, mode, isOrg) => {
         // Find if another is loading globally
-        if (actionLoadingGlobal) return;
-        
-        try {
-            await api.post('/action', { type: 'autoscan', gid, matric: user.matric, mode, job_type: isOrg ? 'activity' : 'class' });
-            showToast(`Activated (${mode})`, "success");
-            window.location.reload(); 
-        } catch (e) { showToast(e.message, 'error'); }
+        if (actionLoadingGlobal || actionLoading) return;
+        if (onAutoscan) onAutoscan(gid, isOrg, mode);
     };
 
     // Global mode selection state
@@ -178,14 +194,24 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                                 options={[{value:'onetime', label:'ONE TIME'}, {value:'permanent', label:'PERMANENT'}]}
                             />
                         </div>
-                        <button 
-                            className="btn" 
-                            disabled={actionLoadingGlobal}
-                            style={{ width: '100%', borderColor: '#0f0', color: '#0f0', padding: '12px', fontWeight: 'bold', opacity: actionLoadingGlobal ? 0.5 : 1 }}
-                            onClick={activateGlobalAutoscan}
-                        >
-                            {actionLoadingGlobal ? 'PROCESSING...' : 'ENABLE FOR ALL COURSES'}
-                        </button>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button 
+                                className="btn" 
+                                disabled={actionLoadingGlobal}
+                                style={{ flex: 1, borderColor: '#0f0', color: '#0f0', padding: '12px', fontWeight: 'bold', opacity: actionLoadingGlobal ? 0.5 : 1 }}
+                                onClick={activateGlobalAutoscan}
+                            >
+                                {actionLoadingGlobal ? 'PROCESSING...' : 'ENABLE FOR ALL'}
+                            </button>
+                            <button 
+                                className="btn" 
+                                disabled={actionLoadingGlobal}
+                                style={{ flex: 1, borderColor: '#f00', color: '#f00', padding: '12px', fontWeight: 'bold', opacity: actionLoadingGlobal ? 0.5 : 1 }}
+                                onClick={deactivateGlobalAutoscan}
+                            >
+                                {actionLoadingGlobal ? 'PROCESSING...' : 'DISABLE FOR ALL'}
+                            </button>
+                        </div>
                     </div>
 
                     <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginBottom: '10px', fontWeight: 'bold' }}>INDIVIDUAL CONFIGURATION</div>
@@ -214,14 +240,24 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                                             options={[{value:'onetime', label:'ONE TIME'}, {value:'permanent', label:'PERMANENT'}]}
                                         />
                                     </div>
-                                    <button className="btn" style={{ width: '100%', borderColor: 'var(--accent)', color: 'var(--accent)', padding: '8px', marginTop: '4px' }} onClick={() => activateSingleAutoscan(c.gid, `${localConfig[c.gid]?.trigger || 'crowd'}_${localConfig[c.gid]?.auto || 'onetime'}`, false)}>
-                                        ACTIVATE AUTOSCAN
+                                    <button 
+                                        className="btn" 
+                                        disabled={actionLoading === `autoscan_${c.gid}`}
+                                        style={{ width: '100%', borderColor: 'var(--accent)', color: 'var(--accent)', padding: '8px', marginTop: '4px', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
+                                        onClick={() => activateSingleAutoscan(c.gid, `${localConfig[c.gid]?.trigger || 'crowd'}_${localConfig[c.gid]?.auto || 'onetime'}`, false)}
+                                    >
+                                        {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : 'ACTIVATE AUTOSCAN'}
                                     </button>
                                 </div>
                             )}
                             {c.autoscan_active && (
-                                <button className="btn" style={{ width: '100%', borderColor: '#f00', color: '#f00', padding: '8px' }} onClick={() => onCancelJob(c.gid, false)}>
-                                    DEACTIVATE AUTOSCAN
+                                <button 
+                                    className="btn" 
+                                    disabled={actionLoading === `cancel_autoscan_${c.gid}`}
+                                    style={{ width: '100%', borderColor: '#f00', color: '#f00', padding: '8px', opacity: actionLoading === `cancel_autoscan_${c.gid}` ? 0.5 : 1 }} 
+                                    onClick={() => onCancelJob(c.gid, false)}
+                                >
+                                    {actionLoading === `cancel_autoscan_${c.gid}` ? '[ PROCESSING... ]' : 'DEACTIVATE AUTOSCAN'}
                                 </button>
                             )}
                         </div>

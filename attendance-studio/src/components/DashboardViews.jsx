@@ -88,22 +88,32 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
 
 
 const AnimatedPercent = ({ value, animKey }) => {
-    const [display, setDisplay] = useState(0);
-    const hasAnimated = useRef(false);
+    const [display, setDisplay] = useState(animKey ? 0 : value);
+    const hasAnimated = useRef(!!animKey);
+
     useEffect(() => {
-        // Reset and re-animate each time animKey changes (i.e., when accordion opens)
-        hasAnimated.current = false;
-        setDisplay(0);
-        const dur = 800;
-        const incr = Math.max(1, value / (dur / 16));
-        let start = 0;
-        const timer = setInterval(() => {
-            start += incr;
-            if (start >= value) { setDisplay(value); clearInterval(timer); }
-            else setDisplay(Math.floor(start));
-        }, 16);
-        return () => clearInterval(timer);
+        if (!animKey) {
+            setDisplay(value);
+            return;
+        }
+        
+        if (animKey && !hasAnimated.current) {
+            hasAnimated.current = true;
+            setDisplay(0);
+            const dur = 800;
+            const incr = Math.max(1, value / (dur / 16));
+            let start = 0;
+            const timer = setInterval(() => {
+                start += incr;
+                if (start >= value) { setDisplay(value); clearInterval(timer); }
+                else setDisplay(Math.floor(start));
+            }, 16);
+            return () => clearInterval(timer);
+        } else {
+            setDisplay(value);
+        }
     }, [animKey, value]);
+
     return <span>{display}%</span>;
 };
 

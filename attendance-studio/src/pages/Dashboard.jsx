@@ -357,6 +357,10 @@ export default function Dashboard() {
   const confirmAutoscan = async (mode) => {
       closeCurrentLevel(); // Close Mode Selector
       const { id, isOrg } = pendingAutoscan;
+      await autoscanDirect(id, isOrg, mode);
+  };
+
+  const autoscanDirect = async (id, isOrg, mode) => {
       setActionLoading(`autoscan_${id}`);
       try {
           await api.post('/action', { type: 'autoscan', gid: id, matric: user.matric, mode, job_type: isOrg ? 'activity' : 'class' });
@@ -575,6 +579,20 @@ export default function Dashboard() {
               onCancelJob={cancelAutoscan}
               onCancelAutoReg={(gid) => handleUpdateAutoReg(gid, false)}
               goToTools={() => setActiveTab('tools')}
+              actionLoading={actionLoading}
+              onAutoscan={autoscanDirect}
+              onGlobalRefresh={(activeData) => {
+                  setUser(prev => {
+                      if (!prev) return null;
+                      return {
+                          ...prev,
+                          courses: prev.courses.map(c => ({
+                              ...c,
+                              autoscan_active: activeData,
+                          }))
+                      };
+                  });
+              }}
           />
       )}
 
