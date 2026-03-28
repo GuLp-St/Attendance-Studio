@@ -17,10 +17,10 @@ const parseTime = t => {
 
 const getStats = (sessions) => {
     // 1. Loading State (Start at 0% for animation)
-    if (!sessions) return { text: 'CALC...', class: 'stat-loading', percent: 0, barColor: '#333' };
+    if (!sessions) return { text: 'CALC...', class: 'stat-loading', percent: 0, barColor: '#333', present: 0, total: 0 };
     
     // 2. No Data State
-    if (sessions.length === 0) return { text: 'COMING SOON', class: 'stat-coming-soon', percent: 0, barColor: 'transparent' };
+    if (sessions.length === 0) return { text: 'COMING SOON', class: 'stat-coming-soon', percent: 0, barColor: 'transparent', present: 0, total: 0 };
 
     // 3. Calculation
     // Count Present, Exempt, and Completed as "Good"
@@ -44,7 +44,7 @@ const getStats = (sessions) => {
         barColor = 'var(--accent)'; 
     }
 
-    return { text: `${percent}%`, class: colorClass, percent, barColor };
+    return { text: `${percent}%`, class: colorClass, percent, barColor, present, total: sessions.length };
 };
 
 // ============================================================================
@@ -107,13 +107,17 @@ const AnimatedPercent = ({ value, animKey }) => {
     return <span>{display}%</span>;
 };
 
-const ExpandedProgress = ({ stat, animKey, statContent, c, actionLoading, onCancelAutoscan, onAutoscan, isLoadingSessions, sessionsForExpanded, onAction, onExempt }) => {
-    const [barWidth, setBarWidth] = useState(0);
+const ExpandedProgress = ({ stat, animKey, isFirstExpand, statContent, c, actionLoading, onCancelAutoscan, onAutoscan, isLoadingSessions, sessionsForExpanded, onAction, onExempt }) => {
+    const [barWidth, setBarWidth] = useState(isFirstExpand ? 0 : stat.percent);
     useEffect(() => {
-        setBarWidth(0);
-        const t = setTimeout(() => setBarWidth(stat.percent), 50);
-        return () => clearTimeout(t);
-    }, [animKey, stat.percent]);
+        if (isFirstExpand) {
+            setBarWidth(0);
+            const t = setTimeout(() => setBarWidth(stat.percent), 50);
+            return () => clearTimeout(t);
+        } else {
+            setBarWidth(stat.percent);
+        }
+    }, [isFirstExpand, stat.percent]);
 
     return (
         <div style={{ padding: '15px', borderTop: '1px dashed var(--grid-line)', background: 'rgba(0,0,0,0.2)' }}>
@@ -213,8 +217,10 @@ export const TimetableList = memo(function TimetableList({
 
     const handleExpand = (gid) => {
         if (gid && gid !== expandedGid) {
-            // Record the timestamp when this gid is freshly expanded
-            expandTimestamps.current[gid] = Date.now();
+             // Record the timestamp only ONCE so animation doesn't repeat every expand
+             if (!expandTimestamps.current[gid]) {
+                 expandTimestamps.current[gid] = Date.now();
+             }
         }
         onExpand(gid);
     };
@@ -286,7 +292,7 @@ export const TimetableList = memo(function TimetableList({
 
                                     {/* Accordion Expansion */}
                                     {isExpanded && (
-                                        <ExpandedProgress stat={stat} animKey={animKey} statContent={statContent} c={c} actionLoading={actionLoading} onCancelAutoscan={onCancelAutoscan} onAutoscan={onAutoscan} isLoadingSessions={isLoadingSessions} sessionsForExpanded={sessionsForExpanded} onAction={onAction} onExempt={onExempt} />
+                                        <ExpandedProgress stat={stat} animKey={animKey} isFirstExpand={Date.now() - animKey < 1000} statContent={statContent} c={c} actionLoading={actionLoading} onCancelAutoscan={onCancelAutoscan} onAutoscan={onAutoscan} isLoadingSessions={isLoadingSessions} sessionsForExpanded={sessionsForExpanded} onAction={onAction} onExempt={onExempt} />
                                     )}
                                 </div>
                             );
