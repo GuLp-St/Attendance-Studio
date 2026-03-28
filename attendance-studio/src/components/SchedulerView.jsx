@@ -60,13 +60,11 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
         try {
             // We loop through courses that are not already active
             const inactive = allCourses.filter(c => !c.autoscan_active);
-            let count = 0;
-            for (const c of inactive) {
-                try {
-                    await api.post('/action', { type: 'autoscan', gid: c.gid, matric: user.matric, mode: modePayload, job_type: 'class' });
-                    count++;
-                } catch(e) {}
-            }
+            const requests = inactive.map(c => 
+                api.post('/action', { type: 'autoscan', gid: c.gid, matric: user.matric, mode: modePayload, job_type: 'class' }).catch(() => null)
+            );
+            const results = await Promise.all(requests);
+            const count = results.filter(r => r !== null).length;
             showToast(`Activated for ${count} courses.`, "success");
             if (onGlobalRefresh) onGlobalRefresh(true);
         } catch (e) {
@@ -80,13 +78,11 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
         setActionLoadingGlobal(true);
         try {
             const active = allCourses.filter(c => c.autoscan_active);
-            let count = 0;
-            for (const c of active) {
-                try {
-                    await api.post('/action', { type: 'cancel_autoscan', gid: c.gid, matric: user.matric });
-                    count++;
-                } catch(e) {}
-            }
+            const requests = active.map(c => 
+                api.post('/action', { type: 'cancel_autoscan', gid: c.gid, matric: user.matric }).catch(() => null)
+            );
+            const results = await Promise.all(requests);
+            const count = results.filter(r => r !== null).length;
             showToast(`Deactivated for ${count} courses.`, "success");
             if (onGlobalRefresh) onGlobalRefresh(false);
         } catch (e) {
