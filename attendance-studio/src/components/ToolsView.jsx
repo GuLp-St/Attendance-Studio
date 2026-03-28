@@ -378,7 +378,7 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                     <div style={{width: '100%', maxWidth: '400px'}}>
                         {/* Search input with OVERLAY dropdown */}
                         <div style={{ position: 'relative', width: '100%' }}>
-                            <input type="text" className="t-input" placeholder="Course or Student" 
+                            <input type="text" className="t-input" placeholder="COURSE NAME/CODE or STUDENT NAME/MATRIC" 
                                 value={searchQuery} onChange={(e) => handleSearch(e.target.value)} 
                                 style={{width: '100%', padding: '12px', paddingRight: '40px', paddingLeft: '40px', textAlign: 'center', background: 'rgba(255,255,255,0.05)', color: '#fff'}}/>
                             {searchQuery && (
@@ -528,24 +528,7 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                 </div>
             )}
 
-            {view === 'session' && activeSession && (() => {
-                const nowTime = new Date();
-                const todayLocal = nowTime.getFullYear() + '-' + String(nowTime.getMonth() + 1).padStart(2, '0') + '-' + String(nowTime.getDate()).padStart(2, '0');
-                const nowMinutes = nowTime.getHours() * 60 + nowTime.getMinutes();
-                const parseMins = (tStr) => {
-                    if (!tStr) return 0;
-                    const match = tStr.match(/(\d+):(\d+) (AM|PM)/i);
-                    if (!match) return 0;
-                    let h = parseInt(match[1]), m = parseInt(match[2]);
-                    if (match[3].toUpperCase() === 'PM' && h < 12) h += 12;
-                    if (match[3].toUpperCase() === 'AM' && h === 12) h = 0;
-                    return h * 60 + m;
-                };
-                const sMin = parseMins(activeSession.start);
-                const eMin = parseMins(activeSession.end);
-                const isSessionNow = activeSession.date === todayLocal && nowMinutes >= sMin && nowMinutes <= eMin;
-
-                return (
+            {view === 'session' && activeSession && (
                 <div style={{ width: '100%', maxWidth: '400px' }}>
                     <div style={{textAlign:'center', marginBottom:'15px', color:'var(--primary)', fontSize: '0.9rem', fontWeight: 'bold'}}>{activeSession.date} ({activeSession.start})</div>
                     <div className="tools-tabs" style={{ marginBottom: '15px' }}>
@@ -580,11 +563,9 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                                             </button>
                                         ) : (
                                             <>
-                                                {isSessionNow && (
-                                                    <button className="btn" disabled={attendanceLoadingId === s.matric} style={{borderColor:'var(--primary)', color:'var(--primary)', padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('scan', s.matric, null)}>
-                                                        {attendanceLoadingId === s.matric ? '...' : 'SCAN'}
-                                                    </button>
-                                                )}
+                                                <button className="btn" disabled={attendanceLoadingId === s.matric} style={{borderColor:'var(--primary)', color:'var(--primary)', padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('scan', s.matric, null)}>
+                                                    {attendanceLoadingId === s.matric ? '...' : 'SCAN'}
+                                                </button>
                                                 <button className="btn" disabled={attendanceLoadingId === s.matric} style={{padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('manual', s.matric, null)}>
                                                     {attendanceLoadingId === s.matric ? '...' : 'MAN'}
                                                 </button>
@@ -599,8 +580,7 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                         </div>
                     )}
                 </div>
-                );
-            })()}
+            )}
 
             {view === 'roster' && (
                 <div style={{ width: '100%', maxWidth: '400px' }}>
