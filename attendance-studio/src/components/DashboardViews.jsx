@@ -189,7 +189,7 @@ export const TimetableList = memo(function TimetableList({
 
     const days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
     
-    if (!timetable || timetable.length === 0) return <div style={{textAlign:'center', color:'#555', padding: '20px'}}>NO CLASSES REGISTERED</div>;
+    if (!timetable || timetable.length === 0) return <div style={{ textAlign: 'center', padding: '100px 20px', color: '#555', fontSize: '0.8rem', letterSpacing: '2px' }}>No classes registered</div>;
 
     const getCourse = (gid) => courses?.find(c => c.gid === gid);
 

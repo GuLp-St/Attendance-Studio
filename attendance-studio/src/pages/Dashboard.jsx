@@ -36,6 +36,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('modules');
   const [loadingDetail, setLoadingDetail] = useState(false); 
   const [notifications, setNotifications] = useState([]);
+  const [sessionsFetched, setSessionsFetched] = useState(false); 
   
   // Modal Data State
   const [selectedCourse, setSelectedCourse] = useState(null);
@@ -139,23 +140,40 @@ export default function Dashboard() {
   useEffect(() => {
     if (!user) return;
 
-    // A. Fetch Class Sessions
-    user.courses.forEach(async (c) => {
+    // A. Fetch Sessions for each course if not already present
+    let fetches = [];
+    user.courses.forEach((c) => {
       if (!c.sessions) {
-        try {
-          const sessions = await api.get(`/course_details?gid=${c.gid}&matric=${user.matric}`);
-          
-          // Guard clause: Check if user is still logged in
-          setUser(prev => {
-             if (!prev) return null; 
-             return { 
-                ...prev, 
-                courses: prev.courses.map(pc => pc.gid === c.gid ? { ...pc, sessions } : pc) 
-             };
-          });
-        } catch(e) {}
+        fetches.push(
+          api.get(`/course_details?gid=${c.gid}&matric=${user.matric}`).then(data => {
+            if (!data.error) {
+              // Sessions might be an array or { sessions: [], slots: [] }
+              const newSessions = Array.isArray(data) ? data : (data.sessions || []);
+              const newSlots = Array.isArray(data) ? [] : (data.slots || []);
+              
+              setUser(prev => {
+                if (!prev) return null;
+                let next = { ...prev };
+                next.courses = next.courses.map(pc => pc.gid === c.gid ? { ...pc, sessions: newSessions } : pc);
+                // If the course details return timetable slots, merge them into the global timetable
+                if (newSlots.length > 0) {
+                   const existingIds = new Set(next.timetable.map(t => t.id || t.gid));
+                   const uniqueNewSlots = newSlots.filter(s => !existingIds.has(s.id || s.gid));
+                   next.timetable = [...next.timetable, ...uniqueNewSlots];
+                }
+                return next;
+              });
+            }
+          }).catch(() => {})
+        );
       }
     });
+
+    if (fetches.length > 0) {
+        Promise.all(fetches).finally(() => setSessionsFetched(true));
+    } else {
+        setSessionsFetched(true);
+    }
 
     // B. Fetch Organizers
     if (user.following?.length > 0) {
@@ -456,7 +474,7 @@ export default function Dashboard() {
           <TimetableList 
               timetable={user.timetable} 
               courses={user.courses} 
-              loading={!user.courses || !user.timetable || (user.courses.length > 0 && user.timetable.length === 0)}
+              loading={!user.courses || !user.timetable || (!sessionsFetched && user.timetable.length === 0)}
               expandedGid={selectedCourse?.gid || null}
               onExpand={openCourseByGid}
               sessionsForExpanded={courseSessions}
