@@ -378,7 +378,7 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                     <div style={{width: '100%', maxWidth: '400px'}}>
                         {/* Search input with OVERLAY dropdown */}
                         <div style={{ position: 'relative', width: '100%' }}>
-                            <input type="text" className="t-input" placeholder="COURSE NAME/CODE or STUDENT NAME/MATRIC" 
+                            <input type="text" className="t-input" placeholder="COURSE or STUDENT" 
                                 value={searchQuery} onChange={(e) => handleSearch(e.target.value)} 
                                 style={{width: '100%', padding: '12px', paddingRight: '40px', paddingLeft: '40px', textAlign: 'center', background: 'rgba(255,255,255,0.05)', color: '#fff'}}/>
                             {searchQuery && (
@@ -512,18 +512,38 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
 
                     <div style={{fontSize:'0.75rem', color:'#888', marginBottom:'10px', marginTop: '20px'}}>SESSION LOGS</div>
                     {!hubSessions ? <><Skeleton type="session-row"/><Skeleton type="session-row"/></> : hubSessions.length === 0 ? <div style={{textAlign:'center', fontSize: '0.8rem', color: '#555', padding: '20px'}}>NO SESSIONS YET</div> :
-                        hubSessions.map(s => (
-                            <div key={s.id} className="course-card" style={{padding: '12px', marginBottom:'10px', display:'block', borderColor:'var(--grid-line)', minHeight: 'auto'}} onClick={() => loadSession(s)}>
-                                <div style={{display:'flex', justifyContent:'space-between'}}>
-                                    <span style={{color:'#fff', fontWeight:'bold', fontSize:'0.9rem'}}>{s.date}</span>
-                                    <span style={{color:'var(--text-dim)', fontSize:'0.8rem'}}>{s.start} - {s.end}</span>
+                        hubSessions.map(s => {
+                            // Time check: only show SCAN button when session is currently active
+                            const isSessionActive = (() => {
+                                if (!s.date || !s.start || !s.end) return true;
+                                try {
+                                    const now = new Date();
+                                    const base = new Date(s.date);
+                                    const parseSessionTime = (timeStr) => {
+                                        const [t, mod] = timeStr.split(' ');
+                                        let [h, m] = t.split(':');
+                                        if (mod === 'PM' && h !== '12') h = parseInt(h) + 12;
+                                        if (mod === 'AM' && h === '12') h = 0;
+                                        const d = new Date(base);
+                                        d.setHours(parseInt(h), parseInt(m), 0, 0);
+                                        return d;
+                                    };
+                                    return now >= parseSessionTime(s.start) && now <= parseSessionTime(s.end);
+                                } catch { return true; }
+                            })();
+                            return (
+                                <div key={s.id} className="course-card" style={{padding: '12px', marginBottom:'10px', display:'block', borderColor:'var(--grid-line)', minHeight: 'auto'}} onClick={() => loadSession(s)}>
+                                    <div style={{display:'flex', justifyContent:'space-between'}}>
+                                        <span style={{color:'#fff', fontWeight:'bold', fontSize:'0.9rem'}}>{s.date}</span>
+                                        <span style={{color:'var(--text-dim)', fontSize:'0.8rem'}}>{s.start} - {s.end}</span>
+                                    </div>
+                                    <div style={{fontSize:'0.75rem', color:'#aaa', marginTop:'8px', display: 'flex', justifyContent: 'space-between'}}>
+                                        <span>{s.location}</span>
+                                        <span style={{color: isSessionActive ? 'var(--primary)' : '#555'}}>Manage Attendance {'>'}</span>
+                                    </div>
                                 </div>
-                                <div style={{fontSize:'0.75rem', color:'#aaa', marginTop:'8px', display: 'flex', justifyContent: 'space-between'}}>
-                                    <span>{s.location}</span>
-                                    <span style={{color: 'var(--primary)'}}>Manage Attendance {'>'}</span>
-                                </div>
-                            </div>
-                        ))
+                            );
+                        })
                     }
                 </div>
             )}
@@ -547,7 +567,27 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                         </div>
                     )}
 
-                    {!masterLogs ? <><Skeleton type="session-row"/><Skeleton type="session-row"/></> : (
+                    {!masterLogs ? <><Skeleton type="session-row"/><Skeleton type="session-row"/></> : (() => {
+                        // Time check for SCAN button visibility
+                        const canScanInSession = (() => {
+                            const s = activeSession;
+                            if (!s?.date || !s?.start || !s?.end) return true;
+                            try {
+                                const now = new Date();
+                                const base = new Date(s.date);
+                                const parseT = (timeStr) => {
+                                    const [t, mod] = timeStr.split(' ');
+                                    let [h, m] = t.split(':');
+                                    if (mod === 'PM' && h !== '12') h = parseInt(h) + 12;
+                                    if (mod === 'AM' && h === '12') h = 0;
+                                    const d = new Date(base);
+                                    d.setHours(parseInt(h), parseInt(m), 0, 0);
+                                    return d;
+                                };
+                                return now >= parseT(s.start) && now <= parseT(s.end);
+                            } catch { return true; }
+                        })();
+                        return (
                         <div style={{maxHeight:'60vh', overflowY:'auto'}}>
                             {(sessionTab === 'present' ? masterLogs.present : masterLogs.absent).map(s => (
                                 <div key={s.matric} className="master-row">
@@ -563,9 +603,11 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                                             </button>
                                         ) : (
                                             <>
-                                                <button className="btn" disabled={attendanceLoadingId === s.matric} style={{borderColor:'var(--primary)', color:'var(--primary)', padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('scan', s.matric, null)}>
-                                                    {attendanceLoadingId === s.matric ? '...' : 'SCAN'}
-                                                </button>
+                                                {canScanInSession && (
+                                                    <button className="btn" disabled={attendanceLoadingId === s.matric} style={{borderColor:'var(--primary)', color:'var(--primary)', padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('scan', s.matric, null)}>
+                                                        {attendanceLoadingId === s.matric ? '...' : 'SCAN'}
+                                                    </button>
+                                                )}
                                                 <button className="btn" disabled={attendanceLoadingId === s.matric} style={{padding:'4px 8px', opacity: attendanceLoadingId === s.matric ? 0.5 : 1}} onClick={() => handleAttendanceAction('manual', s.matric, null)}>
                                                     {attendanceLoadingId === s.matric ? '...' : 'MAN'}
                                                 </button>
@@ -578,7 +620,8 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                                 </div>
                             ))}
                         </div>
-                    )}
+                        );
+                    })()}
                 </div>
             )}
 

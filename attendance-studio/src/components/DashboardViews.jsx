@@ -1,4 +1,4 @@
-import React, { memo, useState, useEffect } from 'react';
+import React, { memo, useState, useEffect, useRef } from 'react';
 import Skeleton from './Skeleton';
 import { ScanLine } from 'lucide-react';
 
@@ -53,9 +53,9 @@ const getStats = (sessions) => {
 export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, notifCount }) {
     return (
         <div className="nav-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', minWidth: 0 }}>
                 {/* Profile Picture */}
-                <div style={{ width: '50px', height: '50px', borderRadius: '50%', overflow: 'hidden', border: '2px solid var(--primary)', background: '#111' }}>
+                <div style={{ width: '50px', height: '50px', borderRadius: '50%', overflow: 'hidden', border: '2px solid var(--primary)', background: '#111', flexShrink: 0 }}>
                     <img 
                         src={`https://studentphotos.unimas.my/${user.matric}.jpg`} 
                         alt="Profile" 
@@ -65,8 +65,8 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
                 </div>
                 
                 {/* User Info */}
-                <div>
-                    <h2 className="glitch-text" style={{ fontSize: '1.2rem', margin: 0 }}>{user.name}</h2>
+                <div style={{ minWidth: 0 }}>
+                    <h2 className="glitch-text" style={{ fontSize: '1.2rem', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.name}</h2>
                     <div style={{ fontSize: '0.8rem', color: 'var(--primary)', marginTop: '2px', fontWeight: 'bold' }}>{user.matric}</div>
                     
                     {/* Lazy Loaded Profile Data */}
@@ -78,7 +78,7 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
                 </div>
             </div>
             
-            <div className="header-actions" style={{ alignItems: 'center' }}>
+            <div className="header-actions" style={{ alignItems: 'center', flexShrink: 0 }}>
                 <button className="back-btn" onClick={onLogout}>LOGOUT</button>
             </div>
         </div>
@@ -87,21 +87,87 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
 
 import SessionRow from './DashboardModals/SessionRow';
 
-const AnimatedPercent = ({ value }) => {
+const AnimatedPercent = ({ value, animKey }) => {
     const [display, setDisplay] = useState(0);
+    const hasAnimated = useRef(false);
     useEffect(() => {
-        if (display === value) return;
-        let start = 0;
+        // Reset and re-animate each time animKey changes (i.e., when accordion opens)
+        hasAnimated.current = false;
+        setDisplay(0);
         const dur = 800;
         const incr = Math.max(1, value / (dur / 16));
+        let start = 0;
         const timer = setInterval(() => {
             start += incr;
             if (start >= value) { setDisplay(value); clearInterval(timer); }
             else setDisplay(Math.floor(start));
         }, 16);
         return () => clearInterval(timer);
-    }, [value]);
+    }, [animKey, value]);
     return <span>{display}%</span>;
+};
+
+const ExpandedProgress = ({ stat, animKey, statContent, c, actionLoading, onCancelAutoscan, onAutoscan, isLoadingSessions, sessionsForExpanded, onAction, onExempt }) => {
+    const [barWidth, setBarWidth] = useState(0);
+    useEffect(() => {
+        setBarWidth(0);
+        const t = setTimeout(() => setBarWidth(stat.percent), 50);
+        return () => clearTimeout(t);
+    }, [animKey, stat.percent]);
+
+    return (
+        <div style={{ padding: '15px', borderTop: '1px dashed var(--grid-line)', background: 'rgba(0,0,0,0.2)' }}>
+            
+            {/* Beautiful Expanded Progress Bar */}
+            <div style={{ marginBottom: '15px', paddingBottom: '15px', borderBottom: '1px solid var(--grid-line)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '8px' }}>
+                    <span style={{ color: '#ccc' }}>ATTENDANCE PROGRESS</span>
+                    <span style={{ color: stat.barColor, fontWeight: 'bold' }}>{statContent} <span style={{fontSize:'0.65rem', color:'#888', marginLeft:'5px'}}>{stat.present}/{stat.total}</span></span>
+                </div>
+                <div style={{ height: '6px', width: '100%', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${barWidth}%`, background: stat.barColor, transition: 'width 1s ease' }}></div>
+                </div>
+            </div>
+            
+            {/* Autoscan Controls */}
+            <div style={{ marginBottom: '15px', borderBottom: '1px solid var(--grid-line)', paddingBottom: '15px' }}>
+                {c?.autoscan_active ? (
+                    <div style={{ textAlign: 'center' }}>
+                        <button 
+                            className="btn" 
+                            disabled={actionLoading === `autoscan_${c.gid}`}
+                            style={{ width: '100%', borderColor: '#f00', color: '#f00', fontWeight: 'bold', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
+                            onClick={() => onCancelAutoscan(c.gid, false)}
+                        >
+                            {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : '[ DEACTIVATE AUTOSCAN ]'}
+                        </button>
+                        <div style={{ color: '#f00', fontSize: '0.7rem', margin: '5px 0' }}>SCANNER ACTIVE</div>
+                    </div>
+                ) : (
+                    <div style={{ textAlign: 'center' }}>
+                        <button 
+                            className="btn" 
+                            disabled={actionLoading === `autoscan_${c.gid}`}
+                            style={{ width: '100%', borderColor: 'var(--primary)', color: 'var(--primary)', fontWeight: 'bold', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
+                            onClick={() => onAutoscan(c?.gid, false)}
+                        >
+                            {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : '[ ACTIVATE AUTOSCAN ]'}
+                        </button>
+                        <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', margin: '5px 0' }}>SYSTEM WILL AUTOSCAN</div>
+                    </div>
+                )}
+            </div>
+
+            {/* Session List */}
+            {isLoadingSessions ? (
+                <><Skeleton type="session-row" /><Skeleton type="session-row" /></>
+            ) : sessionsForExpanded?.length > 0 ? (
+                sessionsForExpanded.map(s => <SessionRow key={s.id} s={s} parentId={c?.gid} fallbackName={c?.code} onAction={onAction} onExempt={onExempt} />)
+            ) : (
+                <div style={{ textAlign: 'center', padding: '20px', fontSize: '0.8rem', color: '#555' }}>NO SESSIONS</div>
+            )}
+        </div>
+    );
 };
 
 export const TimetableList = memo(function TimetableList({ 
@@ -110,6 +176,9 @@ export const TimetableList = memo(function TimetableList({
     sessionsForExpanded, isLoadingSessions,
     onAction, onExempt, onAutoscan, onCancelAutoscan, actionLoading 
 }) {
+    // Track expand times so AnimatedPercent re-animates each time a card is opened
+    const expandTimestamps = useRef({});
+
     if (loading) {
         return (
             <div className="timetable-grid">
@@ -142,6 +211,14 @@ export const TimetableList = memo(function TimetableList({
 
     let foundUpcoming = false;
 
+    const handleExpand = (gid) => {
+        if (gid && gid !== expandedGid) {
+            // Record the timestamp when this gid is freshly expanded
+            expandTimestamps.current[gid] = Date.now();
+        }
+        onExpand(gid);
+    };
+
     return (
         <div className="timetable-grid" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
             {days.map(day => {
@@ -157,6 +234,8 @@ export const TimetableList = memo(function TimetableList({
                             const c = getCourse(t.gid);
                             const stat = getStats(c?.sessions);
                             const isExpanded = expandedGid === t.gid;
+                            // animKey is the timestamp of last expansion so AnimatedPercent re-triggers each open
+                            const animKey = expandTimestamps.current[t.gid] || 0;
                             
                             // Live Pointer highlighting
                             let isOngoing = false;
@@ -176,7 +255,7 @@ export const TimetableList = memo(function TimetableList({
                             // Replace string percentages with animated ones
                             let statContent = stat.text;
                             if (statContent && statContent.includes('%')) {
-                                statContent = <><AnimatedPercent value={stat.percent} /></>;
+                                statContent = <><AnimatedPercent value={stat.percent} animKey={animKey} /></>;
                             }
 
                             return (
@@ -188,7 +267,7 @@ export const TimetableList = memo(function TimetableList({
                                     {/* Main Row Content */}
                                     <div 
                                         style={{ padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                                        onClick={() => onExpand(isExpanded ? null : t.gid)}
+                                        onClick={() => handleExpand(isExpanded ? null : t.gid)}
                                     >
                                         <div>
                                             <div className="time-time" style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{t.start} - {t.end}</div>
@@ -207,57 +286,7 @@ export const TimetableList = memo(function TimetableList({
 
                                     {/* Accordion Expansion */}
                                     {isExpanded && (
-                                        <div style={{ padding: '15px', borderTop: '1px dashed var(--grid-line)', background: 'rgba(0,0,0,0.2)' }}>
-                                            
-                                            {/* Beautiful Expanded Progress Bar */}
-                                            <div style={{ marginBottom: '15px', paddingBottom: '15px', borderBottom: '1px solid var(--grid-line)' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '8px' }}>
-                                                    <span style={{ color: '#ccc' }}>ATTENDANCE PROGRESS</span>
-                                                    <span style={{ color: stat.barColor, fontWeight: 'bold' }}>{statContent} <span style={{fontSize:'0.65rem', color:'#888', marginLeft:'5px'}}>{stat.present}/{stat.total}</span></span>
-                                                </div>
-                                                <div style={{ height: '6px', width: '100%', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
-                                                    <div style={{ height: '100%', width: `${stat.percent}%`, background: stat.barColor, transition: 'width 1s ease' }}></div>
-                                                </div>
-                                            </div>
-                                            
-                                            {/* Autoscan Controls */}
-                                            <div style={{ marginBottom: '15px', borderBottom: '1px solid var(--grid-line)', paddingBottom: '15px' }}>
-                                                {c?.autoscan_active ? (
-                                                    <div style={{ textAlign: 'center' }}>
-                                                        <button 
-                                                            className="btn" 
-                                                            disabled={actionLoading === `autoscan_${c.gid}`}
-                                                            style={{ width: '100%', borderColor: '#f00', color: '#f00', fontWeight: 'bold', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
-                                                            onClick={() => onCancelAutoscan(c.gid, false)}
-                                                        >
-                                                            {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : '[ DEACTIVATE AUTOSCAN ]'}
-                                                        </button>
-                                                        <div style={{ color: '#f00', fontSize: '0.7rem', margin: '5px 0' }}>SCANNER ACTIVE</div>
-                                                    </div>
-                                                ) : (
-                                                    <div style={{ textAlign: 'center' }}>
-                                                        <button 
-                                                            className="btn" 
-                                                            disabled={actionLoading === `autoscan_${c.gid}`}
-                                                            style={{ width: '100%', borderColor: 'var(--primary)', color: 'var(--primary)', fontWeight: 'bold', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
-                                                            onClick={() => onAutoscan(c?.gid, false)}
-                                                        >
-                                                            {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : '[ ACTIVATE AUTOSCAN ]'}
-                                                        </button>
-                                                        <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', margin: '5px 0' }}>SYSTEM WILL AUTOSCAN</div>
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            {/* Session List */}
-                                            {isLoadingSessions ? (
-                                                <><Skeleton type="session-row" /><Skeleton type="session-row" /></>
-                                            ) : sessionsForExpanded?.length > 0 ? (
-                                                sessionsForExpanded.map(s => <SessionRow key={s.id} s={s} parentId={c?.gid} fallbackName={c?.code} onAction={onAction} onExempt={onExempt} />)
-                                            ) : (
-                                                <div style={{ textAlign: 'center', padding: '20px', fontSize: '0.8rem', color: '#555' }}>NO SESSIONS</div>
-                                            )}
-                                        </div>
+                                        <ExpandedProgress stat={stat} animKey={animKey} statContent={statContent} c={c} actionLoading={actionLoading} onCancelAutoscan={onCancelAutoscan} onAutoscan={onAutoscan} isLoadingSessions={isLoadingSessions} sessionsForExpanded={sessionsForExpanded} onAction={onAction} onExempt={onExempt} />
                                     )}
                                 </div>
                             );

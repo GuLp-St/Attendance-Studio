@@ -412,38 +412,38 @@ export default function Dashboard() {
           notifCount={notifications.length}
       />
 
-      <div style={{ display: 'flex', gap: '6px', marginTop: '20px', marginBottom: '15px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '4px', marginTop: '20px', marginBottom: '15px' }}>
         <button 
             className="btn" 
-            style={activeTab === 'modules' ? { flex: 1, minWidth: '80px', borderColor: 'var(--primary)', color: 'var(--primary)', background: 'rgba(0,243,255,0.1)' } : { flex: 1, minWidth: '80px' }} 
+            style={activeTab === 'modules' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: 'var(--primary)', color: 'var(--primary)', background: 'rgba(0,243,255,0.1)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
             onClick={() => setActiveTab('modules')}
         >
             CLASSES
         </button>
         <button 
             className="btn" 
-            style={activeTab === 'org' ? { flex: 1, minWidth: '80px', borderColor: 'var(--accent)', color: 'var(--accent)', background: 'rgba(255,158,0,0.1)' } : { flex: 1, minWidth: '80px' }} 
+            style={activeTab === 'org' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: 'var(--accent)', color: 'var(--accent)', background: 'rgba(255,158,0,0.1)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
             onClick={() => setActiveTab('org')}
         >
             ACTIVITIES
         </button>
         <button 
             className="btn" 
-            style={activeTab === 'scheduler' ? { flex: 1, minWidth: '80px', borderColor: '#f0f', color: '#f0f', background: 'rgba(255,0,255,0.1)' } : { flex: 1, minWidth: '80px' }} 
+            style={activeTab === 'scheduler' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: '#f0f', color: '#f0f', background: 'rgba(255,0,255,0.1)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
             onClick={() => setActiveTab('scheduler')}
         >
             SCHEDULER
         </button>
         <button 
             className="btn" 
-            style={activeTab === 'tools' ? { flex: 1, minWidth: '80px', borderColor: '#0f0', color: '#0f0', background: 'rgba(0,255,0,0.1)' } : { flex: 1, minWidth: '80px' }} 
+            style={activeTab === 'tools' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: '#0f0', color: '#0f0', background: 'rgba(0,255,0,0.1)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
             onClick={() => setActiveTab('tools')}
         >
             COURSE HUB
         </button>
         <button 
             className="btn" 
-            style={activeTab === 'directory' ? { flex: 1, minWidth: '80px', borderColor: '#ff6', color: '#ff6', background: 'rgba(255,255,0,0.05)' } : { flex: 1, minWidth: '80px' }} 
+            style={activeTab === 'directory' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: '#ff6', color: '#ff6', background: 'rgba(255,255,0,0.05)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
             onClick={() => setActiveTab('directory')}
         >
             DIRECTORY

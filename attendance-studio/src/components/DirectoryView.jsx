@@ -88,7 +88,7 @@ const SortHeader = ({ label, field, sortConfig, onSort, style }) => {
     
     return (
         <div
-            onClick={(e) => onSort(field, e.shiftKey)}
+            onClick={() => onSort(field)}
             style={{
                 cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center',
                 gap: '4px', color: isActive ? 'var(--primary)' : '#aaa',
@@ -99,11 +99,6 @@ const SortHeader = ({ label, field, sortConfig, onSort, style }) => {
             {label} 
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '2px' }}>
                 {icon}
-                {sortConfig.length > 1 && isActive && (
-                    <span style={{ fontSize: '0.6rem', opacity: 0.7, color: 'var(--primary)' }}>
-                        {sortIdx + 1}
-                    </span>
-                )}
             </div>
         </div>
     );
@@ -146,21 +141,17 @@ export default function DirectoryView({ user }) {
     const handleSort = (field) => {
         setPage(1);
         setSortConfig(prev => {
-            const next = [...prev];
-            const idx = next.findIndex(s => s.field === field);
-            
-            if (idx !== -1) {
-                // Cycle: ASC -> DESC -> REMOVE
-                if (next[idx].dir === 'asc') {
-                    next[idx] = { ...next[idx], dir: 'desc' };
-                } else {
-                    next.splice(idx, 1);
-                }
+            const cur = prev.find(s => s.field === field);
+            if (!cur) {
+                // New field: replace with ASC
+                return [{ field, dir: 'asc' }];
+            } else if (cur.dir === 'asc') {
+                // Cycle to DESC
+                return [{ field, dir: 'desc' }];
             } else {
-                // Add as new sort priority
-                next.push({ field, dir: 'asc' });
+                // Remove (back to no sort)
+                return [];
             }
-            return next;
         });
     };
 
