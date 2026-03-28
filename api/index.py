@@ -621,7 +621,6 @@ def api_handler(path):
             today_str = now_my.strftime('%Y-%m-%d')
             # Cleanup old logs (moved here to save a route)
             cutoff = now_my - timedelta(days=7)
-            pg_db.execute("DELETE FROM system_logs WHERE timestamp < %s", (cutoff,))
             jobs = pg_db.query("SELECT * FROM autoscan_jobs")
             results = []
             def process_autoscan_job(job):
@@ -1533,7 +1532,6 @@ def api_handler(path):
             elif req_type == 'delete_device_logs':
                 target_id = data.get('target_id')
                 pg_db.execute("DELETE FROM banned_ips WHERE ip = %s", (target_id,))
-                pg_db.execute("DELETE FROM system_logs WHERE message LIKE %s OR message LIKE %s", (f"%{target_id}%", f"%{target_id}%"))
                 pg_db.execute("DELETE FROM logs WHERE ip = %s OR device_id = %s", (target_id, target_id))
                 return jsonify({"status": "Device logs cleared & unbanned"})
         except Exception as e:
