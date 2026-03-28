@@ -759,6 +759,7 @@ def api_handler(path):
                     except Exception as e: results.append(f"AR Error: {str(e)}")
             # --- RESULTS AGGREGATION ---
             full_log = f"Jobs: {len(jobs)} | AR Jobs: {len(ar_jobs)} | Processed: {len(results)}\n" + "\n".join(results)
+            save_job_log("autojobs", "SUCCESS", len(results), full_log)
             return Response(full_log, headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
@@ -810,10 +811,10 @@ def api_handler(path):
                     if "TT: True" in msg: tt_valid += 1
                 except: pass
             log_str = f"Processed: {len(futures)} | Valid Logins: {login_valid} | Valid+TT: {tt_valid} | Queue rotated."
-            save_sys_log("CRON VERIFY", "SUCCESS", len(futures))
+            save_sync_log("VERIFY", "SUCCESS", [log_str], len(futures))
             return Response(json.dumps({"processed": len(futures), "details": log_str}, default=json_serial), headers=headers)
         except Exception as e:
-            save_sys_log("CRON VERIFY", "ERROR", 0)
+            save_sync_log("VERIFY", "ERROR", [str(e)], 0)
             return jsonify({"error": str(e)}), 500
 
     elif path == '/student_details_proxy':
