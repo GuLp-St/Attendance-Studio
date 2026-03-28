@@ -55,7 +55,7 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
         <div className="nav-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                 {/* Profile Picture */}
-                <div style={{ width: '50px', height: '50px', borderRadius: '50%', overflow: 'hidden', border: '2px solid var(--primary)', background: '#111' }}>
+                <div style={{ width: '50px', height: '50px', borderRadius: '50%', overflow: 'hidden', border: '2px solid var(--primary)', background: '#111', flexShrink: 0 }}>
                     <img 
                         src={`https://studentphotos.unimas.my/${user.matric}.jpg`} 
                         alt="Profile" 
@@ -87,10 +87,14 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
 
 import SessionRow from './DashboardModals/SessionRow';
 
-const AnimatedPercent = ({ value }) => {
-    const [display, setDisplay] = useState(0);
+const animatedCache = new Set();
+
+const AnimatedPercent = ({ value, animKey }) => {
+    const shouldAnimate = !animatedCache.has(animKey);
+    const [display, setDisplay] = useState(shouldAnimate ? 0 : value);
     useEffect(() => {
-        if (display === value) return;
+        if (!shouldAnimate) return;
+        animatedCache.add(animKey);
         let start = 0;
         const dur = 800;
         const incr = Math.max(1, value / (dur / 16));
@@ -100,8 +104,21 @@ const AnimatedPercent = ({ value }) => {
             else setDisplay(Math.floor(start));
         }, 16);
         return () => clearInterval(timer);
-    }, [value]);
+    }, [value, shouldAnimate, animKey]);
     return <span>{display}%</span>;
+};
+
+const AnimatedProgressBar = ({ percent, barColor, animKey }) => {
+    const shouldAnimate = !animatedCache.has(animKey + '_bar');
+    const [w, setW] = useState(shouldAnimate ? 0 : percent);
+    useEffect(() => {
+        if (shouldAnimate) {
+            animatedCache.add(animKey + '_bar');
+            const timer = setTimeout(() => setW(percent), 50);
+            return () => clearTimeout(timer);
+        }
+    }, [percent, shouldAnimate, animKey]);
+    return <div style={{ height: '100%', width: `${w}%`, background: barColor, transition: 'width 1s ease' }}></div>;
 };
 
 export const TimetableList = memo(function TimetableList({ 
@@ -173,12 +190,6 @@ export const TimetableList = memo(function TimetableList({
                                 }
                             }
                             
-                            // Replace string percentages with animated ones
-                            let statContent = stat.text;
-                            if (statContent && statContent.includes('%')) {
-                                statContent = <><AnimatedPercent value={stat.percent} /></>;
-                            }
-
                             return (
                                 <div key={i} className="time-slot course-card" style={{ 
                                     cursor: 'pointer', marginBottom: '8px', border: '1px solid var(--grid-line)', overflow: 'hidden',
@@ -200,7 +211,7 @@ export const TimetableList = memo(function TimetableList({
                                         </div>
                                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '5px' }}>
                                             <div className={`stat-badge ${stat.class}`}>
-                                                {statContent}
+                                                {stat.text}
                                             </div>
                                         </div>
                                     </div>
@@ -213,10 +224,13 @@ export const TimetableList = memo(function TimetableList({
                                             <div style={{ marginBottom: '15px', paddingBottom: '15px', borderBottom: '1px solid var(--grid-line)' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '8px' }}>
                                                     <span style={{ color: '#ccc' }}>ATTENDANCE PROGRESS</span>
-                                                    <span style={{ color: stat.barColor, fontWeight: 'bold' }}>{statContent} <span style={{fontSize:'0.65rem', color:'#888', marginLeft:'5px'}}>{stat.present}/{stat.total}</span></span>
+                                                    <span style={{ color: stat.barColor, fontWeight: 'bold' }}>
+                                                        {stat.text.includes('%') ? <AnimatedPercent value={stat.percent} animKey={t.gid} /> : stat.text} 
+                                                        <span style={{fontSize:'0.65rem', color:'#888', marginLeft:'5px'}}>{stat.present}/{stat.total}</span>
+                                                    </span>
                                                 </div>
                                                 <div style={{ height: '6px', width: '100%', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
-                                                    <div style={{ height: '100%', width: `${stat.percent}%`, background: stat.barColor, transition: 'width 1s ease' }}></div>
+                                                    <AnimatedProgressBar percent={stat.percent} barColor={stat.barColor} animKey={t.gid} />
                                                 </div>
                                             </div>
                                             
