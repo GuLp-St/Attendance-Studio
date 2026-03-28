@@ -72,8 +72,16 @@ def get_students(group_id, s):
     except: return []
 
 def get_timetable(group_id, s):
-    try: return s.get(f"https://qr.unimas.my/atdcloud/api/class/v1/get/timetable/ug/class_id/{group_id}", timeout=5).json()
-    except: return []
+    for attempt in range(2):
+        try:
+            r = s.get(f"https://qr.unimas.my/atdcloud/api/class/v1/get/timetable/ug/class_id/{group_id}", timeout=10)
+            if r.status_code == 200:
+                js = r.json()
+                if isinstance(js, list) and len(js) > 0:
+                    return js
+        except: pass
+        time.sleep(0.5)
+    return []
 
 def get_sessions(group_id, s):
     try: return s.get(f"https://qr.unimas.my/atdcloud/api/class_attendance/class_id/ug/{group_id}", timeout=8).json()
