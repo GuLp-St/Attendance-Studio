@@ -9,10 +9,13 @@ import Modal from '../components/Modal';
 import { 
     DashboardHeader, 
     TimetableList, 
-    ActivityList 
+    ActivityList,
+    ExpandedProgress,
+    getStats
 } from '../components/DashboardViews';
 
 import ActivityView from '../components/ActivityView';
+import ClassView from '../components/ClassView';
 import OrgSearchView from '../components/OrgSearchView';
 import ToolsView from '../components/ToolsView';
 import DirectoryView from '../components/DirectoryView';
@@ -40,6 +43,7 @@ export default function Dashboard() {
   
   // Modal Data State
   const [selectedCourse, setSelectedCourse] = useState(null);
+  const [expandedSlotId, setExpandedSlotId] = useState(null);
   const [selectedOrg, setSelectedOrg] = useState(null);
   const [orgPreview, setOrgPreview] = useState(null); // Preview for unfollowed orgs from search
   const [courseSessions, setCourseSessions] = useState(null);
@@ -424,7 +428,7 @@ export default function Dashboard() {
   // 5. RENDER
   // =========================================================================
   return (
-    <div style={{ display: 'block' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       
       <DashboardHeader 
           user={user} 
@@ -460,7 +464,7 @@ export default function Dashboard() {
             style={activeTab === 'tools' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: '#0f0', color: '#0f0', background: 'rgba(0,255,0,0.1)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
             onClick={() => setActiveTab('tools')}
         >
-            COURSE HUB
+            COURSEHUB
         </button>
         <button 
             className="btn" 
@@ -474,25 +478,40 @@ export default function Dashboard() {
       {/* MAIN LISTS - WITH STATE RETENTION VIA DISPLAY NONE */}
       
       {/* 1. CLASSES TAB */}
-      <div style={{ display: activeTab === 'modules' ? 'block' : 'none' }}>
-          <TimetableList 
-              timetable={user.timetable} 
-              courses={user.courses} 
-              loading={!user.courses || !user.timetable || (!sessionsFetched && user.timetable.length === 0)}
-              expandedGid={selectedCourse?.gid || null}
-              onExpand={openCourseByGid}
-              sessionsForExpanded={courseSessions}
-              isLoadingSessions={loadingDetail && selectedCourse}
-              onAction={handleAction}
-              onExempt={openExemptPrompt}
-              onAutoscan={initAutoscan}
-              onCancelAutoscan={cancelAutoscan}
-              actionLoading={actionLoading}
-          />
+      <div style={{ display: activeTab === 'modules' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column', overflowY: 'auto' }}>
+          {selectedCourse ? (
+              <ClassView 
+                  course={selectedCourse} 
+                  timetableEntry={user.timetable?.find(t => t.gid === selectedCourse.gid) || null}
+                  sessions={courseSessions}
+                  onClose={() => setSelectedCourse(null)}
+                  onAction={handleAction}
+                  onExempt={openExemptPrompt}
+                  onAutoscan={initAutoscan}
+                  onCancelAutoscan={cancelAutoscan}
+                  isLoading={loadingDetail}
+                  actionLoading={actionLoading}
+              />
+          ) : (
+              <TimetableList 
+                  timetable={user.timetable} 
+                  courses={user.courses} 
+                  loading={!user.courses || !user.timetable || (!sessionsFetched && user.timetable.length === 0)}
+                  expandedGid={selectedCourse?.gid || null}
+                  onExpand={(gid) => openCourseByGid(gid)}
+                  sessionsForExpanded={courseSessions}
+                  isLoadingSessions={loadingDetail && selectedCourse}
+                  onAction={handleAction}
+                  onExempt={openExemptPrompt}
+                  onAutoscan={initAutoscan}
+                  onCancelAutoscan={cancelAutoscan}
+                  actionLoading={actionLoading}
+              />
+          )}
       </div>
 
       {/* 2. ACTIVITIES TAB */}
-      <div style={{ display: activeTab === 'org' ? 'block' : 'none' }}>
+      <div style={{ display: activeTab === 'org' ? 'block' : 'none', flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {selectedOrg ? (
               <ActivityView 
                   org={selectedOrg} 
@@ -551,7 +570,7 @@ export default function Dashboard() {
       </div>
 
       {/* 3. TOOLS TAB */}
-      <div style={{ display: activeTab === 'tools' ? 'block' : 'none' }}>
+      <div style={{ display: activeTab === 'tools' ? 'block' : 'none', flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <ToolsView 
               user={user} 
               isVisible={activeTab === 'tools'} 
@@ -564,14 +583,14 @@ export default function Dashboard() {
       </div>
 
       {/* 4. DIRECTORY TAB */}
-      <div style={{ display: activeTab === 'directory' ? 'block' : 'none' }}>
+      <div style={{ display: activeTab === 'directory' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column', overflowY: 'auto' }}>
           <DirectoryView user={user} />
       </div>
 
       {/* ================= REMAINING OVERLAY MODALS ================= */}
 
       {/* SCHEDULER TAB CONTENT */}
-      {activeTab === 'scheduler' && (
+      <div style={{ display: activeTab === 'scheduler' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column', overflowY: 'auto' }}>
           <SchedulerView 
               user={user} 
               notifications={notifications} 
@@ -594,7 +613,7 @@ export default function Dashboard() {
                   });
               }}
           />
-      )}
+      </div>
 
       {/* AUTOSCAN MODE SELECTOR */}
       <Modal title="SELECT MODE" isOpen={showAutoscanMode} onClose={closeCurrentLevel} maxWidth="400px">

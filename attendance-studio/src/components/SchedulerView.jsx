@@ -6,7 +6,7 @@ import { useConfirm } from '../contexts/ConfirmContext';
 export default function SchedulerView({ user, notifications, onDismissNotif, onCancelJob, onCancelAutoReg, goToTools, actionLoading, onAutoscan, onGlobalRefresh }) {
     const { showToast } = useToast();
     const { confirm } = useConfirm();
-    const [tab, setTab] = useState('jobs');
+    const [tab, setTab] = useState('active-jobs');
     const [arLoading, setArLoading] = useState(null);
     const [actionLoadingGlobal, setActionLoadingGlobal] = useState(false);
     const [localConfig, setLocalConfig] = useState({});
@@ -101,27 +101,33 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
     const [globalTrigger, setGlobalTrigger] = useState('crowd');
     const [globalAuto, setGlobalAuto] = useState('onetime');
 
+    const TABS = [
+        { id: 'active-jobs', label: 'ACTIVE JOBS' },
+        { id: 'autoscan',    label: 'AUTOSCAN'    },
+        { id: 'history',     label: 'HISTORY'     },
+    ];
+
     return (
-        <div style={{ paddingBottom: '20px' }}>
-            <div style={{ display: 'flex', borderBottom: '1px solid var(--grid-line)', marginBottom: '15px' }}>
-                {['jobs', 'config', 'logs'].map(t => (
-                    <div key={t}
-                        onClick={() => setTab(t)}
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: '20px' }}>
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--grid-line)', marginBottom: '15px', flexShrink: 0 }}>
+                {TABS.map(t => (
+                    <div key={t.id}
+                        onClick={() => setTab(t.id)}
                         style={{
-                            flex: 1, textAlign: 'center', padding: '10px 8px',
-                            cursor: 'pointer', fontSize: '0.75rem', letterSpacing: '1px',
-                            color: tab === t ? 'var(--primary)' : 'var(--text-dim)',
-                            borderBottom: tab === t ? '2px solid var(--primary)' : 'none',
-                            fontWeight: tab === t ? 'bold' : 'normal'
+                            flex: 1, textAlign: 'center', padding: '10px 4px',
+                            cursor: 'pointer', fontSize: 'clamp(0.6rem, 1.5vw, 0.75rem)', letterSpacing: '1px', whiteSpace: 'nowrap',
+                            color: tab === t.id ? 'var(--primary)' : 'var(--text-dim)',
+                            borderBottom: tab === t.id ? '2px solid var(--primary)' : 'none',
+                            fontWeight: tab === t.id ? 'bold' : 'normal'
                         }}
                     >
-                        {t.toUpperCase()}
+                        {t.label}
                     </div>
                 ))}
             </div>
 
-            {/* ===== JOBS TAB ===== */}
-            {tab === 'jobs' && (
+            {/* ===== ACTIVE JOBS TAB ===== */}
+            {tab === 'active-jobs' && (
                 <div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginBottom: '10px', fontWeight: 'bold' }}>ACTIVE JOBS</div>
                     {activeClassJobs.length === 0 && activeOrgJobs.length === 0 && activeAutoRegJobs.length === 0 && (
@@ -172,8 +178,8 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                 </div>
             )}
 
-            {/* ===== CONFIG TAB ===== */}
-            {tab === 'config' && (
+            {/* ===== AUTOSCAN TAB ===== */}
+            {tab === 'autoscan' && (
                 <div>
                     <div style={{ padding: '15px', border: '1px solid var(--grid-line)', borderRadius: '6px', marginBottom: '20px' }}>
                         <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '10px' }}>GLOBAL AUTOSCAN</div>
@@ -261,8 +267,8 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                 </div>
             )}
 
-            {/* ===== LOGS TAB ===== */}
-            {tab === 'logs' && (
+            {/* ===== HISTORY TAB ===== */}
+            {tab === 'history' && (
                 <div style={{ marginTop: 0 }}>
                     <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginBottom: '10px', fontWeight: 'bold' }}>NOTIFICATION LOGS</div>
                     {notifications.length === 0 

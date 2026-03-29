@@ -15,7 +15,7 @@ const parseTime = t => {
     return parseInt(h) * 60 + parseInt(m);
 };
 
-const getStats = (sessions) => {
+export const getStats = (sessions) => {
     // 1. Loading State (Start at 0% for animation)
     if (!sessions) return { text: 'CALC...', class: 'stat-loading', percent: 0, barColor: '#333', present: 0, total: 0 };
     
@@ -67,7 +67,7 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
                 
                 {/* User Info */}
                 <div style={{ minWidth: 0 }}>
-                    <h2 className="glitch-text" style={{ fontSize: '1.2rem', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.name}</h2>
+                    <h2 className="glitch-text" style={{ fontSize: 'clamp(0.85rem, 3.5vw, 1.2rem)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'normal', wordBreak: 'break-word' }}>{user.name}</h2>
                     <div style={{ fontSize: '0.8rem', color: 'var(--primary)', marginTop: '2px', fontWeight: 'bold' }}>{user.matric}</div>
                     
                     {/* Lazy Loaded Profile Data */}
@@ -87,37 +87,33 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
 });
 
 
-const AnimatedPercent = ({ value, animKey }) => {
-    const [display, setDisplay] = useState(animKey ? 0 : value);
-    const hasAnimated = useRef(!!animKey);
+const AnimatedPercent = ({ value }) => {
+    const [display, setDisplay] = useState(0);
+    const currRef = useRef(0);
 
     useEffect(() => {
-        if (!animKey) {
-            setDisplay(value);
-            return;
-        }
-        
-        if (animKey && !hasAnimated.current) {
-            hasAnimated.current = true;
-            setDisplay(0);
-            const dur = 800;
-            const incr = Math.max(1, value / (dur / 16));
-            let start = 0;
-            const timer = setInterval(() => {
-                start += incr;
-                if (start >= value) { setDisplay(value); clearInterval(timer); }
-                else setDisplay(Math.floor(start));
-            }, 16);
-            return () => clearInterval(timer);
-        } else {
-            setDisplay(value);
-        }
-    }, [animKey, value]);
+        const timer = setInterval(() => {
+            if (currRef.current === value) {
+                clearInterval(timer);
+                return;
+            }
+            const diff = value - currRef.current;
+            const dir = Math.sign(diff);
+            const step = Math.max(1, Math.floor(Math.abs(diff) / 10));
+            
+            currRef.current += dir * step;
+            if ((dir > 0 && currRef.current > value) || (dir < 0 && currRef.current < value)) {
+                currRef.current = value;
+            }
+            setDisplay(currRef.current);
+        }, 30);
+        return () => clearInterval(timer);
+    }, [value]);
 
     return <span>{display}%</span>;
 };
 
-const ExpandedProgress = ({ stat, animKey, isFirstExpand, statContent, c, actionLoading, onCancelAutoscan, onAutoscan, isLoadingSessions, sessionsForExpanded, onAction, onExempt }) => {
+export const ExpandedProgress = ({ stat, animKey, isFirstExpand, statContent, c, actionLoading, onCancelAutoscan, onAutoscan, isLoadingSessions, sessionsForExpanded, onAction, onExempt }) => {
     const [barWidth, setBarWidth] = useState(isFirstExpand ? 0 : stat.percent);
     useEffect(() => {
         if (isFirstExpand) {
@@ -130,53 +126,47 @@ const ExpandedProgress = ({ stat, animKey, isFirstExpand, statContent, c, action
     }, [isFirstExpand, stat.percent]);
 
     return (
-        <div style={{ padding: '15px', borderTop: '1px dashed var(--grid-line)', background: 'rgba(0,0,0,0.2)' }}>
+        <div style={{ padding: 'clamp(5px, 1vh, 12px)', borderTop: '1px dashed var(--grid-line)', background: 'rgba(0,0,0,0.2)', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             
-            {/* Beautiful Expanded Progress Bar */}
-            <div style={{ marginBottom: '15px', paddingBottom: '15px', borderBottom: '1px solid var(--grid-line)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '8px' }}>
-                    <span style={{ color: '#ccc' }}>ATTENDANCE PROGRESS</span>
-                    <span style={{ color: stat.barColor, fontWeight: 'bold' }}>{statContent} <span style={{fontSize:'0.65rem', color:'#888', marginLeft:'5px'}}>{stat.present}/{stat.total}</span></span>
-                </div>
-                <div style={{ height: '6px', width: '100%', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${barWidth}%`, background: stat.barColor, transition: 'width 1s ease' }}></div>
-                </div>
-            </div>
-            
-            {/* Autoscan Controls */}
-            <div style={{ marginBottom: '15px', borderBottom: '1px solid var(--grid-line)', paddingBottom: '15px' }}>
-                {c?.autoscan_active ? (
-                    <div style={{ textAlign: 'center' }}>
-                        <button 
-                            className="btn" 
-                            disabled={actionLoading === `autoscan_${c.gid}`}
-                            style={{ width: '100%', borderColor: '#f00', color: '#f00', fontWeight: 'bold', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
-                            onClick={() => onCancelAutoscan(c.gid, false)}
-                        >
-                            {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : '[ DEACTIVATE AUTOSCAN ]'}
-                        </button>
-                        <div style={{ color: '#f00', fontSize: '0.7rem', margin: '5px 0' }}>SCANNER ACTIVE</div>
+            {/* Top Config Row: Progress + Autoscan */}
+            <div style={{ display: 'flex', gap: '15px', alignItems: 'center', marginBottom: 'clamp(4px, 1vh, 10px)', paddingBottom: 'clamp(4px, 1vh, 10px)', borderBottom: '1px solid var(--grid-line)', flexShrink: 0 }}>
+                
+                {/* Progress */}
+                <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'clamp(0.6rem, 1.2vh, 0.75rem)', marginBottom: '4px' }}>
+                        <span style={{ color: '#ccc' }}>PROGRESS</span>
+                        <span style={{ color: stat.barColor, fontWeight: 'bold' }}>
+                            {statContent} <span style={{fontSize:'0.6rem', color:'#888', marginLeft:'3px'}}>{stat.present}/{stat.total}</span>
+                        </span>
                     </div>
-                ) : (
-                    <div style={{ textAlign: 'center' }}>
-                        <button 
-                            className="btn" 
-                            disabled={actionLoading === `autoscan_${c.gid}`}
-                            style={{ width: '100%', borderColor: 'var(--primary)', color: 'var(--primary)', fontWeight: 'bold', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
-                            onClick={() => onAutoscan(c?.gid, false)}
-                        >
-                            {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : '[ ACTIVATE AUTOSCAN ]'}
-                        </button>
-                        <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', margin: '5px 0' }}>SYSTEM WILL AUTOSCAN</div>
+                    <div style={{ height: '4px', width: '100%', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${barWidth}%`, background: stat.barColor, transition: 'width 1s ease' }}></div>
                     </div>
-                )}
+                </div>
+
+                {/* Autoscan Button */}
+                <div style={{ width: '110px', flexShrink: 0 }}>
+                    {c?.autoscan_active ? (
+                        <button className="btn" disabled={actionLoading === `autoscan_${c.gid}`} onClick={() => onCancelAutoscan(c.gid, false)}
+                            style={{ width: '100%', borderColor: '#f00', color: '#f00', fontWeight: 'bold', padding: '4px 6px', fontSize: '0.65rem', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }}>
+                            {actionLoading === `autoscan_${c.gid}` ? '...' : 'STOP SCAN'}
+                        </button>
+                    ) : (
+                        <button className="btn" disabled={actionLoading === `autoscan_${c.gid}`} onClick={() => onAutoscan(c?.gid, false)}
+                            style={{ width: '100%', borderColor: 'var(--primary)', color: 'var(--primary)', fontWeight: 'bold', padding: '4px 6px', fontSize: '0.65rem', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }}>
+                            {actionLoading === `autoscan_${c.gid}` ? '...' : 'AUTOSCAN'}
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Session List */}
             {isLoadingSessions ? (
                 <><Skeleton type="session-row" /><Skeleton type="session-row" /></>
             ) : sessionsForExpanded?.length > 0 ? (
-                sessionsForExpanded.map(s => <SessionRow key={s.id} s={s} parentId={c?.gid} fallbackName={c?.code} onAction={onAction} onExempt={onExempt} />)
+                <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                    {sessionsForExpanded.map(s => <SessionRow key={s.id} s={s} parentId={c?.gid} fallbackName={c?.code} onAction={onAction} onExempt={onExempt} />)}
+                </div>
             ) : (
                 <div style={{ textAlign: 'center', padding: '20px', fontSize: '0.8rem', color: '#555' }}>NO SESSIONS</div>
             )}
@@ -184,14 +174,15 @@ const ExpandedProgress = ({ stat, animKey, isFirstExpand, statContent, c, action
     );
 };
 
-export const TimetableList = memo(function TimetableList({ 
-    timetable, courses, loading,
-    expandedGid, onExpand, 
-    sessionsForExpanded, isLoadingSessions,
-    onAction, onExempt, onAutoscan, onCancelAutoscan, actionLoading 
-}) {
-    // Track expand times so AnimatedPercent re-animates each time a card is opened
-    const expandTimestamps = useRef({});
+export const TimetableList = memo(function TimetableList({ timetable, courses, loading, expandedGid, onExpand, sessionsForExpanded, isLoadingSessions, onAction, onExempt, onAutoscan, onCancelAutoscan, actionLoading }) {
+    const initialMountTime = useRef(Date.now());
+    const containerRef = useRef(null);
+
+    const [liveTime, setLiveTime] = useState(new Date());
+    useEffect(() => {
+        const t = setInterval(() => setLiveTime(new Date()), 1000);
+        return () => clearInterval(t);
+    }, []);
 
     if (loading) {
         return (
@@ -207,11 +198,9 @@ export const TimetableList = memo(function TimetableList({
 
     const getCourse = (gid) => courses?.find(c => c.gid === gid);
 
-    // Live Pointer Logic
-    const nowTime = new Date();
-    const todayIdx = nowTime.getDay() === 0 ? 6 : nowTime.getDay() - 1; // 0=Mon...6=Sun
-    const currentDay = days[todayIdx];
-    const nowMinutes = nowTime.getHours() * 60 + nowTime.getMinutes();
+    let activeTime = liveTime;
+    let nowMinutes = activeTime.getHours() * 60 + activeTime.getMinutes();
+    let currentDayStr = days[activeTime.getDay() === 0 ? 6 : activeTime.getDay() - 1];
 
     const parseMinutes = (tStr) => {
         if (!tStr) return 0;
@@ -223,101 +212,181 @@ export const TimetableList = memo(function TimetableList({
         return h * 60 + m;
     };
 
+    const currentWeekMin = days.indexOf(currentDayStr) * 24 * 60 + nowMinutes;
+
+    const [markerY, setMarkerY] = useState(0);
+
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const nodes = Array.from(containerRef.current.querySelectorAll('.time-node'));
+        if (nodes.length === 0) return;
+
+        const cRect = containerRef.current.getBoundingClientRect();
+        const cScroll = containerRef.current.scrollTop;
+
+        const points = nodes.map(n => {
+            const r = n.getBoundingClientRect();
+            return {
+                time: parseInt(n.getAttribute('data-time')),
+                y: r.top - cRect.top + cScroll
+            };
+        }).sort((a, b) => a.time - b.time);
+
+        if (currentWeekMin < points[0].time) {
+            setMarkerY(points[0].y); // Lock solidly onto first class bounds
+        } else if (currentWeekMin >= points[points.length-1].time) {
+            setMarkerY(points[points.length-1].y); // Lock solidly onto last class bounds
+        } else {
+            for (let i = 0; i < points.length - 1; i++) {
+                if (currentWeekMin >= points[i].time && currentWeekMin < points[i+1].time) {
+                    const elapsed = currentWeekMin - points[i].time;
+                    const duration = points[i+1].time - points[i].time;
+                    if (duration === 0) continue; // Bypass instantaneous timeline gaps
+                    const progress = elapsed / duration;
+                    const yDiff = points[i+1].y - points[i].y;
+                    setMarkerY(points[i].y + yDiff * progress);
+                    break;
+                }
+            }
+        }
+    }, [currentWeekMin, timetable.length, expandedGid]);
+
+    const liveTimeString = activeTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
     let foundUpcoming = false;
 
-    const handleExpand = (gid) => {
-        if (gid && gid !== expandedGid) {
-             // Record the timestamp only ONCE so animation doesn't repeat every expand
-             if (!expandTimestamps.current[gid]) {
-                 expandTimestamps.current[gid] = Date.now();
-             }
-        }
-        onExpand(gid);
-    };
-
     return (
-        <div className="timetable-grid" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-            {days.map(day => {
-                const slots = timetable.filter(t => t.day === day).sort((a,b) => parseTime(a.start) - parseTime(b.start));
-                if (slots.length === 0) return null;
+        <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0 }}>
+            <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, position: 'relative' }}>
+                <div className="timetable-grid" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 'clamp(4px, 1vh, 10px)', marginTop: '5px', padding: '0 10px 40px 45px', overflowY: 'auto', position: 'relative' }} ref={containerRef}>
                 
-                const isToday = day === currentDay;
+                    {/* Global Timeline Overlay */}
+                    <div style={{ 
+                        position: 'absolute', left: 0, right: '10px', top: `${markerY}px`, height: '1px', 
+                        background: 'linear-gradient(90deg, transparent 0%, var(--primary) 15%, var(--primary) 100%)', 
+                        zIndex: 0, pointerEvents: 'none',
+                        boxShadow: '0 0 5px rgba(0, 243, 255, 0.4)', transition: 'top 0.5s linear', opacity: 0.8
+                    }}>
+                        <div style={{ 
+                            position: 'absolute', bottom: '2px', left: 0, width: '40px', textAlign: 'right',
+                            fontSize: '0.55rem', fontWeight: 'bold', color: 'var(--primary)',
+                            lineHeight: 1, textShadow: '0 0 4px #000', letterSpacing: '1px'
+                        }}>
+                            {currentDayStr.substring(0,3)}
+                        </div>
+                        <div style={{ 
+                            position: 'absolute', top: '3px', left: 0, width: '40px', textAlign: 'right',
+                            fontSize: '0.45rem', fontWeight: 'bold', color: 'rgba(255,255,255,0.7)',
+                            lineHeight: 1, textShadow: '0 0 4px #000', letterSpacing: '0px'
+                        }}>
+                            {liveTimeString}
+                        </div>
+                    </div>
+                    {days.map(day => {
+                const slots = timetable.filter(t => t.day === day).sort((a,b) => parseMinutes(a.start) - parseMinutes(b.start));
+                const isToday = day === currentDayStr;
+                
+                if (slots.length === 0) return null;
 
                 return (
-                    <div key={day}>
-                        <div className="day-header" style={{color:'var(--primary)', fontSize:'0.85rem', marginBottom:'10px', fontWeight: 'bold'}}>{day} {isToday && <span style={{color:'#fff', fontSize:'0.7rem', marginLeft:'8px'}}>(TODAY)</span>}</div>
+                    <div key={day} style={{ display: 'contents' }}>
+                        <div className="day-header time-node" data-time={days.indexOf(day) * 24 * 60} style={{
+                            color: isToday ? '#fff' : 'var(--primary)', 
+                            fontSize: 'clamp(0.65rem, 1.5vh, 0.8rem)', 
+                            fontWeight: 'bold',
+                            borderBottom: '1px solid rgba(0, 243, 255, 0.1)',
+                            paddingBottom: '2px',
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                            flexShrink: 0
+                        }}>
+                            <span>{day}</span>
+                            {isToday && <span style={{color: 'var(--accent)', fontSize: '0.6rem', letterSpacing: '1px'}}>TODAY</span>}
+                        </div>
                         {slots.map((t, i) => {
                             const c = getCourse(t.gid);
                             const stat = getStats(c?.sessions);
-                            const isExpanded = expandedGid === t.gid;
-                            // animKey is the timestamp of last expansion so AnimatedPercent re-triggers each open
-                            const animKey = expandTimestamps.current[t.gid] || 0;
+                            const slotId = t.id || `${t.gid}_${day}_${t.start}`;
                             
-                            // Live Pointer highlighting
-                            let isOngoing = false;
-                            let isUpcoming = false;
-                            
+                            let isOngoing = false, isUpcoming = false;
+                            const sMin = parseMinutes(t.start);
+                            const eMin = parseMinutes(t.end);
+
                             if (isToday) {
-                                const sMin = parseMinutes(t.start);
-                                const eMin = parseMinutes(t.end);
-                                if (nowMinutes >= sMin && nowMinutes <= eMin) {
-                                    isOngoing = true;
-                                } else if (nowMinutes < sMin && !foundUpcoming) {
-                                    isUpcoming = true;
-                                    foundUpcoming = true;
-                                }
+                                if (nowMinutes >= sMin && nowMinutes <= eMin) isOngoing = true;
+                                else if (nowMinutes < sMin && !foundUpcoming) { isUpcoming = true; foundUpcoming = true; }
                             }
                             
-                            // Replace string percentages with animated ones
+                            const nodeTime = days.indexOf(day) * 24 * 60 + sMin;
                             let statContent = stat.text;
-                            if (statContent && statContent.includes('%')) {
-                                statContent = <><AnimatedPercent value={stat.percent} animKey={animKey} /></>;
-                            }
+                            if (statContent && statContent.includes('%')) statContent = <><AnimatedPercent value={stat.percent} /></>;
+
+                            const renderTime = (timeStr) => {
+                                const short = timeStr.replace(/ (AM|PM)/, '');
+                                const ampm = timeStr.includes('AM') ? 'AM' : 'PM';
+                                return <>{short}<span style={{ fontSize: '0.65em', opacity: 0.7, marginLeft: '2px' }}>{ampm}</span></>;
+                            };
 
                             return (
-                                <div key={i} className="time-slot course-card" style={{ 
-                                    cursor: 'pointer', marginBottom: '8px', border: '1px solid var(--grid-line)', overflow: 'hidden',
-                                    borderLeft: isOngoing ? '4px solid #ff4444' : isUpcoming ? '4px solid #44aaff' : '1px solid var(--grid-line)'
-                                }}>
-                                    
-                                    {/* Main Row Content */}
-                                    <div 
-                                        style={{ padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                                        onClick={() => handleExpand(isExpanded ? null : t.gid)}
-                                    >
-                                        <div>
-                                            <div className="time-time" style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>{t.start} - {t.end}</div>
-                                            <div className="time-course" style={{ color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                <span>{t.code}</span>
-                                                <span style={{ fontSize: '0.75rem', color: '#ccc', fontWeight: 'normal' }}>{c?.name}</span>
+                                <React.Fragment key={i}>
+                                    <div className="time-slot time-node" data-time={nodeTime} style={{ 
+                                        cursor: 'pointer', border: '1px solid var(--grid-line)', overflow: 'hidden', position: 'relative',
+                                        background: isOngoing ? 'rgba(0, 243, 255, 0.08)' : isUpcoming ? 'rgba(68, 170, 255, 0.05)' : 'rgba(255, 255, 255, 0.02)',
+                                        borderLeft: isOngoing ? '3px solid var(--primary)' : isUpcoming ? '3px solid #44aaff' : '2px solid var(--grid-line)',
+                                        padding: '0', borderRadius: '4px',
+                                        display: 'flex', flexDirection: 'column', flex: '1 1 auto', justifyContent: 'center'
+                                    }}>
+                                        {/* Physical Anchor mapped to bottom of relative slot container */}
+                                        <div className="time-node" data-time={days.indexOf(day) * 24 * 60 + eMin} style={{ position: 'absolute', bottom: 0, opacity: 0, pointerEvents: 'none' }} />
+
+                                        {isOngoing && (
+                                            <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, background: 'rgba(0, 243, 255, 0.05)', pointerEvents: 'none' }} />
+                                        )}
+                                        {isUpcoming && (
+                                            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '100%', background: 'linear-gradient(180deg, rgba(68, 170, 255, 0.1) 0%, transparent 100%)', zIndex: 0 }} />
+                                        )}
+                                        <div 
+                                            style={{ padding: '8px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexShrink: 0, position: 'relative', zIndex: 1 }}
+                                            onClick={() => onExpand(t.gid)}
+                                        >
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: 'var(--accent)', flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                                    <div>
+                                                        <span style={{ opacity: 0.8 }}>{renderTime(t.start)}</span>
+                                                        <span className="desktop-meta" style={{ margin: '0 4px', color: 'rgba(255,255,255,0.3)' }}>-</span>
+                                                        <span className="desktop-meta" style={{ opacity: 0.8 }}>{renderTime(t.end)}</span>
+                                                    </div>
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                        <span style={{ fontSize: 'clamp(0.7rem, 1.5vh, 0.8rem)', fontWeight: 'bold', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.code}</span>
+                                                        <span className="desktop-meta" style={{ fontSize: '0.65rem', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c?.name}</span>
+                                                    </div>
+                                                    <div className="desktop-meta" style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', marginTop: '2px' }}>
+                                                        {t.group} • {t.loc}
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <div className="time-loc" style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>({t.group}) | {t.loc}</div>
-                                        </div>
-                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '5px' }}>
-                                            <div className={`stat-badge ${stat.class}`}>
+                                            <div className={`stat-badge ${stat.class}`} style={{ margin: 0, fontSize: '0.75rem', fontWeight: 'bold', padding: '2px 6px', flexShrink: 0 }}>
                                                 {statContent}
                                             </div>
                                         </div>
                                     </div>
-
-                                    {/* Accordion Expansion */}
-                                    {isExpanded && (
-                                        <ExpandedProgress stat={stat} animKey={animKey} isFirstExpand={Date.now() - animKey < 1000} statContent={statContent} c={c} actionLoading={actionLoading} onCancelAutoscan={onCancelAutoscan} onAutoscan={onAutoscan} isLoadingSessions={isLoadingSessions} sessionsForExpanded={sessionsForExpanded} onAction={onAction} onExempt={onExempt} />
-                                    )}
-                                </div>
+                                </React.Fragment>
                             );
                         })}
                     </div>
                 );
             })}
+                </div>
+            </div>
         </div>
     );
 });
 
 export const ActivityList = memo(function ActivityList({ following, organizerDetails, onSelect }) {
     return (
-        <div className="course-grid">
-            {following?.length === 0 && <div style={{gridColumn:'1/-1', textAlign:'center', color:'#555', padding:'20px'}}>NO ACTIVITIES FOLLOWED</div>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px' }}>
+            {following?.length === 0 && <div style={{textAlign:'center', color:'#555', padding:'20px'}}>NO ACTIVITIES FOLLOWED</div>}
 
             {following?.map(oid => {
                 const details = organizerDetails?.[oid];
@@ -336,6 +405,7 @@ export const ActivityList = memo(function ActivityList({ following, organizerDet
                             
                             badge = (
                                 <div className="stat-badge" style={{
+                                    margin: 0,
                                     fontSize:'0.7rem', 
                                     color: color, 
                                     borderColor: color, 
@@ -358,17 +428,30 @@ export const ActivityList = memo(function ActivityList({ following, organizerDet
                 }
 
                 return (
-                    <div key={oid} className="course-card" style={{ borderColor: 'var(--accent)' }} onClick={() => { if(details) onSelect(details); }}>
-                        <div>
-                            <div className="cc-code" style={{ color: 'var(--accent)' }}>
+                    <div key={oid} style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        alignItems: 'center', 
+                        padding: '12px 15px', 
+                        border: '1px solid var(--grid-line)', 
+                        borderRadius: '4px', 
+                        background: 'rgba(255, 255, 255, 0.02)', 
+                        borderLeft: '3px solid var(--accent)',
+                        cursor: 'pointer' 
+                    }} onClick={() => { if(details) onSelect(details); }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, paddingRight: '10px' }}>
+                            <div style={{ color: '#fff', fontSize: '0.9rem', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {details?.name || `Source ${oid}`}
                             </div>
-                            <div className="cc-group" style={{ fontSize: '0.65rem', marginTop: '5px' }}>{meta}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '4px' }}>
+                                {meta}
+                            </div>
                         </div>
-                        <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'space-between' }}>
-                            {badge}
-                            <div className="progress-line" style={{ background: 'var(--accent)', opacity: 0.5 }}></div>
-                        </div>
+                        {badge && (
+                            <div style={{ flexShrink: 0 }}>
+                                {badge}
+                            </div>
+                        )}
                     </div>
                 );
             })}

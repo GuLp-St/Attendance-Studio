@@ -35,36 +35,36 @@ export default function SessionRow({ s, isOrg, onAction, onExempt, parentId, fal
     const nameStyle = isOrg ? { color: 'var(--accent)', fontSize: '0.95rem' } : { color: '#fff', fontSize: '0.95rem' };
 
     return (
-        <div className="session-row">
-            <div className="session-left">
-                <div className="session-text">
-                    <span className="s-date" style={nameStyle}>{headerText}</span>
-                    <span className="s-time" style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '3px' }}>
+        <div className="session-row" style={{ padding: 'clamp(4px, 0.8vh, 12px)', flex: '1 1 auto', minHeight: 0 }}>
+            <div className="session-left" style={{ flex: 1, minWidth: 0 }}>
+                <div className="session-text" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span className="s-date" style={{ ...nameStyle, fontSize: 'clamp(0.7rem, 1.5vh, 0.95rem)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{headerText}</span>
+                    <span className="s-time" style={{ fontSize: 'clamp(0.55rem, 1.1vh, 0.7rem)', color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '4px' }}>
                         {isOrg ? (
-                            <><span style={{ color: '#ccc' }}>{locationStr}</span><span style={{ margin: '0 6px', opacity: 0.3 }}>|</span>{dateStr}<span style={{ margin: '0 6px', opacity: 0.3 }}>|</span>{timeStr}</>
+                            <><span style={{ color: '#ccc' }}>{locationStr}</span><span>{dateStr} • {timeStr}</span></>
                         ) : (
-                            <><span style={{ color: '#ccc' }}>{locationStr}</span><span style={{ margin: '0 6px', opacity: 0.3 }}>|</span>{timeStr}</>
+                            <><span style={{ color: '#ccc' }}>{locationStr}</span><span>{timeStr}</span></>
                         )}
                     </span>
                 </div>
-                <div className="btn-row" style={{ marginTop: '8px' }}>
+                <div className="btn-row" style={{ marginTop: 'clamp(4px, 1vh, 8px)', display: 'flex', gap: '4px' }}>
                     {s.log_id ? (
                         <>
-                            {isOrg && s.can_checkout && (<><button className="btn btn-scan" onClick={() => onAction('act_scan_out', s.id, parentId, true)}>SCAN OUT</button><button className="btn" onClick={() => onAction('act_manual_out', s.id, parentId, true)}>MAN OUT</button></>)}
-                            <button className="btn btn-del" onClick={() => onAction(isOrg ? 'act_delete' : 'delete', s.log_id, parentId, isOrg)}>DELETE</button>
+                            {isOrg && s.can_checkout && (<><button className="btn btn-scan" onClick={() => onAction('act_scan_out', s.id, parentId, true)} style={{ padding: 'clamp(3px, 0.8vh, 6px) clamp(6px, 1.5vh, 12px)', fontSize: 'clamp(0.55rem, 1.1vh, 0.75rem)' }}>SCAN OUT</button><button className="btn" onClick={() => onAction('act_manual_out', s.id, parentId, true)} style={{ padding: 'clamp(3px, 0.8vh, 6px) clamp(6px, 1.5vh, 12px)', fontSize: 'clamp(0.55rem, 1.1vh, 0.75rem)' }}>MAN OUT</button></>)}
+                            <button className="btn btn-del" onClick={() => onAction(isOrg ? 'act_delete' : 'delete', s.log_id, parentId, isOrg)} style={{ padding: 'clamp(3px, 0.8vh, 6px) clamp(6px, 1.5vh, 12px)', fontSize: 'clamp(0.55rem, 1.1vh, 0.75rem)' }}>DELETE</button>
                         </>
                     ) : (
                         <>
-                            {canScan && <button className="btn btn-scan" onClick={() => onAction(isOrg ? 'act_scan_in' : 'scan', s.id, parentId, isOrg)}>SCAN IN</button>}
-                            <button className="btn" onClick={() => onAction(isOrg ? 'act_manual_in' : 'manual', s.id, parentId, isOrg)}>MANUAL IN</button>
-                            {!isOrg && <button className="btn btn-exempt" onClick={() => onExempt(s.id, parentId)}>EXEMPT</button>}
+                            {canScan && <button className="btn btn-scan" onClick={() => onAction(isOrg ? 'act_scan_in' : 'scan', s.id, parentId, isOrg)} style={{ padding: 'clamp(3px, 0.8vh, 6px) clamp(6px, 1.5vh, 12px)', fontSize: 'clamp(0.55rem, 1.1vh, 0.75rem)' }}>SCAN IN</button>}
+                            <button className="btn" onClick={() => onAction(isOrg ? 'act_manual_in' : 'manual', s.id, parentId, isOrg)} style={{ padding: 'clamp(3px, 0.8vh, 6px) clamp(6px, 1.5vh, 12px)', fontSize: 'clamp(0.55rem, 1.1vh, 0.75rem)' }}>MANUAL IN</button>
+                            {!isOrg && <button className="btn btn-exempt" onClick={() => onExempt(s.id, parentId)} style={{ padding: 'clamp(3px, 0.8vh, 6px) clamp(6px, 1.5vh, 12px)', fontSize: 'clamp(0.55rem, 1.1vh, 0.75rem)' }}>EXEMPT</button>}
                         </>
                     )}
                 </div>
             </div>
             <div className="session-right">
                 <div className={`status ${s.status?.includes('Present') || s.status?.includes('Checked') || s.status?.includes('Completed') ? 'st-present' : s.status?.includes('Exempt') ? 'st-exempt' : 'st-absent'}`} 
-                     style={s.status?.includes('Checked') && !s.status?.includes('Completed') ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}}>
+                     style={{ ...(s.status?.includes('Checked') && !s.status?.includes('Completed') ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}), padding: 'clamp(3px, 0.8vh, 6px) clamp(6px, 1.5vh, 10px)', fontSize: 'clamp(0.6rem, 1.2vh, 0.8rem)' }}>
                     {s.status || 'Absent'}
                 </div>
             </div>
