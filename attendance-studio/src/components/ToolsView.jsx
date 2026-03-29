@@ -380,6 +380,11 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                         <div style={{ position: 'relative', width: '100%' }}>
                             <input type="text" className="t-input" placeholder="Course or Student" 
                                 value={searchQuery} onChange={(e) => handleSearch(e.target.value)} 
+                                onFocus={(e) => {
+                                    setTimeout(() => {
+                                        e.target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                    }, 300);
+                                }}
                                 style={{width: '100%', padding: '12px', paddingRight: '40px', paddingLeft: '40px', textAlign: 'center', background: 'rgba(255,255,255,0.05)', color: '#fff'}}/>
                             {searchQuery && (
                                 <span 
@@ -388,12 +393,13 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                                     ✕
                                 </span>
                             )}
-                            {/* Absolute overlay dropdown - does not push content */}
-                            {searchResults.length > 0 && (
+                        </div>
+                        {/* Relative dropdown to allow native browser scrolling */}
+                        {searchResults.length > 0 && (
                                 <div style={{ 
-                                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+                                    position: 'relative', width: '100%', zIndex: 200, marginTop: '5px',
                                     background: '#0a0a0a', border: '1px solid var(--primary)',
-                                    maxHeight: '50vh', overflowY: 'auto', borderRadius: '0 0 4px 4px',
+                                    maxHeight: '50vh', overflowY: 'auto', borderRadius: '4px',
                                     boxShadow: '0 10px 30px rgba(0,0,0,0.9)'
                                 }}>
                                     {searchResults.map(u => (
@@ -406,7 +412,6 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                                     ))}
                                 </div>
                             )}
-                        </div>
                         
                         {/* Registered courses list */}
                         {user?.courses?.length > 0 && (

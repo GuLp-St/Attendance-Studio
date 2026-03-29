@@ -23,16 +23,26 @@ export default function Skeleton({ type = "block" }) {
 
   if (type === "course-card") {
     return (
-      <div className="course-card" style={{ height: '100px', pointerEvents: 'none' }}>
-        <div style={{display:'flex', flexDirection:'column', gap:'5px'}}>
-          <div className="sk-line sk-w50"></div>
-          <div className="sk-line sk-w30"></div>
-        </div>
-        <div style={{marginTop:'auto'}}>
-           <div className="sk-line" style={{width:'20%', height:'10px'}}></div>
-           <div className="progress-line" style={{background:'#333'}}></div>
-        </div>
-        <div className="sk-shimmer"></div>
+      <div className="time-slot" style={{ 
+          border: '1px solid var(--grid-line)', 
+          background: 'rgba(255, 255, 255, 0.02)', 
+          borderLeft: '2px solid var(--grid-line)',
+          padding: '8px 10px', borderRadius: '4px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
+          pointerEvents: 'none', position: 'relative', overflow: 'hidden'
+      }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center', width: '40px' }}>
+                  <div className="sk-line" style={{ width: '100%', height: '10px', margin: 0 }}></div>
+                  <div className="sk-line" style={{ width: '80%', height: '10px', margin: 0 }}></div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1 }}>
+                  <div className="sk-line" style={{ width: '60%', height: '14px', margin: 0 }}></div>
+                  <div className="sk-line" style={{ width: '40%', height: '10px', margin: 0 }}></div>
+              </div>
+          </div>
+          <div className="sk-line" style={{ width: '40px', height: '20px', borderRadius: '4px', margin: 0 }}></div>
+          <div className="sk-shimmer"></div>
       </div>
     );
   }
@@ -104,8 +114,8 @@ export function DashboardSkeleton() {
             <div className="sk-line sk-w20" style={{height:'15px', marginBottom:'15px', marginTop: '10px'}}></div>
 
             {/* Grid */}
-            <div className="timetable-grid" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                {[1,2,3].map(i => (
+            <div className="timetable-grid" style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(4px, 1vh, 10px)', marginTop: '5px', padding: '0 10px 40px 45px' }}>
+                {[1,2,3,4].map(i => (
                     <Skeleton key={i} type="course-card" />
                 ))}
             </div>

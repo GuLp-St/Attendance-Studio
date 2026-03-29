@@ -95,7 +95,13 @@ export default function Search() {
                 type="text" className="search-input" placeholder="SEARCH DATABASE..." 
                 style={{ width: '100%', paddingRight: '40px' }}
                 value={query} onChange={(e) => handleSearch(e.target.value)}
-                onFocus={() => { if(!query) loadRecents(); }} onBlur={handleBlur} disabled={loading} 
+                onFocus={(e) => { 
+                    if(!query) loadRecents(); 
+                    setTimeout(() => {
+                        e.target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 300);
+                }} 
+                onBlur={handleBlur} disabled={loading} 
             />
             {query && (
                 <span 
@@ -107,7 +113,7 @@ export default function Search() {
         </div>
         
         {results.length > 0 && (
-          <div className="results-list" style={{ display: 'block', position: 'absolute', width: '100%', left: 0, top: '100%', zIndex: 20 }}>
+          <div className="results-list" style={{ display: 'block', position: 'relative', width: '100%', left: 0, top: 0, zIndex: 20, marginTop: '10px' }}>
             {results[0].isRecent && <div style={{padding:'10px 15px', fontSize:'0.7rem', color:'var(--accent)', borderBottom:'1px solid var(--grid-line)'}}>RECENT SEARCHES</div>}
             {results.map(u => (
               <div key={u.m} className="result-item" onClick={() => login(u.m, u.n)}>

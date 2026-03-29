@@ -11,6 +11,10 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
     const [actionLoadingGlobal, setActionLoadingGlobal] = useState(false);
     const [localConfig, setLocalConfig] = useState({});
 
+    // Global mode selection state
+    const [globalTrigger, setGlobalTrigger] = useState('crowd');
+    const [globalAuto, setGlobalAuto] = useState('onetime');
+
     const PillSelect = ({ value, options, onChange }) => (
         <div style={{ display: 'flex', gap: '4px', flex: 1 }}>
             {options.map(o => (
@@ -18,7 +22,7 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                     key={o.value}
                     className="btn"
                     style={{
-                        flex: 1, padding: '6px', fontSize: '0.65rem',
+                        flex: 1, padding: '4px', fontSize: '0.6rem',
                         borderColor: value === o.value ? 'var(--primary)' : 'var(--grid-line)',
                         color: value === o.value ? 'var(--primary)' : '#888',
                         background: value === o.value ? 'rgba(0, 243, 255, 0.1)' : 'transparent'
@@ -36,11 +40,13 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
         return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
     };
 
-    // Active Jobs
-    const activeClassJobs = user.courses?.filter(c => c.autoscan_active) || [];
-    const activeOrgJobs = user.following?.map(id => user.organizerDetails?.[id]).filter(o => o?.autoscan_active) || [];
-    const activeAutoRegJobs = (user.auto_register || []);
     const allCourses = user.courses || [];
+    const allOrgs = user.following?.map(id => user.organizerDetails?.[id]).filter(Boolean) || [];
+    
+    // Active Jobs
+    const activeClassJobs = allCourses.filter(c => c.autoscan_active);
+    const activeOrgJobs = allOrgs.filter(o => o.autoscan_active);
+    const activeAutoRegJobs = (user.auto_register || []);
 
     const stopAutoRegister = async (gid, code) => {
         if (!await confirm(`Stop Auto Register for ${code}?`)) return;
@@ -53,12 +59,12 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
         setArLoading(null);
     };
 
-    const activateGlobalAutoscan = async () => {
+    // --- GLOBAL COURSES ---
+    const activateGlobalCourses = async () => {
         const modePayload = `${globalTrigger}_${globalAuto}`;
         if (!await confirm(`Activate ${globalTrigger.toUpperCase()} (${globalAuto.toUpperCase()}) for ALL courses?`)) return;
         setActionLoadingGlobal(true);
         try {
-            // We loop through courses that are not already active
             const inactive = allCourses.filter(c => !c.autoscan_active);
             const requests = inactive.map(c => 
                 api.post('/action', { type: 'autoscan', gid: c.gid, matric: user.matric, mode: modePayload, job_type: 'class' }).catch(() => null)
@@ -67,13 +73,11 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
             const count = results.filter(r => r !== null).length;
             showToast(`Activated for ${count} courses.`, "success");
             if (onGlobalRefresh) onGlobalRefresh(true);
-        } catch (e) {
-            showToast("Error activating global scanner", "error");
-        }
+        } catch (e) { showToast("Error activating global scanner", "error"); }
         setActionLoadingGlobal(false);
     };
 
-    const deactivateGlobalAutoscan = async () => {
+    const deactivateGlobalCourses = async () => {
         if (!await confirm(`Stop Autoscan for ALL courses?`)) return;
         setActionLoadingGlobal(true);
         try {
@@ -85,25 +89,52 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
             const count = results.filter(r => r !== null).length;
             showToast(`Deactivated for ${count} courses.`, "success");
             if (onGlobalRefresh) onGlobalRefresh(false);
-        } catch (e) {
-            showToast("Error deactivating global scanner", "error");
-        }
+        } catch (e) { showToast("Error deactivating global scanner", "error"); }
+        setActionLoadingGlobal(false);
+    };
+
+    // --- GLOBAL ACTIVITIES ---
+    const activateGlobalActivities = async () => {
+        const modePayload = `${globalTrigger}_${globalAuto}`;
+        if (!await confirm(`Activate ${globalTrigger.toUpperCase()} (${globalAuto.toUpperCase()}) for ALL activities?`)) return;
+        setActionLoadingGlobal(true);
+        try {
+            const inactive = allOrgs.filter(o => !o.autoscan_active);
+            const requests = inactive.map(o => 
+                api.post('/action', { type: 'autoscan', gid: o.id, matric: user.matric, mode: modePayload, job_type: 'activity' }).catch(() => null)
+            );
+            const results = await Promise.all(requests);
+            const count = results.filter(r => r !== null).length;
+            showToast(`Activated for ${count} activities.`, "success");
+            if (onGlobalRefresh) onGlobalRefresh(true);
+        } catch (e) { showToast("Error activating global scanner", "error"); }
+        setActionLoadingGlobal(false);
+    };
+
+    const deactivateGlobalActivities = async () => {
+        if (!await confirm(`Stop Autoscan for ALL activities?`)) return;
+        setActionLoadingGlobal(true);
+        try {
+            const active = allOrgs.filter(o => o.autoscan_active);
+            const requests = active.map(o => 
+                api.post('/action', { type: 'cancel_autoscan', gid: o.id, matric: user.matric }).catch(() => null)
+            );
+            const results = await Promise.all(requests);
+            const count = results.filter(r => r !== null).length;
+            showToast(`Deactivated for ${count} activities.`, "success");
+            if (onGlobalRefresh) onGlobalRefresh(false);
+        } catch (e) { showToast("Error deactivating global scanner", "error"); }
         setActionLoadingGlobal(false);
     };
 
     const activateSingleAutoscan = async (gid, mode, isOrg) => {
-        // Find if another is loading globally
         if (actionLoadingGlobal || actionLoading) return;
         if (onAutoscan) onAutoscan(gid, isOrg, mode);
     };
 
-    // Global mode selection state
-    const [globalTrigger, setGlobalTrigger] = useState('crowd');
-    const [globalAuto, setGlobalAuto] = useState('onetime');
-
     const TABS = [
         { id: 'active-jobs', label: 'ACTIVE JOBS' },
-        { id: 'autoscan',    label: 'AUTOSCAN'    },
+        { id: 'auto-jobs',   label: 'AUTO JOBS'   },
         { id: 'history',     label: 'HISTORY'     },
     ];
 
@@ -169,26 +200,27 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                             </div>
                         );
                     })}
-
-                    <div style={{ marginTop: '20px', textAlign: 'center' }}>
-                        <button className="btn" style={{ borderColor: '#0f0', color: '#0f0', padding: '10px 20px', fontSize: '0.8rem', fontWeight: 'bold' }} onClick={goToTools}>
-                            + NEW AUTO REGISTER JOB (COURSE HUB)
-                        </button>
-                    </div>
                 </div>
             )}
 
-            {/* ===== AUTOSCAN TAB ===== */}
-            {tab === 'autoscan' && (
+            {/* ===== AUTO JOBS TAB ===== */}
+            {tab === 'auto-jobs' && (
                 <div>
+                    {/* AUTO REGISTER COURSEHUB REDIRECT */}
+                    <div style={{ marginBottom: '20px' }}>
+                        <button className="btn" style={{ width: '100%', borderColor: '#0f0', color: '#0f0', padding: '12px', fontSize: '0.8rem', fontWeight: 'bold' }} onClick={goToTools}>
+                            + FIND COURSE TO AUTOREGISTER (COURSEHUB)
+                        </button>
+                    </div>
+
+                    {/* GLOBAL CONFIGURATION */}
                     <div style={{ padding: '15px', border: '1px solid var(--grid-line)', borderRadius: '6px', marginBottom: '20px' }}>
-                        <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '10px' }}>GLOBAL AUTOSCAN</div>
-                        <div style={{ fontSize: '0.75rem', color: '#aaa', marginBottom: '15px' }}>Activate autoscan for all registered courses at once.</div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '10px' }}>GLOBAL CONFIGURATION</div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '15px' }}>
                             <PillSelect 
                                 value={globalTrigger} 
                                 onChange={setGlobalTrigger}
-                                options={[{value:'crowd', label:'CROWD'}, {value:'time', label:'LAST MINUTE'}]}
+                                options={[{value:'crowd', label:'CROWD'}, {value:'time', label:'L. MINUTE'}]}
                             />
                             <PillSelect 
                                 value={globalAuto} 
@@ -196,71 +228,136 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                                 options={[{value:'onetime', label:'ONE TIME'}, {value:'permanent', label:'PERMANENT'}]}
                             />
                         </div>
-                        <div style={{ display: 'flex', gap: '10px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                             <button 
-                                className="btn" 
-                                disabled={actionLoadingGlobal}
-                                style={{ flex: 1, borderColor: '#0f0', color: '#0f0', padding: '12px', fontWeight: 'bold', opacity: actionLoadingGlobal ? 0.5 : 1 }}
-                                onClick={activateGlobalAutoscan}
+                                className="btn" disabled={actionLoadingGlobal}
+                                style={{ borderColor: '#0f0', color: '#0f0', padding: '8px 4px', fontSize: '0.65rem', fontWeight: 'bold', opacity: actionLoadingGlobal ? 0.5 : 1 }}
+                                onClick={activateGlobalCourses}
                             >
-                                {actionLoadingGlobal ? 'PROCESSING...' : 'ENABLE FOR ALL'}
+                                START ALL COURSES
                             </button>
                             <button 
-                                className="btn" 
-                                disabled={actionLoadingGlobal}
-                                style={{ flex: 1, borderColor: '#f00', color: '#f00', padding: '12px', fontWeight: 'bold', opacity: actionLoadingGlobal ? 0.5 : 1 }}
-                                onClick={deactivateGlobalAutoscan}
+                                className="btn" disabled={actionLoadingGlobal}
+                                style={{ borderColor: '#0f0', color: '#0f0', padding: '8px 4px', fontSize: '0.65rem', fontWeight: 'bold', opacity: actionLoadingGlobal ? 0.5 : 1 }}
+                                onClick={activateGlobalActivities}
                             >
-                                {actionLoadingGlobal ? 'PROCESSING...' : 'DISABLE FOR ALL'}
+                                START ALL ACTIVITIES
+                            </button>
+                            <button 
+                                className="btn" disabled={actionLoadingGlobal}
+                                style={{ borderColor: '#f00', color: '#f00', padding: '8px 4px', fontSize: '0.65rem', fontWeight: 'bold', opacity: actionLoadingGlobal ? 0.5 : 1 }}
+                                onClick={deactivateGlobalCourses}
+                            >
+                                STOP ALL COURSES
+                            </button>
+                            <button 
+                                className="btn" disabled={actionLoadingGlobal}
+                                style={{ borderColor: '#f00', color: '#f00', padding: '8px 4px', fontSize: '0.65rem', fontWeight: 'bold', opacity: actionLoadingGlobal ? 0.5 : 1 }}
+                                onClick={deactivateGlobalActivities}
+                            >
+                                STOP ALL ACTIVITIES
                             </button>
                         </div>
                     </div>
 
-                    <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginBottom: '10px', fontWeight: 'bold' }}>INDIVIDUAL CONFIGURATION</div>
+                    {/* REGISTERED COURSES LIST */}
+                    <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginBottom: '10px', fontWeight: 'bold' }}>REGISTERED COURSES</div>
                     {allCourses.length === 0 && <div style={{ color: '#555', fontSize: '0.8rem', textAlign: 'center', padding: '20px' }}>No courses registered.</div>}
                     
                     {allCourses.map(c => (
-                        <div key={c.gid} style={{ padding: '12px', border: '1px solid var(--grid-line)', borderRadius: '4px', marginBottom: '10px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                                <div style={{ fontWeight: 'bold' }}>{c.code} {c.group}</div>
-                                <div style={{ fontSize: '0.7rem', color: c.autoscan_active ? '#0f0' : '#888' }}>
-                                    {c.autoscan_active ? 'ACTIVE' : 'INACTIVE'}
-                                </div>
+                        <div key={c.gid} style={{ padding: '10px', border: '1px solid var(--grid-line)', borderRadius: '4px', marginBottom: '8px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: c.autoscan_active ? '0' : '8px' }}>
+                                <div style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{c.code} {c.group}</div>
+                                {c.autoscan_active ? (
+                                    <button 
+                                        className="btn" 
+                                        disabled={actionLoading === `cancel_autoscan_${c.gid}`}
+                                        style={{ borderColor: '#f00', color: '#f00', padding: '4px 10px', fontSize: '0.65rem', opacity: actionLoading === `cancel_autoscan_${c.gid}` ? 0.5 : 1 }} 
+                                        onClick={() => onCancelJob(c.gid, false)}
+                                    >
+                                        STOP
+                                    </button>
+                                ) : (
+                                    <span style={{ fontSize: '0.65rem', color: '#888' }}>INACTIVE</span>
+                                )}
                             </div>
                             
                             {!c.autoscan_active && (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                        <PillSelect 
-                                            value={localConfig[c.gid]?.trigger || 'crowd'} 
-                                            onChange={(v) => setLocalConfig({...localConfig, [c.gid]: {...(localConfig[c.gid]||{}), trigger: v}})}
-                                            options={[{value:'crowd', label:'CROWD'}, {value:'time', label:'L. MINUTE'}]}
-                                        />
-                                        <PillSelect 
-                                            value={localConfig[c.gid]?.auto || 'onetime'} 
-                                            onChange={(v) => setLocalConfig({...localConfig, [c.gid]: {...(localConfig[c.gid]||{}), auto: v}})}
-                                            options={[{value:'onetime', label:'ONE TIME'}, {value:'permanent', label:'PERMANENT'}]}
-                                        />
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch' }}>
+                                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <div style={{ display: 'flex', gap: '4px', height: '100%' }}>
+                                            <PillSelect 
+                                                value={localConfig[c.gid]?.trigger || 'crowd'} 
+                                                onChange={(v) => setLocalConfig({...localConfig, [c.gid]: {...(localConfig[c.gid]||{}), trigger: v}})}
+                                                options={[{value:'crowd', label:'CROWD'}, {value:'time', label:'L. MINUTE'}]}
+                                            />
+                                            <PillSelect 
+                                                value={localConfig[c.gid]?.auto || 'onetime'} 
+                                                onChange={(v) => setLocalConfig({...localConfig, [c.gid]: {...(localConfig[c.gid]||{}), auto: v}})}
+                                                options={[{value:'onetime', label:'ONE TIME'}, {value:'permanent', label:'PERMANENT'}]}
+                                            />
+                                        </div>
                                     </div>
                                     <button 
                                         className="btn" 
                                         disabled={actionLoading === `autoscan_${c.gid}`}
-                                        style={{ width: '100%', borderColor: 'var(--accent)', color: 'var(--accent)', padding: '8px', marginTop: '4px', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
+                                        style={{ borderColor: 'var(--accent)', color: 'var(--accent)', padding: '0 12px', fontSize: '0.65rem', display: 'flex', alignItems: 'center', opacity: actionLoading === `autoscan_${c.gid}` ? 0.5 : 1 }} 
                                         onClick={() => activateSingleAutoscan(c.gid, `${localConfig[c.gid]?.trigger || 'crowd'}_${localConfig[c.gid]?.auto || 'onetime'}`, false)}
                                     >
-                                        {actionLoading === `autoscan_${c.gid}` ? '[ PROCESSING... ]' : 'ACTIVATE AUTOSCAN'}
+                                        START
                                     </button>
                                 </div>
                             )}
-                            {c.autoscan_active && (
-                                <button 
-                                    className="btn" 
-                                    disabled={actionLoading === `cancel_autoscan_${c.gid}`}
-                                    style={{ width: '100%', borderColor: '#f00', color: '#f00', padding: '8px', opacity: actionLoading === `cancel_autoscan_${c.gid}` ? 0.5 : 1 }} 
-                                    onClick={() => onCancelJob(c.gid, false)}
-                                >
-                                    {actionLoading === `cancel_autoscan_${c.gid}` ? '[ PROCESSING... ]' : 'DEACTIVATE AUTOSCAN'}
-                                </button>
+                        </div>
+                    ))}
+
+                    {/* FOLLOWED ACTIVITIES LIST */}
+                    <div style={{ fontSize: '0.75rem', color: 'var(--accent)', marginTop: '20px', marginBottom: '10px', fontWeight: 'bold' }}>FOLLOWED ACTIVITIES</div>
+                    {allOrgs.length === 0 && <div style={{ color: '#555', fontSize: '0.8rem', textAlign: 'center', padding: '20px' }}>No followed activities.</div>}
+                    
+                    {allOrgs.map(o => (
+                        <div key={o.id} style={{ padding: '10px', border: '1px solid var(--grid-line)', borderRadius: '4px', marginBottom: '8px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: o.autoscan_active ? '0' : '8px' }}>
+                                <div style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{o.name}</div>
+                                {o.autoscan_active ? (
+                                    <button 
+                                        className="btn" 
+                                        disabled={actionLoading === `cancel_autoscan_${o.id}`}
+                                        style={{ borderColor: '#f00', color: '#f00', padding: '4px 10px', fontSize: '0.65rem', opacity: actionLoading === `cancel_autoscan_${o.id}` ? 0.5 : 1 }} 
+                                        onClick={() => onCancelJob(o.id, true)}
+                                    >
+                                        STOP
+                                    </button>
+                                ) : (
+                                    <span style={{ fontSize: '0.65rem', color: '#888' }}>INACTIVE</span>
+                                )}
+                            </div>
+                            
+                            {!o.autoscan_active && (
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch' }}>
+                                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <div style={{ display: 'flex', gap: '4px', height: '100%' }}>
+                                            <PillSelect 
+                                                value={localConfig[o.id]?.trigger || 'crowd'} 
+                                                onChange={(v) => setLocalConfig({...localConfig, [o.id]: {...(localConfig[o.id]||{}), trigger: v}})}
+                                                options={[{value:'crowd', label:'CROWD'}, {value:'time', label:'L. MINUTE'}]}
+                                            />
+                                            <PillSelect 
+                                                value={localConfig[o.id]?.auto || 'onetime'} 
+                                                onChange={(v) => setLocalConfig({...localConfig, [o.id]: {...(localConfig[o.id]||{}), auto: v}})}
+                                                options={[{value:'onetime', label:'ONE TIME'}, {value:'permanent', label:'PERMANENT'}]}
+                                            />
+                                        </div>
+                                    </div>
+                                    <button 
+                                        className="btn" 
+                                        disabled={actionLoading === `autoscan_${o.id}`}
+                                        style={{ borderColor: 'var(--accent)', color: 'var(--accent)', padding: '0 12px', fontSize: '0.65rem', display: 'flex', alignItems: 'center', opacity: actionLoading === `autoscan_${o.id}` ? 0.5 : 1 }} 
+                                        onClick={() => activateSingleAutoscan(o.id, `${localConfig[o.id]?.trigger || 'crowd'}_${localConfig[o.id]?.auto || 'onetime'}`, true)}
+                                    >
+                                        START
+                                    </button>
+                                </div>
                             )}
                         </div>
                     ))}

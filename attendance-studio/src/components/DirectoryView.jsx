@@ -368,7 +368,7 @@ export default function DirectoryView({ user }) {
             <div style={{ flexShrink: 0, paddingBottom: '8px' }}>
 
                 {/* Search */}
-                <input type="text" className="t-input" placeholder="Search by Name or Matric..."
+                <input type="text" className="t-input" placeholder="Search by Name or Matric"
                     value={searchQuery}
                     onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
                     style={{ width: '100%', textAlign: 'center', padding: '10px', marginBottom: '8px', boxSizing: 'border-box' }} />

@@ -50,6 +50,11 @@ export default function OrgSearchView({ onPreview }) {
                     style={{ width: '100%', textAlign: 'center', padding: '12px', paddingRight: '40px', paddingLeft: '40px', background: 'rgba(255,255,255,0.05)', color: '#fff' }}
                     value={query}
                     onChange={(e) => handleSearch(e.target.value)}
+                    onFocus={(e) => {
+                        setTimeout(() => {
+                            e.target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }, 300);
+                    }}
                 />
                 {query && (
                     <span 
@@ -59,13 +64,14 @@ export default function OrgSearchView({ onPreview }) {
                         ✕
                     </span>
                 )}
-                {/* Overlapping dropdown - absolute so it doesn't push content */}
-                {results.length > 0 && (
+            </div>
+            {/* Relative dropdown to allow native browser scrolling */}
+            {results.length > 0 && (
                     <div className="results-list" style={{ 
-                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+                        position: 'relative', width: '100%', zIndex: 100,
                         maxHeight: '300px', overflowY: 'auto',
                         border: '1px solid var(--grid-line)', borderRadius: '4px',
-                        background: 'var(--bg, #0a0a0a)', marginTop: '2px'
+                        background: 'var(--bg, #0a0a0a)', marginTop: '5px'
                     }}>
                         {results.map(u => (
                             <div key={u.m} className="result-item" onClick={() => handleSelect(u)}>
@@ -84,7 +90,6 @@ export default function OrgSearchView({ onPreview }) {
                         )}
                     </div>
                 )}
-            </div>
         </div>
     );
 }
