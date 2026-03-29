@@ -41,7 +41,7 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
 
     useEffect(() => { 
         if (user?.courses) setLocalUserGroups(user.courses.map(c => String(c.gid))); 
-        if (user?.auto_register) setLocalAutoReg(user.auto_register.map(gi => String(gi)));
+        if (user?.auto_register) setLocalAutoReg(user.auto_register.map(gi => typeof gi === 'object' ? String(gi.gid) : String(gi)));
     }, [user]);
 
     useEffect(() => { getDirectory().then(setDirectory).catch(()=>{}); }, []);
@@ -352,7 +352,12 @@ export default function ToolsView({ user, isVisible, onDeepNavChange, onUpdateAu
                 const res = await api.post('/action', { type: 'start_auto_register', matric: user.matric, gid: activeGroup.id });
                 showToast(res.msg || "Auto Register Activated", "success");
                 setLocalAutoReg(prev => [...prev, String(activeGroup.id)]);
-                if (onUpdateAutoReg) onUpdateAutoReg(activeGroup.id, true);
+                if (onUpdateAutoReg) onUpdateAutoReg(activeGroup.id, true, {
+                    gid: String(activeGroup.id),
+                    code: activeGroup.code || 'CODE',
+                    name: activeGroup.name || '',
+                    group: activeGroup.course_group || activeGroup.group || ''
+                });
             }
         } catch(e) { showToast("Error connecting", "error"); }
         setActionLoading(false);

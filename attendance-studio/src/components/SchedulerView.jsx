@@ -3,10 +3,68 @@ import { api } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 
+const SwipeableNotification = ({ n, formatMode, fmtDate, onDismiss }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [startX, setStartX] = useState(null);
+    const [offsetX, setOffsetX] = useState(0);
+
+    const handleTouchStart = (e) => setStartX(e.touches[0].clientX);
+    const handleTouchMove = (e) => {
+        if (startX !== null) {
+            const diff = e.touches[0].clientX - startX;
+            if (diff > 0) setOffsetX(diff);
+        }
+    };
+    const handleTouchEnd = () => {
+        if (offsetX > 100) {
+            onDismiss(n.id);
+        } else {
+            setOffsetX(0);
+        }
+        setStartX(null);
+    };
+
+    return (
+        <div 
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onClick={() => setIsExpanded(!isExpanded)}
+            className={`notif-card ${n.status === 'SUCCESS' ? 'notif-success' : 'notif-fail'}`} 
+            style={{ 
+                marginBottom: '10px', 
+                cursor: 'pointer',
+                transform: `translateX(${offsetX}px)`,
+                opacity: Math.max(0, 1 - (offsetX / 200)),
+                transition: startX !== null ? 'none' : 'transform 0.3s ease, opacity 0.3s ease',
+                position: 'relative'
+            }}
+        >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontWeight: 'bold', color: '#fff', flex: 1, paddingRight: '10px' }}>{n.title}</div>
+                <div style={{ textAlign: 'right' }}>
+                    <div style={{ color: n.status === 'SUCCESS' ? '#0f0' : '#f00', fontSize: '0.8rem', fontWeight: 'bold' }}>{n.status}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--primary)', fontWeight: 'bold', marginTop: '2px' }}>{n.mode ? formatMode(n.mode) : 'AUTO'}</div>
+                </div>
+            </div>
+            
+            {isExpanded && (
+                <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#ccc', marginBottom: '8px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: '1.4' }}>{n.details}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#888' }}>{n.type?.toUpperCase()}</div>
+                        <div style={{ fontSize: '0.7rem', color: '#888' }}>{fmtDate(n.timestamp)}</div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 export default function SchedulerView({ user, notifications, onDismissNotif, onClearAllNotifs, onCancelJob, onCancelAutoReg, goToTools, actionLoading, onAutoscan, onGlobalRefresh }) {
     const { showToast } = useToast();
     const { confirm } = useConfirm();
-    const [tab, setTab] = useState('active-jobs');
+    const [tab, setTab] = useState('auto-jobs');
     const [arLoading, setArLoading] = useState(null);
     const [actionLoadingGlobal, setActionLoadingGlobal] = useState(false);
     const [localConfig, setLocalConfig] = useState({});
@@ -175,7 +233,6 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
     };
 
     const TABS = [
-        { id: 'active-jobs', label: 'ACTIVE JOBS' },
         { id: 'auto-jobs',   label: 'AUTO JOBS'   },
         { id: 'history',     label: 'NOTIFICATIONS' },
     ];
@@ -185,64 +242,6 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
     const canStopAllCourses = allCourses.some(c => c.autoscan_active);
     const canStartAllActivities = allOrgs.some(o => !o.autoscan_active);
     const canStopAllActivities = allOrgs.some(o => o.autoscan_active);
-
-    const SwipeableNotification = ({ n, formatMode, fmtDate, onDismiss }) => {
-        const [isExpanded, setIsExpanded] = useState(false);
-        const [startX, setStartX] = useState(null);
-        const [offsetX, setOffsetX] = useState(0);
-
-        const handleTouchStart = (e) => setStartX(e.touches[0].clientX);
-        const handleTouchMove = (e) => {
-            if (startX !== null) {
-                const diff = e.touches[0].clientX - startX;
-                if (diff > 0) setOffsetX(diff);
-            }
-        };
-        const handleTouchEnd = () => {
-            if (offsetX > 100) {
-                onDismiss(n.id);
-            } else {
-                setOffsetX(0);
-            }
-            setStartX(null);
-        };
-
-        return (
-            <div 
-                onTouchStart={handleTouchStart}
-                onTouchMove={handleTouchMove}
-                onTouchEnd={handleTouchEnd}
-                onClick={() => setIsExpanded(!isExpanded)}
-                className={`notif-card ${n.status === 'SUCCESS' ? 'notif-success' : 'notif-fail'}`} 
-                style={{ 
-                    marginBottom: '10px', 
-                    cursor: 'pointer',
-                    transform: `translateX(${offsetX}px)`,
-                    opacity: Math.max(0, 1 - (offsetX / 200)),
-                    transition: startX !== null ? 'none' : 'transform 0.3s ease, opacity 0.3s ease',
-                    position: 'relative'
-                }}
-            >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ fontWeight: 'bold', color: '#fff', flex: 1, paddingRight: '10px' }}>{n.title}</div>
-                    <div style={{ textAlign: 'right' }}>
-                        <div style={{ color: n.status === 'SUCCESS' ? '#0f0' : '#f00', fontSize: '0.8rem', fontWeight: 'bold' }}>{n.status}</div>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--primary)', fontWeight: 'bold', marginTop: '2px' }}>{n.mode ? formatMode(n.mode) : 'AUTO'}</div>
-                    </div>
-                </div>
-                
-                {isExpanded && (
-                    <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ fontSize: '0.8rem', color: '#ccc', marginBottom: '8px' }}>{n.details}</div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                            <div style={{ fontSize: '0.7rem', color: '#888' }}>{n.type?.toUpperCase()}</div>
-                            <div style={{ fontSize: '0.7rem', color: '#888' }}>{fmtDate(n.timestamp)}</div>
-                        </div>
-                    </div>
-                )}
-            </div>
-        );
-    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: '20px' }}>
@@ -275,40 +274,14 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                 ))}
             </div>
 
-            {/* ===== ACTIVE JOBS TAB ===== */}
-            {tab === 'active-jobs' && (
+            {/* ===== AUTO JOBS TAB ===== */}
+            {tab === 'auto-jobs' && (
                 <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginBottom: '10px', fontWeight: 'bold' }}>ACTIVE JOBS</div>
-                    {activeClassJobs.length === 0 && activeOrgJobs.length === 0 && activeAutoRegJobs.length === 0 && (
-                        <div style={{ textAlign: 'center', color: '#555', fontSize: '0.75rem', padding: '20px', border: '1px dashed #333' }}>NO ACTIVE JOBS</div>
-                    )}
-                    {activeClassJobs.map(c => (
-                        <div key={c.gid} style={{ padding: '12px', border: '1px solid var(--grid-line)', borderRadius: '4px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                                <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--primary)' }}>{c.code} {c.name || c.group}</div>
-                                <div style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '4px', fontWeight: 'bold', letterSpacing: '0.5px' }}>{formatMode(c.autoscan_mode)}</div>
-                            </div>
-                            <button className="btn" disabled={actionLoading === `cancel_autoscan_${c.gid}`} style={{ borderColor: '#f00', color: '#f00', fontSize: '0.7rem', padding: '6px 12px', opacity: actionLoading === `cancel_autoscan_${c.gid}` ? 0.5 : 1 }} onClick={() => onCancelJob(c.gid, false)}>
-                                {actionLoading === `cancel_autoscan_${c.gid}` ? '...' : 'STOP'}
-                            </button>
-                        </div>
-                    ))}
-                    {activeOrgJobs.map(o => (
-                        <div key={o.id} style={{ padding: '12px', border: '1px solid var(--grid-line)', borderRadius: '4px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                                <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--accent)' }}>{o.name}</div>
-                                <div style={{ fontSize: '0.65rem', color: 'var(--accent)', marginTop: '4px', fontWeight: 'bold', letterSpacing: '0.5px' }}>{formatMode(o.autoscan_mode)}</div>
-                            </div>
-                            <button className="btn" disabled={actionLoading === `cancel_autoscan_${o.id}`} style={{ borderColor: '#f00', color: '#f00', fontSize: '0.7rem', padding: '6px 12px', opacity: actionLoading === `cancel_autoscan_${o.id}` ? 0.5 : 1 }} onClick={() => onCancelJob(o.id, true)}>
-                                {actionLoading === `cancel_autoscan_${o.id}` ? '...' : 'STOP'}
-                            </button>
-                        </div>
-                    ))}
+                    {/* ACTIVE AUTO REGISTER JOBS */}
                     {activeAutoRegJobs.map(job => {
-                        // Backend now sends: { gid, code, name, group }
                         const gid = typeof job === 'object' ? job.gid : job;
                         const courseCode = typeof job === 'object' ? job.code : 'GID';
-                        const courseName = typeof job === 'object' ? (job.name || job.group) : str(gid);
+                        const courseName = typeof job === 'object' ? (job.name || job.group) : String(gid);
 
                         return (
                             <div key={gid} style={{ padding: '12px', marginBottom: '8px', borderRadius: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid var(--grid-line)' }}>
@@ -322,12 +295,7 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                             </div>
                         );
                     })}
-                </div>
-            )}
 
-            {/* ===== AUTO JOBS TAB ===== */}
-            {tab === 'auto-jobs' && (
-                <div>
                     {/* AUTO REGISTER COURSEHUB REDIRECT */}
                     <div style={{ marginBottom: '20px' }}>
                         <button className="btn" style={{ width: '100%', borderColor: '#0f0', color: '#0f0', padding: '12px', fontSize: '0.8rem', fontWeight: 'bold' }} onClick={goToTools}>

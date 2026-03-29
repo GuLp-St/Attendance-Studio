@@ -450,14 +450,18 @@ export default function Dashboard() {
       closeCurrentLevel();
   };
 
-  const handleUpdateAutoReg = (gid, isActive) => {
+  const handleUpdateAutoReg = (gid, isActive, fullObj = null) => {
       setUser(prev => {
           if (!prev) return null;
           let newAr = prev.auto_register || [];
           if (isActive) {
-              if (!newAr.includes(String(gid))) newAr = [...newAr, String(gid)];
+              const exists = newAr.some(item => (typeof item === 'object' ? String(item.gid) === String(gid) : String(item) === String(gid)));
+              if (!exists) newAr = [...newAr, fullObj || String(gid)];
           } else {
-              newAr = newAr.filter(id => String(id) !== String(gid));
+              newAr = newAr.filter(item => {
+                  const itemGid = typeof item === 'object' ? item.gid : item;
+                  return String(itemGid) !== String(gid);
+              });
           }
           return { ...prev, auto_register: newAr };
       });
@@ -493,17 +497,17 @@ export default function Dashboard() {
         </button>
         <button 
             className="btn" 
-            style={activeTab === 'scheduler' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: '#f0f', color: '#f0f', background: 'rgba(255,0,255,0.1)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
-            onClick={() => setActiveTab('scheduler')}
-        >
-            SCHEDULER
-        </button>
-        <button 
-            className="btn" 
             style={activeTab === 'tools' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: '#0f0', color: '#0f0', background: 'rgba(0,255,0,0.1)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
             onClick={() => setActiveTab('tools')}
         >
             COURSEHUB
+        </button>
+        <button 
+            className="btn" 
+            style={activeTab === 'scheduler' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: '#f0f', color: '#f0f', background: 'rgba(255,0,255,0.1)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
+            onClick={() => setActiveTab('scheduler')}
+        >
+            SCHEDULER
         </button>
         <button 
             className="btn" 

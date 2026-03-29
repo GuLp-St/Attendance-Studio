@@ -1390,8 +1390,9 @@ def api_handler(path):
             if not data: return jsonify({"error": "Not Found"}), 404
             if matric:
                 # Fixed: autoscan_jobs has no 'id' column. Use composite key.
-                job_doc = pg_db.query_one("SELECT status FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, oid))
+                job_doc = pg_db.query_one("SELECT status, mode FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, oid))
                 data['autoscan_active'] = (job_doc and job_doc['status'] == 'pending')
+                data['autoscan_mode'] = job_doc['mode'] if job_doc else None
                 with ThreadPoolExecutor(max_workers=10) as ex:
                     f_map = {ex.submit(core_api.get_activity_log, evt['id'], matric, req_session): evt for evt in data.get('activities', [])}
                     for f in as_completed(f_map):
