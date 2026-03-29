@@ -24,7 +24,9 @@ export default function ActivityView({ org, onClose, onAction, onAutoscan, onCan
                         <button className="btn" disabled={actionLoading === `cancel_autoscan_${org.id}`} style={{ width: '100%', borderColor: '#f00', color: '#f00', fontWeight: 'bold', opacity: actionLoading === `cancel_autoscan_${org.id}` ? 0.5 : 1 }} onClick={() => onCancelAutoscan(org.id, true)}>
                             {actionLoading === `cancel_autoscan_${org.id}` ? '[ PROCESSING... ]' : '[ DEACTIVATE AUTOSCAN ]'}
                         </button>
-                        <div style={{ color: '#f00', fontSize: '0.7rem', marginTop: '5px' }}>SCANNER ACTIVE (NEXT EVENT)</div>
+                        <div style={{ color: '#f00', fontSize: '0.65rem', marginTop: '5px', fontWeight: 'bold' }}>
+                            {org.autoscan_mode ? org.autoscan_mode.toUpperCase().replace('_', ' • ').replace('_', ' • ').replace('TIME', 'L. MINUTE') : 'SCANNER ACTIVE'}
+                        </div>
                     </div>
                 ) : (
                     <div style={{ textAlign: 'center' }}>

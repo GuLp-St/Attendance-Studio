@@ -215,6 +215,16 @@ export default function AdminPanel() {
     try { await api.post('/admin_dashboard', { key, type: 'delete_device_logs', target_id: id }); loadData(); showToast('Cleared', 'success'); } catch (e) {}
   };
 
+  const formatMode = (m) => {
+    if (!m) return "";
+    return m.toUpperCase()
+      .replace('TIME_', 'L. MINUTE • ')
+      .replace('CROWD_', 'CROWD • ')
+      .replace('_ONETIME', ' • ONE TIME')
+      .replace('_PERMANENT', ' • PERMANENT')
+      .replace(' •  • ', ' • ');
+  };
+
   const handleIpAction = async (ip, action) => {
     if (!await confirm(`${action.toUpperCase()} IP: ${ip}?`)) return;
     try { await api.post('/admin_dashboard', { key, type: 'ban_ip', ip, action }); loadData(); showToast(`IP ${action}ned`, 'success'); } catch (e) {}
@@ -529,15 +539,28 @@ export default function AdminPanel() {
             {(!data?.jobs || data.jobs.length === 0) && <div style={{ padding: '10px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No Active Auto-Jobs</div>}
             {data?.jobs?.map(job => {
               const isReg = job.type === 'register';
-              const title = isReg
-                ? `AUTO-REGISTER — ${job.code || job.gid || 'Course'} ${job.group_id || ''}`
-                : `AUTOSCAN — ${job.target || job.code || job.gid || 'Class/Activity'}`;
+              const isActivity = job.job_type === 'activity' || (!isReg && !job.code && (job.target || String(job.gid).length > 6));
+              const isClass = job.job_type === 'class' || (!isReg && !isActivity);
+              const jobLabel = isReg ? 'REG' : isActivity ? 'ACTIVITY' : 'CLASS';
+              const jobColor = isReg ? '#f0f' : isActivity ? 'var(--accent)' : 'var(--primary)';
+              const jobName = isReg 
+                ? `${job.code || job.gid || 'Course'} ${job.group_id || ''}`
+                : `${job.target || job.code || job.gid || (isActivity ? 'Activity' : 'Class')}`;
+              
               const userDesc = job.matric || '';
               return (
                 <div key={job.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px', borderBottom: '1px solid #333', alignItems: 'center' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                    <span style={{ color: isReg ? '#f0f' : 'var(--accent)', fontWeight: 'bold', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
-                    <span style={{ fontSize: '0.68rem', color: '#888' }}>User: {userDesc}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ color: jobColor, fontWeight: 'bold', fontSize: '0.65rem', padding: '1px 4px', border: `1px solid ${jobColor}`, borderRadius: '3px', letterSpacing: '0.5px' }}>{jobLabel}</span>
+                      <span style={{ color: '#eee', fontWeight: 'bold', fontSize: '0.8rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{jobName}</span>
+                      {job.mode && (
+                        <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.05)', color: '#888', fontWeight: 'bold' }}>
+                          {formatMode(job.mode)}
+                        </span>
+                      )}
+                    </div>
+                    <span style={{ fontSize: '0.68rem', color: '#666', marginTop: '2px' }}>User: {userDesc}</span>
                   </div>
                   <button className="btn" style={{ color: '#f00', padding: '4px 10px', height: '28px', minWidth: 'auto', borderColor: '#f00', marginLeft: '8px', flexShrink: 0 }} onClick={() => handleJobAction('delete_single_job', job.id)}>DEL</button>
                 </div>

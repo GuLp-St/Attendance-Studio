@@ -455,16 +455,21 @@ def api_handler(path):
             group_ids = user_data.get('groups') or []
             following_ids = user_data.get('following') or []
 
-            active_autoscan = set()
+            active_autoscan = {}
             try:
-                for j in pg_db.query("SELECT gid FROM autoscan_jobs WHERE matric = %s AND status = 'pending'", (matric,)):
-                    active_autoscan.add(j['gid'])
+                for j in pg_db.query("SELECT gid, mode FROM autoscan_jobs WHERE matric = %s AND status = 'pending'", (matric,)):
+                    active_autoscan[j['gid']] = j.get('mode', 'crowd')
             except: pass
 
             active_auto_register = []
             try:
-                for j in pg_db.query("SELECT gid FROM auto_register_jobs WHERE matric = %s", (matric,)):
-                    active_auto_register.append(str(j['gid']))
+                for j in pg_db.query("SELECT a.gid, c.code, c.name, c.course_group FROM auto_register_jobs a JOIN courses c ON a.gid = c.id WHERE a.matric = %s", (matric,)):
+                    active_auto_register.append({
+                        "gid": str(j['gid']),
+                        "code": j.get('code', 'Unknown'),
+                        "name": j.get('name', ''),
+                        "group": j.get('course_group', '')
+                    })
             except: pass
 
             courses = {}
@@ -481,6 +486,7 @@ def api_handler(path):
                     gid, info, slots = f.result()
                     if info:
                         info['autoscan_active'] = (gid in active_autoscan)
+                        info['autoscan_mode'] = active_autoscan.get(gid)
                         info['gid'] = gid
                         info['sessions'] = None
                         courses[gid] = info

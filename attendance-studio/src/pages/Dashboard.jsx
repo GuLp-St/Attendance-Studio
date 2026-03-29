@@ -144,6 +144,37 @@ export default function Dashboard() {
   useEffect(() => {
     if (!user) return;
 
+    // --- PERSISTENCE: Restore modes from localStorage ---
+    if (!user._modesRestored) {
+        try {
+            const cachedModes = JSON.parse(localStorage.getItem(`atd_modes_${user.matric}`) || '{}');
+            setUser(prev => {
+                if (!prev) return null;
+                const next = { ...prev, _modesRestored: true };
+                next.courses = next.courses.map(c => ({
+                    ...c,
+                    autoscan_mode: c.autoscan_mode || cachedModes[c.gid] || null
+                }));
+                const newOrgs = { ...next.organizerDetails };
+                Object.keys(newOrgs || {}).forEach(oid => {
+                   newOrgs[oid] = {
+                       ...newOrgs[oid],
+                       autoscan_mode: newOrgs[oid].autoscan_mode || cachedModes[oid] || null
+                   };
+                });
+                return { ...next, organizerDetails: newOrgs };
+            });
+        } catch (e) {}
+    }
+
+    // Save modes whenever state changes
+    const modes = {};
+    user.courses?.forEach(c => { if(c.autoscan_mode) modes[c.gid] = c.autoscan_mode; });
+    Object.keys(user.organizerDetails || {}).forEach(oid => {
+        if(user.organizerDetails[oid].autoscan_mode) modes[oid] = user.organizerDetails[oid].autoscan_mode;
+    });
+    localStorage.setItem(`atd_modes_${user.matric}`, JSON.stringify(modes));
+
     // A. Fetch Sessions for each course if not already present
     let fetches = [];
     user.courses.forEach((c) => {
@@ -371,12 +402,12 @@ export default function Dashboard() {
           showToast(`Activated (${mode})`, "success");
           
           if (isOrg) {
-              const u = { ...user.organizerDetails[id], autoscan_active: true };
+              const u = { ...user.organizerDetails[id], autoscan_active: true, autoscan_mode: mode };
               setUser(prev => prev ? { ...prev, organizerDetails: { ...prev.organizerDetails, [id]: u } } : null);
               if (selectedOrg?.id === id) setSelectedOrg(u);
           } else {
-              setUser(prev => prev ? { ...prev, courses: prev.courses.map(c => c.gid === id ? { ...c, autoscan_active: true } : c) } : null);
-              if (selectedCourse?.gid === id) setSelectedCourse(prev => ({ ...prev, autoscan_active: true }));
+              setUser(prev => prev ? { ...prev, courses: prev.courses.map(c => c.gid === id ? { ...c, autoscan_active: true, autoscan_mode: mode } : c) } : null);
+              if (selectedCourse?.gid === id) setSelectedCourse(prev => ({ ...prev, autoscan_active: true, autoscan_mode: mode }));
           }
       } catch (e) { showToast(e.message, 'error'); }
       finally { setActionLoading(null); }
@@ -399,6 +430,14 @@ export default function Dashboard() {
           }
       } catch (e) { showToast(e.message, 'error'); }
       finally { setActionLoading(null); }
+  };
+
+  const clearAllNotifications = async () => {
+      try {
+          await api.post('/action', { type: 'clear_all_notifications', matric: user.matric });
+          setNotifications([]);
+          showToast("Notifications cleared", "success");
+      } catch (e) { showToast(e.message, "error"); }
   };
 
   const openExemptPrompt = (sid, gid) => { 
@@ -595,21 +634,33 @@ export default function Dashboard() {
               user={user} 
               notifications={notifications} 
               onDismissNotif={dismissNotification} 
+              onClearAllNotifs={clearAllNotifications}
               onCancelJob={cancelAutoscan}
               onCancelAutoReg={(gid) => handleUpdateAutoReg(gid, false)}
               goToTools={() => setActiveTab('tools')}
               actionLoading={actionLoading}
               onAutoscan={autoscanDirect}
-              onGlobalRefresh={(activeData) => {
+              onGlobalRefresh={(isCourse, activeData, mode) => {
                   setUser(prev => {
                       if (!prev) return null;
-                      return {
-                          ...prev,
-                          courses: prev.courses.map(c => ({
+                      if (isCourse) {
+                          const nextCourses = prev.courses.map(c => ({
                               ...c,
                               autoscan_active: activeData,
-                          }))
-                      };
+                              autoscan_mode: activeData ? mode : (activeData === false ? null : c.autoscan_mode),
+                          }));
+                          return { ...prev, courses: nextCourses };
+                      } else {
+                          const newDetails = { ...prev.organizerDetails };
+                          Object.keys(newDetails).forEach(id => {
+                              newDetails[id] = { 
+                                  ...newDetails[id], 
+                                  autoscan_active: activeData,
+                                  autoscan_mode: activeData ? mode : (activeData === false ? null : newDetails[id].autoscan_mode),
+                              };
+                          });
+                          return { ...prev, organizerDetails: newDetails };
+                      }
                   });
               }}
           />
