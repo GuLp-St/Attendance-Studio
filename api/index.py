@@ -1980,55 +1980,20 @@ def api_handler(path):
         """Receives Telegram Bot API updates."""
         try:
             update = request.get_json() or {}
-            msg = update.get('message') or update.get('callback_query', {}).get('message')
             cb = update.get('callback_query')
-
-            if msg:
-                chat_id = str(msg.get('chat', {}).get('id', ''))
-                text = msg.get('text', '').strip()
-                from_user = msg.get('from', {})
-
-                if text.startswith('/start'):
-                    parts = text.split(' ', 1)
-                    if len(parts) > 1:
-                        matric = parts[1].strip()
-                        ensure_telegram_tables()
-                        row = pg_db.query_one("SELECT matric FROM telegram_settings WHERE matric = %s", (matric,))
-                        if row:
-                            pg_db.execute("UPDATE telegram_settings SET chat_id = %s WHERE matric = %s", (chat_id, matric))
-                            stud = pg_db.query_one("SELECT name FROM students WHERE matric = %s", (matric,))
-                            name = stud['name'] if stud else matric
-                            send_telegram_message(chat_id,
-                                f"✅ <b>Linked!</b>\nYour Attendance Studio account (<code>{matric}</code>) is now connected, <b>{name}</b>!\n\n"
-                                f"Commands:\n/timetable — View your schedule\n/stop — Disconnect notifications")
-                        else:
-                            send_telegram_message(chat_id, "❌ Matric not found. Please enable Telegram in Attendance Studio first.")
-                    else:
-                        send_telegram_message(chat_id, "👋 Welcome to Attendance Studio Bot!\nOpen the app to link your account.")
-
-                elif text == '/timetable':
-                    send_telegram_timetable(chat_id)
-
-                elif text == '/config':
-                    send_telegram_config(chat_id)
-
-                elif text == '/stop':
-                    ensure_telegram_tables()
-                    pg_db.execute("UPDATE telegram_settings SET enabled = FALSE, chat_id = NULL WHERE chat_id = %s", (chat_id,))
-                    send_telegram_message(chat_id, "🔕 Telegram notifications disabled. You can re-enable from Attendance Studio.")
-
-            elif cb:
-                # Handle inline button callbacks (morning schedule autoscan prompts)
+            
+            if cb:
                 cb_id = cb.get('id')
                 cb_data = cb.get('data', '')
-                chat_id = str(cb.get('message', {}).get('chat', {}).get('id', ''))
+                msg = cb.get('message', {})
+                chat_id = str(msg.get('chat', {}).get('id', ''))
+                
                 token, _ = get_telegram_bot_config()
                 if token and cb_id:
                     try: requests.post(f'https://api.telegram.org/bot{token}/answerCallbackQuery', json={'callback_query_id': cb_id}, timeout=5)
                     except: pass
 
                 if cb_data.startswith('autoscan_'):
-                    # Format: autoscan_<matric>_<gid>_<mode>
                     parts = cb_data.split('_', 3)
                     if len(parts) == 4:
                         _, matric, gid, mode = parts
@@ -2062,6 +2027,41 @@ def api_handler(path):
                             feats[feat_key] = not feats.get(feat_key, default)
                             pg_db.execute("UPDATE telegram_settings SET features = %s WHERE chat_id = %s", (json.dumps(feats), chat_id))
                             send_telegram_config(chat_id, message_id=msg.get('message_id'))
+
+            elif update.get('message'):
+                msg = update.get('message')
+                chat_id = str(msg.get('chat', {}).get('id', ''))
+                text = msg.get('text', '').strip()
+
+                if text.startswith('/start'):
+                    parts = text.split(' ', 1)
+                    if len(parts) > 1:
+                        matric = parts[1].strip()
+                        ensure_telegram_tables()
+                        row = pg_db.query_one("SELECT matric FROM telegram_settings WHERE matric = %s", (matric,))
+                        if row:
+                            pg_db.execute("UPDATE telegram_settings SET chat_id = %s WHERE matric = %s", (chat_id, matric))
+                            stud = pg_db.query_one("SELECT name FROM students WHERE matric = %s", (matric,))
+                            name = stud['name'] if stud else matric
+                            send_telegram_message(chat_id,
+                                f"✅ <b>Linked!</b>\nYour Attendance Studio account (<code>{matric}</code>) is now connected, <b>{name}</b>!\n\n"
+                                f"Access your settings and schedule from the menu below! 👇")
+                        else:
+                            send_telegram_message(chat_id, "❌ Matric not found. Please enable Telegram in Attendance Studio first.")
+                    else:
+                        send_telegram_message(chat_id, "👋 Welcome to Attendance Studio Bot!\nOpen the app to link your account.")
+
+                elif text == '/timetable':
+                    send_telegram_timetable(chat_id)
+
+                elif text == '/config':
+                    send_telegram_config(chat_id)
+
+                elif text == '/stop':
+                    ensure_telegram_tables()
+                    pg_db.execute("UPDATE telegram_settings SET enabled = FALSE, chat_id = NULL WHERE chat_id = %s", (chat_id,))
+                    send_telegram_message(chat_id, "🔕 Telegram notifications disabled. You can re-enable from Attendance Studio.")
+
 
             return jsonify({"ok": True})
         except Exception as e:
