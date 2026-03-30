@@ -2025,6 +2025,11 @@ def api_handler(path):
                 elif cb_data == '/config':
                     send_telegram_config(chat_id, message_id=msg.get('message_id'))
                     
+                elif cb_data == '/stop':
+                    ensure_telegram_tables()
+                    pg_db.execute("UPDATE telegram_settings SET enabled = FALSE, chat_id = NULL WHERE chat_id = %s", (chat_id,))
+                    send_telegram_message(chat_id, "🔕 Telegram notifications disabled.\nYou can re-enable this anytime from Attendance Studio.", message_id=msg.get('message_id'), append_menu=False)
+                    
                 elif cb_data.startswith('tg_feat_'):
                     key_map = {'tg_feat_autojobs': 'notify_autojobs', 'tg_feat_morning': 'notify_morning_schedule', 'tg_feat_awareness': 'notify_class_awareness'}
                     feat_key = key_map.get(cb_data)
