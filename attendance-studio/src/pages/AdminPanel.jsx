@@ -50,6 +50,10 @@ export default function AdminPanel() {
   const [dirty, setDirty] = useState({});
   const markDirty = (key) => setDirty(prev => ({ ...prev, [key]: true }));
 
+  // Telegram Config
+  const [tgBotToken, setTgBotToken] = useState('');
+  const [tgBotUsername, setTgBotUsername] = useState('');
+
   // Per-job running state (client-side lock)
   const [jobRunning, setJobRunning] = useState({
     class: false, student: false, activity: false, verify: false, autojobs: false
@@ -103,6 +107,11 @@ export default function AdminPanel() {
         });
         setPriorityCourses(res.config.priority_courses || []);
         setPriorityStudentIds(res.config.priority_student_ids || []);
+      }
+
+      if (res.telegram_token !== undefined) {
+        setTgBotToken(res.telegram_token);
+        setTgBotUsername(res.telegram_username);
       }
     } catch (e) {
       showToast(e.message || 'Invalid Key', 'error');
@@ -213,6 +222,23 @@ export default function AdminPanel() {
   const handleDeviceDelete = async (id) => {
     if (!await confirm('Delete logs & Unban?')) return;
     try { await api.post('/admin_dashboard', { key, type: 'delete_device_logs', target_id: id }); loadData(); showToast('Cleared', 'success'); } catch (e) {}
+  };
+
+  const saveBotToken = async () => {
+    try {
+      await api.post('/admin_dashboard', { key, type: 'save_bot_token', token: tgBotToken, username: tgBotUsername });
+      showToast('Bot credentials saved', 'success');
+      loadData();
+    } catch(e) { showToast(e.message, 'error'); }
+  };
+
+  const deleteTgUser = async (matric) => {
+    if (!await confirm(`Delete Telegram settings for user ${matric}?`)) return;
+    try {
+      await api.post('/admin_dashboard', { key, type: 'delete_telegram_user', matric });
+      showToast('User removed', 'success');
+      loadData();
+    } catch(e) { showToast(e.message, 'error'); }
   };
 
   const formatMode = (m) => {
@@ -566,6 +592,47 @@ export default function AdminPanel() {
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        {/* ================================================================ */}
+        {/* TELEGRAM MANAGEMENT */}
+        {/* ================================================================ */}
+        <div className="admin-section">
+          <div className="admin-title">
+            <span>TELEGRAM MANAGEMENT</span>
+            <button onClick={saveBotToken} style={{ background: 'none', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '4px' }}>SAVE CONFIG</button>
+          </div>
+          <div style={{ padding: '10px', background: 'rgba(0,0,0,0.3)', border: '1px solid #333', marginBottom: '15px' }}>
+            <div style={{ fontSize: '0.7rem', color: 'var(--primary)', marginBottom: '5px' }}>BOT TOKEN</div>
+            <input type="text" className="t-input" style={{ width: '100%', marginBottom: '10px' }} placeholder="123456789:ABCdefgHIJKLmnopQRSTUvwxyz..." value={tgBotToken} onChange={e => setTgBotToken(e.target.value)} />
+            <div style={{ fontSize: '0.7rem', color: 'var(--primary)', marginBottom: '5px' }}>BOT USERNAME (No @)</div>
+            <input type="text" className="t-input" style={{ width: '100%' }} placeholder="ExampleBot" value={tgBotUsername} onChange={e => setTgBotUsername(e.target.value)} />
+          </div>
+
+          <div style={{ maxHeight: '250px', overflowY: 'auto', border: '1px solid #333' }}>
+            {(!data?.telegram_users || data.telegram_users.length === 0) && <div style={{ padding: '10px', color: '#555', textAlign: 'center', fontSize: '0.8rem' }}>No active Telegram users</div>}
+            {data?.telegram_users?.map(u => (
+              <div key={u.matric} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px', borderBottom: '1px solid #333', alignItems: 'center' }}>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ color: '#fff', fontWeight: 'bold' }}>{u.matric}</span>
+                    {u.chat_id ? (
+                      <span style={{ color: '#0f0', fontSize: '0.65rem', padding: '2px 4px', background: 'rgba(0,255,0,0.1)', borderRadius: '3px' }}>LINKED</span>
+                    ) : (
+                      <span style={{ color: '#ffa500', fontSize: '0.65rem', padding: '2px 4px', background: 'rgba(255,165,0,0.1)', borderRadius: '3px' }}>PENDING</span>
+                    )}
+                    {!u.enabled && <span style={{ color: '#f00', fontSize: '0.65rem', padding: '2px 4px', background: 'rgba(255,0,0,0.1)', borderRadius: '3px' }}>DISABLED</span>}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: '#888', marginTop: '4px' }}>
+                    {u.phone || 'No phone'}
+                    <span style={{ margin: '0 8px', color: '#555' }}>|</span>
+                    {Object.keys(u.features || {}).filter(k => u.features[k]).map(k => k.replace('notify_', '')).join(', ') || 'No features'}
+                  </div>
+                </div>
+                <button className="btn" style={{ color: '#f00', padding: '4px 8px', borderColor: '#f00', fontSize: '0.7rem', minWidth: 'auto' }} onClick={() => deleteTgUser(u.matric)}>RM</button>
+              </div>
+            ))}
           </div>
         </div>
 

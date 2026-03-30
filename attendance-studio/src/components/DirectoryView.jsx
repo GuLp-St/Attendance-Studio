@@ -323,12 +323,7 @@ export default function DirectoryView({ user }) {
                     {bio ? (
                         <div style={{ background: 'rgba(0,243,255,0.03)', padding: '16px', borderRadius: '6px', marginBottom: '15px', textAlign: 'left', border: '1px solid rgba(0,243,255,0.1)' }}>
                             <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '16px', textAlign: 'center', letterSpacing: '1px' }}>BASIC BIODATA</div>
-                            <ReadableJson data={{ 
-                                Name: bio.name || bio.nama, 
-                                Program: bio.namaProgramBi || bio.program, 
-                                Faculty: bio.kodFakulti || bio.fakulti, 
-                                Intake: bio.kodSesiSem 
-                            }} />
+                            <ReadableJson data={bio} />
                         </div>
                     ) : (
                         <div style={{ color: '#888', fontSize: '0.72rem', marginBottom: '12px' }}>Provide password to verify and load live data, or view basic info.</div>
