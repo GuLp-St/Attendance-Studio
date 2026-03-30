@@ -232,22 +232,23 @@ def get_telegram_bot_config():
     except: pass
     return '', ''
 
-def send_telegram_message(chat_id, text, reply_markup=None, parse_mode='HTML', message_id=None):
+def send_telegram_message(chat_id, text, reply_markup=None, parse_mode='HTML', message_id=None, append_menu=True):
     """Send or edit a message via Telegram Bot API. Returns True on success."""
     token, _ = get_telegram_bot_config()
     if not token or not chat_id:
         return False
         
-    main_menu = [
-        {"text": "📅 Timetable", "callback_data": "/timetable"},
-        {"text": "⚙️ Config", "callback_data": "/config"},
-        {"text": "🌐 Open App", "url": "https://no-class.vercel.app"}
-    ]
-    
-    if reply_markup is None:
-        reply_markup = {"inline_keyboard": [main_menu]}
-    elif isinstance(reply_markup, dict) and 'inline_keyboard' in reply_markup:
-        reply_markup['inline_keyboard'].append(main_menu)
+    if append_menu:
+        main_menu = [
+            {"text": "📅 Timetable", "callback_data": "/timetable"},
+            {"text": "⚙️ Config", "callback_data": "/config"},
+            {"text": "🌐 Open App", "url": "https://no-class.vercel.app"}
+        ]
+        
+        if reply_markup is None:
+            reply_markup = {"inline_keyboard": [main_menu]}
+        elif isinstance(reply_markup, dict) and 'inline_keyboard' in reply_markup:
+            reply_markup['inline_keyboard'].append(main_menu)
 
     try:
         payload = {'chat_id': chat_id, 'text': text, 'parse_mode': parse_mode}
@@ -374,7 +375,7 @@ def send_telegram_timetable(chat_id, message_id=None):
     # Send a temporary loading message if we have a message_id to edit (interactive button click) or start a new one
     temp_msg_id = message_id
     if message_id:
-        send_telegram_message(chat_id, "⏳ Fetching your latest timetable...", message_id=message_id)
+        send_telegram_message(chat_id, "⏳ Fetching your latest timetable...", message_id=message_id, append_menu=False)
         
     ts_row = pg_db.query_one("SELECT matric FROM telegram_settings WHERE chat_id = %s AND enabled = TRUE", (chat_id,))
     if not ts_row:
@@ -413,7 +414,7 @@ def send_telegram_timetable(chat_id, message_id=None):
                             'code': c['code'],
                             'name': c.get('name') or s.get('NAMA_KURSUS_BI', ''),
                             'group': c.get('course_group') or s.get('KUMP_KULIAH', ''),
-                            'loc': s.get('RUANG') or s.get('KOD_RUANG') or 'Location TBA',
+                            'loc': s.get('RUANG') or s.get('KOD_RUANG') or None,
                             'group_id': gid
                         })
             except: pass
@@ -432,7 +433,8 @@ def send_telegram_timetable(chat_id, message_id=None):
                 lines.append(f"\n<b>━━ {d} ━━</b>")
                 for fs in d_map[d]:
                     group_str = f"({fs['group']})" if fs.get('group') else ""
-                    lines.append(f"🕐 {fs['start']} - {fs['end']}\n📚 <b>{fs['code']} {group_str}</b> [{att_dict.get(fs['group_id'])}]\n📖 {fs['name']}\n📍 {fs['loc']}\n")
+                    loc_str = f"📍 {fs['loc']}\n" if fs.get('loc') else ""
+                    lines.append(f"🕐 {fs['start']} - {fs['end']}\n📚 <b>{fs['code']} {group_str}</b> [{att_dict.get(fs['group_id'])}]\n📖 {fs['name']}\n{loc_str}")
                     
         send_telegram_message(chat_id, "\n".join(lines), message_id=temp_msg_id)
     except Exception as e:
