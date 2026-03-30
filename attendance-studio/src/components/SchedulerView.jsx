@@ -281,7 +281,7 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                     // --- ENABLED STATE ---
                     <div>
                         {/* Link status */}
-                        {!isLinked ? (
+                        {!isLinked && (
                             <div style={{ marginBottom: '20px', padding: '15px', background: 'rgba(255,200,0,0.05)', border: '1px solid rgba(255,200,0,0.3)', borderRadius: '6px' }}>
                                 <div style={{ fontSize: '0.8rem', color: '#ffd700', fontWeight: 'bold', marginBottom: '8px' }}>⏳ WAITING FOR TELEGRAM LINK</div>
                                 <div style={{ fontSize: '0.7rem', color: '#888', marginBottom: '12px' }}>Click the button below to open Telegram and link your account. Come back and refresh once done.</div>
@@ -298,14 +298,6 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                                 <button className="btn" onClick={loadTgStatus} style={{ width: '100%', marginTop: '8px', padding: '8px', borderColor: 'var(--grid-line)', color: '#888', fontSize: '0.7rem' }}>
                                     ↻ REFRESH STATUS
                                 </button>
-                            </div>
-                        ) : (
-                            <div style={{ marginBottom: '20px', padding: '10px', background: 'rgba(0,255,0,0.05)', border: '1px solid rgba(0,255,0,0.2)', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <span style={{ fontSize: '1.2rem' }}>✅</span>
-                                <div>
-                                    <div style={{ fontSize: '0.75rem', color: '#0f0', fontWeight: 'bold' }}>ACCOUNT LINKED</div>
-                                    <div style={{ fontSize: '0.6rem', color: '#888' }}>{tgStatus.phone || 'No phone saved'}</div>
-                                </div>
                             </div>
                         )}
 

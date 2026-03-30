@@ -369,16 +369,21 @@ def verify_and_save_student(m, data, pwd, active_sem):
 #  MAIN ROUTE HANDLER
 # ==========================================
 
-def send_telegram_timetable(chat_id):
+def send_telegram_timetable(chat_id, message_id=None):
     ensure_telegram_tables()
+    # Send a temporary loading message if we have a message_id to edit (interactive button click) or start a new one
+    temp_msg_id = message_id
+    if message_id:
+        send_telegram_message(chat_id, "⏳ Fetching your latest timetable...", message_id=message_id)
+        
     ts_row = pg_db.query_one("SELECT matric FROM telegram_settings WHERE chat_id = %s AND enabled = TRUE", (chat_id,))
     if not ts_row:
-        send_telegram_message(chat_id, "❌ Not linked. Open Attendance Studio to connect your account.")
+        send_telegram_message(chat_id, "❌ Not linked. Open Attendance Studio to connect your account.", message_id=temp_msg_id)
         return
     matric = ts_row['matric']
     stud = pg_db.query_one("SELECT name, groups FROM students WHERE matric = %s", (matric,))
     if not stud:
-        send_telegram_message(chat_id, "❌ Could not find your account.")
+        send_telegram_message(chat_id, "❌ Could not find your account.", message_id=temp_msg_id)
         return
     name = stud.get('name', matric)
     group_ids = stud.get('groups') or []
@@ -406,7 +411,8 @@ def send_telegram_timetable(chat_id):
                             'start': s['MASA_MULA'],
                             'end': s['MASA_TAMAT'],
                             'code': c['code'],
-                            'name': c.get('name', ''),
+                            'name': c.get('name') or s.get('NAMA_KURSUS_BI', ''),
+                            'group': c.get('course_group') or s.get('KUMP_KULIAH', ''),
                             'loc': s.get('RUANG') or s.get('KOD_RUANG') or 'Location TBA',
                             'group_id': gid
                         })
@@ -425,11 +431,12 @@ def send_telegram_timetable(chat_id):
             if d in d_map:
                 lines.append(f"\n<b>━━ {d} ━━</b>")
                 for fs in d_map[d]:
-                    lines.append(f"🕐 {fs['start']} - {fs['end']}\n📚 <b>{fs['code']}</b> [{att_dict.get(fs['group_id'])}]\n📍 {fs['loc']}\n")
+                    group_str = f"({fs['group']})" if fs.get('group') else ""
+                    lines.append(f"🕐 {fs['start']} - {fs['end']}\n📚 <b>{fs['code']} {group_str}</b> [{att_dict.get(fs['group_id'])}]\n📖 {fs['name']}\n📍 {fs['loc']}\n")
                     
-        send_telegram_message(chat_id, "\n".join(lines))
+        send_telegram_message(chat_id, "\n".join(lines), message_id=temp_msg_id)
     except Exception as e:
-        send_telegram_message(chat_id, f"⚠️ Error fetching timetable: {str(e)[:100]}")
+        send_telegram_message(chat_id, f"⚠️ Error fetching timetable: {str(e)[:100]}", message_id=temp_msg_id)
 
 def send_telegram_config(chat_id, message_id=None):
     ts_row = pg_db.query_one("SELECT features FROM telegram_settings WHERE chat_id = %s", (chat_id,))
@@ -2008,7 +2015,7 @@ def api_handler(path):
                             send_telegram_message(chat_id, f"❌ Could not activate autoscan: {str(e)[:80]}")
                             
                 elif cb_data == '/timetable':
-                    send_telegram_timetable(chat_id)
+                    send_telegram_timetable(chat_id, message_id=msg.get('message_id'))
                     
                 elif cb_data == '/config':
                     send_telegram_config(chat_id, message_id=msg.get('message_id'))
