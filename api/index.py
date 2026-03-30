@@ -414,7 +414,7 @@ def send_telegram_timetable(chat_id, message_id=None):
                             'code': c['code'],
                             'name': c.get('name') or s.get('NAMA_KURSUS_BI', ''),
                             'group': c.get('course_group') or s.get('KUMP_KULIAH', ''),
-                            'loc': s.get('RUANG') or s.get('KOD_RUANG') or None,
+                            'loc': s.get('LOKASI') or s.get('RUANG') or s.get('KOD_RUANG') or None,
                             'group_id': gid
                         })
             except: pass
@@ -803,6 +803,9 @@ def api_handler(path):
             elif d['type'] == 'stop_auto_register':
                 pg_db.execute("DELETE FROM auto_register_jobs WHERE matric = %s AND gid = %s", (d.get('matric'), str(d.get('gid'))))
                 msg = "Auto Register Deactivated."
+            elif d['type'] == 'clear_all_notifications':
+                pg_db.execute("DELETE FROM notifications WHERE matric = %s", (d.get('matric'),))
+                msg = "Notifications Cleared."
         except Exception as e: msg = str(e)
         return jsonify({"msg": msg})
 

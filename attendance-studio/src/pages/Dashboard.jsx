@@ -432,12 +432,17 @@ export default function Dashboard() {
       finally { setActionLoading(null); }
   };
 
+  const [clearLoading, setClearLoading] = useState(false);
+
   const clearAllNotifications = async () => {
       try {
+          if (!await confirm("Clear all notifications?")) return;
+          setClearLoading(true);
           await api.post('/action', { type: 'clear_all_notifications', matric: user.matric });
           setNotifications([]);
           showToast("Notifications cleared", "success");
       } catch (e) { showToast(e.message, "error"); }
+      finally { setClearLoading(false); }
   };
 
   const openExemptPrompt = (sid, gid) => { 
@@ -639,6 +644,7 @@ export default function Dashboard() {
               notifications={notifications} 
               onDismissNotif={dismissNotification} 
               onClearAllNotifs={clearAllNotifications}
+              clearLoading={clearLoading}
               onCancelJob={cancelAutoscan}
               onCancelAutoReg={(gid) => handleUpdateAutoReg(gid, false)}
               goToTools={() => setActiveTab('tools')}

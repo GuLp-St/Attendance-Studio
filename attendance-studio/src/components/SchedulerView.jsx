@@ -61,7 +61,7 @@ const SwipeableNotification = ({ n, formatMode, fmtDate, onDismiss }) => {
     );
 };
 
-export default function SchedulerView({ user, notifications, onDismissNotif, onClearAllNotifs, onCancelJob, onCancelAutoReg, goToTools, actionLoading, onAutoscan, onGlobalRefresh }) {
+export default function SchedulerView({ user, notifications, onDismissNotif, onClearAllNotifs, clearLoading, onCancelJob, onCancelAutoReg, goToTools, actionLoading, onAutoscan, onGlobalRefresh }) {
     const { showToast } = useToast();
     const { confirm } = useConfirm();
     const [tab, setTab] = useState('auto-jobs');
@@ -660,7 +660,9 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                         <div style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 'bold' }}>NOTIFICATIONS</div>
                         {notifications.length > 0 && (
-                            <button className="btn" style={{ color: '#888', border: 'none', background: 'transparent', fontSize: '0.65rem', padding: '2px 8px', letterSpacing: '1px', boxShadow: 'none' }} onClick={onClearAllNotifs}>CLEAR ALL</button>
+                            <button className="btn" disabled={clearLoading} style={{ color: '#888', border: 'none', background: 'transparent', fontSize: '0.65rem', padding: '2px 8px', letterSpacing: '1px', boxShadow: 'none' }} onClick={onClearAllNotifs}>
+                                {clearLoading ? 'CLEARING...' : 'CLEAR ALL'}
+                            </button>
                         )}
                     </div>
                     {notifications.length === 0 
