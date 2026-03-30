@@ -209,7 +209,6 @@ def ensure_telegram_tables():
         pg_db.execute("""
             CREATE TABLE IF NOT EXISTS telegram_settings (
                 matric TEXT PRIMARY KEY,
-                phone TEXT,
                 chat_id TEXT,
                 enabled BOOLEAN DEFAULT TRUE,
                 features JSONB DEFAULT '{}',
@@ -1707,6 +1706,9 @@ def api_handler(path):
                 if 'priority_student_ids' in data: fields.append('priority_students = %s'); values.append(data['priority_student_ids'])
                 if 'system_matric' in data: fields.append('system_matric = %s'); values.append(data['system_matric'])
                 if 'system_pwd' in data: fields.append('system_pwd = %s'); values.append(data['system_pwd'])
+                if 'telegram_token' in data: fields.append('telegram_bot_token = %s'); values.append(data['telegram_token'])
+                if 'telegram_username' in data: fields.append('telegram_bot_username = %s'); values.append(data['telegram_username'])
+                
                 if fields:
                     pg_db.execute(f"UPDATE system_config SET {', '.join(fields)} WHERE id = 'config'", tuple(values))
                 return jsonify({"status": "Settings Saved"})
@@ -1829,25 +1831,10 @@ def api_handler(path):
         try:
             ensure_telegram_tables()
             ts = pg_db.query_one("SELECT * FROM telegram_settings WHERE matric = %s", (matric,))
-            hp_tetap = None
-            try:
-                req_s = get_authorized_session()
-                bio = core_api.get_student_biodata(matric, req_s)
-                if bio:
-                    hp_tetap = bio.get('hpTetap') or bio.get('hp_tetap') or bio.get('noTel') or bio.get('noTelBimbit') or bio.get('noTelefon')
-                    # Try various biodata keys for phone
-                    if not hp_tetap:
-                        for k in bio:
-                            if 'hp' in k.lower() or 'tel' in k.lower() or 'phone' in k.lower():
-                                v = bio[k]
-                                if v and str(v).strip():
-                                    hp_tetap = str(v).strip()
-                                    break
-            except: pass
             _, bot_username = get_telegram_bot_config()
             result = {
-                "enabled": False, "phone": None, "chat_id": None,
-                "features": {}, "hp_tetap": hp_tetap, "bot_username": bot_username
+                "enabled": False, "chat_id": None,
+                "features": {}, "bot_username": bot_username
             }
             if ts:
                 feats = ts.get('features') or {}
@@ -1855,9 +1842,9 @@ def api_handler(path):
                     try: feats = json.loads(feats)
                     except: feats = {}
                 result = {
-                    "enabled": bool(ts.get('enabled')), "phone": ts.get('phone'),
+                    "enabled": bool(ts.get('enabled')),
                     "chat_id": ts.get('chat_id'), "features": feats,
-                    "hp_tetap": hp_tetap, "bot_username": bot_username
+                    "bot_username": bot_username
                 }
             return Response(json.dumps(result, default=json_serial), headers=headers)
         except Exception as e:
@@ -1869,16 +1856,14 @@ def api_handler(path):
         matric = d.get('matric')
         try:
             ensure_telegram_tables()
-            phone = d.get('phone', '')
             features = d.get('features', {})
             pg_db.execute("""
-                INSERT INTO telegram_settings (matric, phone, enabled, features, created_at)
-                VALUES (%s, %s, TRUE, %s, %s)
+                INSERT INTO telegram_settings (matric, enabled, features, created_at)
+                VALUES (%s, TRUE, %s, %s)
                 ON CONFLICT (matric) DO UPDATE SET
-                    phone = EXCLUDED.phone,
                     enabled = TRUE,
                     features = EXCLUDED.features
-            """, (matric, phone, json.dumps(features), get_malaysia_time()))
+            """, (matric, json.dumps(features), get_malaysia_time()))
             _, bot_username = get_telegram_bot_config()
             deep_link = f"https://t.me/{bot_username}?start={matric}" if bot_username else None
             return jsonify({"status": "ok", "deep_link": deep_link})

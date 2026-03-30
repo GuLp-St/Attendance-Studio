@@ -157,7 +157,6 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
 
     // --- TELEGRAM STATE ---
     const [tgStatus, setTgStatus] = useState(null); // null = loading
-    const [tgPhone, setTgPhone] = useState('');
     const [tgLoading, setTgLoading] = useState(false);
     const [tgFeatures, setTgFeatures] = useState({ notify_autojobs: true, notify_morning_schedule: true, notify_class_awareness: true });
 
@@ -170,8 +169,6 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
         try {
             const res = await api.get(`/telegram/status?matric=${user.matric}`);
             setTgStatus(res);
-            if (res.phone) setTgPhone(res.phone);
-            else if (res.hp_tetap) setTgPhone(res.hp_tetap);
             if (res.features && Object.keys(res.features).length > 0) setTgFeatures(res.features);
         } catch(e) {
             setTgStatus({ enabled: false, chat_id: null, features: {} });
@@ -181,14 +178,14 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
     const saveTgFeatures = async (newFeats) => {
         if (!tgStatus?.enabled) return;
         try {
-            await api.post('/telegram/setup', { matric: user.matric, phone: tgPhone, features: newFeats });
+            await api.post('/telegram/setup', { matric: user.matric, features: newFeats });
         } catch(e) {}
     };
 
     const enableTelegram = async () => {
         setTgLoading(true);
         try {
-            const res = await api.post('/telegram/setup', { matric: user.matric, phone: tgPhone, features: tgFeatures });
+            const res = await api.post('/telegram/setup', { matric: user.matric, features: tgFeatures });
             if (res.error) { showToast(res.error, 'error'); return; }
             if (res.deep_link) {
                 showToast('Telegram enabled! Click the button to link your account.', 'success');
@@ -255,7 +252,7 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', padding: '15px', background: 'rgba(0,243,255,0.05)', borderRadius: '8px', border: '1px solid rgba(0,243,255,0.2)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0088cc' }}>
                         <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M12 0C5.372 0 0 5.373 0 12C0 18.627 5.372 24 12 24C18.628 24 24 18.627 24 12C24 5.373 18.628 0 12 0ZM17.653 8.355C17.382 11.233 16.208 18.158 15.602 20.902C15.346 22.064 14.887 22.456 14.444 22.495C13.468 22.581 12.727 21.848 11.782 21.229C10.303 20.262 9.467 19.658 8.032 18.718C6.375 17.632 7.449 17.034 8.396 16.059C8.643 15.804 12.924 11.914 13.007 11.564C13.017 11.52 13.025 11.355 12.934 11.264C12.842 11.173 12.698 11.205 12.584 11.231C12.422 11.269 9.839 12.978 4.814 16.366C4.078 16.87 3.411 17.114 2.813 17.098C2.152 17.081 0.88 16.726 0.055 16.45C-0.957 16.111-1.054 15.93 0.145 15.453C4.846 13.407 7.98 12.062 13.545 9.742C16.19 8.636 16.74 8.441 17.098 8.435C17.177 8.434 17.354 8.452 17.47 8.539C17.567 8.613 17.595 8.712 17.608 8.783C17.621 8.855 17.653 8.355 17.653 8.355Z"/>
+                            <path d="M20.665 3.717l-17.73 6.837c-1.21.486-1.203 1.161-.222 1.462l4.552 1.42 10.532-6.645c.498-.303.953-.14.579.192l-8.533 7.701h-.002l.002.001-.314 4.692c.46 0 .663-.211.921-.46l2.211-2.15 4.599 3.397c.848.467 1.457.227 1.668-.785l3.019-14.228c.309-1.239-.473-1.8-1.282-1.434z"/>
                         </svg>
                     </div>
                     <div>
@@ -270,17 +267,6 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                 {!isEnabled ? (
                     // --- DISABLED STATE ---
                     <div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 'bold', marginBottom: '10px' }}>CONFIGURE</div>
-                        <div style={{ marginBottom: '20px' }}>
-                            <div style={{ fontSize: '0.7rem', color: '#888', marginBottom: '6px' }}>PHONE NUMBER</div>
-                            <input
-                                value={tgPhone}
-                                onChange={e => setTgPhone(e.target.value)}
-                                placeholder="e.g. 012-3456789"
-                                style={{ width: '100%', background: 'transparent', border: '1px solid var(--grid-line)', borderRadius: '4px', padding: '10px', color: '#fff', fontSize: '0.85rem', boxSizing: 'border-box' }}
-                            />
-                            <div style={{ fontSize: '0.6rem', color: '#555', marginTop: '4px' }}>Pre-filled from your biodata if available</div>
-                        </div>
                         <button
                             className="btn"
                             disabled={tgLoading}
@@ -302,7 +288,7 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                                     <a href={deepLink} target="_blank" rel="noreferrer" style={{ display: 'block', textDecoration: 'none' }}>
                                         <button className="btn" style={{ width: '100%', padding: '10px', borderColor: '#0088cc', color: '#0088cc', fontWeight: 'bold', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                                             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                                                <path d="M12 0C5.372 0 0 5.373 0 12C0 18.627 5.372 24 12 24C18.628 24 24 18.627 24 12C24 5.373 18.628 0 12 0ZM17.653 8.355C17.382 11.233 16.208 18.158 15.602 20.902C15.346 22.064 14.887 22.456 14.444 22.495C13.468 22.581 12.727 21.848 11.782 21.229C10.303 20.262 9.467 19.658 8.032 18.718C6.375 17.632 7.449 17.034 8.396 16.059C8.643 15.804 12.924 11.914 13.007 11.564C13.017 11.52 13.025 11.355 12.934 11.264C12.842 11.173 12.698 11.205 12.584 11.231C12.422 11.269 9.839 12.978 4.814 16.366C4.078 16.87 3.411 17.114 2.813 17.098C2.152 17.081 0.88 16.726 0.055 16.45C-0.957 16.111-1.054 15.93 0.145 15.453C4.846 13.407 7.98 12.062 13.545 9.742C16.19 8.636 16.74 8.441 17.098 8.435C17.177 8.434 17.354 8.452 17.47 8.539C17.567 8.613 17.595 8.712 17.608 8.783C17.621 8.855 17.653 8.355 17.653 8.355Z"/>
+                                                <path d="M20.665 3.717l-17.73 6.837c-1.21.486-1.203 1.161-.222 1.462l4.552 1.42 10.532-6.645c.498-.303.953-.14.579.192l-8.533 7.701h-.002l.002.001-.314 4.692c.46 0 .663-.211.921-.46l2.211-2.15 4.599 3.397c.848.467 1.457.227 1.668-.785l3.019-14.228c.309-1.239-.473-1.8-1.282-1.434z"/>
                                             </svg>
                                             OPEN TELEGRAM TO LINK ACCOUNT
                                         </button>

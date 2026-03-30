@@ -134,6 +134,11 @@ export default function AdminPanel() {
         payload.system_pwd = manualMode ? manualPwd : (autoAccounts[autoIndex]?.password || '');
         hasSomething = true;
       }
+      if (dirty.telegram) {
+        payload.telegram_token = tgBotToken;
+        payload.telegram_username = tgBotUsername;
+        hasSomething = true;
+      }
 
       if (!hasSomething) return;
       await api.post('/admin_dashboard', payload);
@@ -222,14 +227,6 @@ export default function AdminPanel() {
   const handleDeviceDelete = async (id) => {
     if (!await confirm('Delete logs & Unban?')) return;
     try { await api.post('/admin_dashboard', { key, type: 'delete_device_logs', target_id: id }); loadData(); showToast('Cleared', 'success'); } catch (e) {}
-  };
-
-  const saveBotToken = async () => {
-    try {
-      await api.post('/admin_dashboard', { key, type: 'save_bot_token', token: tgBotToken, username: tgBotUsername });
-      showToast('Bot credentials saved', 'success');
-      loadData();
-    } catch(e) { showToast(e.message, 'error'); }
   };
 
   const deleteTgUser = async (matric) => {
@@ -601,13 +598,12 @@ export default function AdminPanel() {
         <div className="admin-section">
           <div className="admin-title">
             <span>TELEGRAM MANAGEMENT</span>
-            <button onClick={saveBotToken} style={{ background: 'none', border: '1px solid var(--primary)', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '4px' }}>SAVE CONFIG</button>
           </div>
           <div style={{ padding: '10px', background: 'rgba(0,0,0,0.3)', border: '1px solid #333', marginBottom: '15px' }}>
             <div style={{ fontSize: '0.7rem', color: 'var(--primary)', marginBottom: '5px' }}>BOT TOKEN</div>
-            <input type="text" className="t-input" style={{ width: '100%', marginBottom: '10px' }} placeholder="123456789:ABCdefgHIJKLmnopQRSTUvwxyz..." value={tgBotToken} onChange={e => setTgBotToken(e.target.value)} />
+            <input type="text" className="t-input" style={{ width: '100%', marginBottom: '10px' }} placeholder="123456789:ABCdefgHIJKLmnopQRSTUvwxyz..." value={tgBotToken} onChange={e => { setTgBotToken(e.target.value); markDirty('telegram'); }} />
             <div style={{ fontSize: '0.7rem', color: 'var(--primary)', marginBottom: '5px' }}>BOT USERNAME (No @)</div>
-            <input type="text" className="t-input" style={{ width: '100%' }} placeholder="ExampleBot" value={tgBotUsername} onChange={e => setTgBotUsername(e.target.value)} />
+            <input type="text" className="t-input" style={{ width: '100%' }} placeholder="ExampleBot" value={tgBotUsername} onChange={e => { setTgBotUsername(e.target.value); markDirty('telegram'); }} />
           </div>
 
           <div style={{ maxHeight: '250px', overflowY: 'auto', border: '1px solid #333' }}>
@@ -625,8 +621,6 @@ export default function AdminPanel() {
                     {!u.enabled && <span style={{ color: '#f00', fontSize: '0.65rem', padding: '2px 4px', background: 'rgba(255,0,0,0.1)', borderRadius: '3px' }}>DISABLED</span>}
                   </div>
                   <div style={{ fontSize: '0.7rem', color: '#888', marginTop: '4px' }}>
-                    {u.phone || 'No phone'}
-                    <span style={{ margin: '0 8px', color: '#555' }}>|</span>
                     {Object.keys(u.features || {}).filter(k => u.features[k]).map(k => k.replace('notify_', '')).join(', ') || 'No features'}
                   </div>
                 </div>
