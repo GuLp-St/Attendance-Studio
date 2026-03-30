@@ -219,7 +219,8 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
 
         const isEnabled = tgStatus.enabled;
         const isLinked = isEnabled && !!tgStatus.chat_id;
-        const deepLink = tgStatus.bot_username ? `https://t.me/${tgStatus.bot_username}?start=${user.matric}` : null;
+        const cleanName = tgStatus.bot_username?.replace('@', '');
+        const deepLink = cleanName ? `tg://resolve?domain=${cleanName}&start=${user.matric}` : null;
 
         const FeatureToggle = ({ label, icon, desc, featureKey }) => (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', border: '1px solid var(--grid-line)', borderRadius: '6px', marginBottom: '8px', opacity: tgLoading ? 0.6 : 1 }}>
