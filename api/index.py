@@ -232,13 +232,17 @@ def get_telegram_bot_config():
     except: pass
     return '', ''
 
-def send_telegram_message(chat_id, text, reply_markup=None, parse_mode='HTML'):
-    """Send a message via Telegram Bot API. Returns True on success."""
+def send_telegram_message(chat_id, text, reply_markup=None, parse_mode='HTML', message_id=None):
+    \"\"\"Send or edit a message via Telegram Bot API. Returns True on success.\"\"\"
     token, _ = get_telegram_bot_config()
     if not token or not chat_id:
         return False
         
-    main_menu = [{"text": "📅 Timetable", "callback_data": "/timetable"}, {"text": "🌐 Open App", "url": "https://no-class.vercel.app"}]
+    main_menu = [
+        {"text": "📅 Timetable", "callback_data": "/timetable"},
+        {"text": "⚙️ Config", "callback_data": "/config"},
+        {"text": "🌐 Open App", "url": "https://no-class.vercel.app"}
+    ]
     
     if reply_markup is None:
         reply_markup = {"inline_keyboard": [main_menu]}
@@ -247,10 +251,16 @@ def send_telegram_message(chat_id, text, reply_markup=None, parse_mode='HTML'):
 
     try:
         payload = {'chat_id': chat_id, 'text': text, 'parse_mode': parse_mode}
+        if message_id:
+            payload['message_id'] = message_id
+            endpoint = 'editMessageText'
+        else:
+            endpoint = 'sendMessage'
+            
         if reply_markup:
             payload['reply_markup'] = json.dumps(reply_markup)
         r = requests.post(
-            f'https://api.telegram.org/bot{token}/sendMessage',
+            f'https://api.telegram.org/bot{token}/{endpoint}',
             json=payload, timeout=10
         )
         return r.status_code == 200
@@ -1884,6 +1894,87 @@ def api_handler(path):
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+def send_telegram_timetable(chat_id):
+    ensure_telegram_tables()
+    ts_row = pg_db.query_one("SELECT matric FROM telegram_settings WHERE chat_id = %s AND enabled = TRUE", (chat_id,))
+    if not ts_row:
+        send_telegram_message(chat_id, "❌ Not linked. Open Attendance Studio to connect your account.")
+        return
+    matric = ts_row['matric']
+    stud = pg_db.query_one("SELECT name, groups FROM students WHERE matric = %s", (matric,))
+    if not stud:
+        send_telegram_message(chat_id, "❌ Could not find your account.")
+        return
+    name = stud.get('name', matric)
+    group_ids = stud.get('groups') or []
+    try:
+        req_s = get_authorized_session()
+        att_dict = {}
+        master_slots = []
+        for gid in group_ids:
+            c = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
+            if not c: continue
+            try:
+                sessions = core_api.get_sessions(gid, req_s) or []
+                hist = core_api.get_student_history(matric, c['code'], gid, req_s) or []
+                total = len(sessions)
+                attended = sum(1 for h in hist if h.get('status') in ('P','M','L'))
+                att_dict[gid] = f"{attended}/{total} ({int(attended/total*100)}%)" if total > 0 else "N/A"
+            except:
+                att_dict[gid] = "N/A"
+            try:
+                raw_slots = core_api.get_timetable(gid, req_s) or []
+                for s in raw_slots:
+                    if isinstance(s, dict) and s.get('KETERANGAN_HARI'):
+                        master_slots.append({
+                            'day': s['KETERANGAN_HARI'],
+                            'start': s['MASA_MULA'],
+                            'end': s['MASA_TAMAT'],
+                            'code': c['code'],
+                            'name': c.get('name', ''),
+                            'loc': s.get('RUANG') or s.get('KOD_RUANG') or 'Location TBA',
+                            'group_id': gid
+                        })
+            except: pass
+            
+        final_slots = consolidate_timetable(master_slots)
+        days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+        d_map = {}
+        for fs in final_slots:
+            d = str(fs['day']).upper()
+            if d not in d_map: d_map[d] = []
+            d_map[d].append(fs)
+        
+        lines = [f"📅 <b>Timetable for {name}</b>\n<code>{matric}</code>"]
+        for d in days:
+            if d in d_map:
+                lines.append(f"\n<b>━━ {d} ━━</b>")
+                for fs in d_map[d]:
+                    lines.append(f"🕐 {fs['start']} - {fs['end']}\n📚 <b>{fs['code']}</b> [{att_dict.get(fs['group_id'])}]\n📍 {fs['loc']}\n")
+                    
+        send_telegram_message(chat_id, "\n".join(lines))
+    except Exception as e:
+        send_telegram_message(chat_id, f"⚠️ Error fetching timetable: {str(e)[:100]}")
+
+def send_telegram_config(chat_id, message_id=None):
+    ts_row = pg_db.query_one("SELECT features FROM telegram_settings WHERE chat_id = %s", (chat_id,))
+    if not ts_row:
+        send_telegram_message(chat_id, "❌ Not linked.", message_id=message_id)
+        return
+    feats = ts_row.get('features') or {}
+    if isinstance(feats, str):
+        try: feats = json.loads(feats)
+        except: feats = {}
+    kb = {
+        "inline_keyboard": [
+            [{"text": f"{'✅' if feats.get('notify_autojobs', True) else '❌'} Auto-Job Notifications", "callback_data": "tg_feat_autojobs"}],
+            [{"text": f"{'✅' if feats.get('notify_morning_schedule', False) else '❌'} Morning Schedule", "callback_data": "tg_feat_morning"}],
+            [{"text": f"{'✅' if feats.get('notify_class_awareness', False) else '❌'} Class Awareness", "callback_data": "tg_feat_awareness"}],
+            [{"text": "🛑 Disconnect Telegram", "callback_data": "/stop"}]
+        ]
+    }
+    send_telegram_message(chat_id, "<b>⚙️ Notification Settings</b>\nTap a feature below to toggle it:", reply_markup=kb, message_id=message_id)
+
     elif path == '/telegram/webhook' and request.method == 'POST':
         """Receives Telegram Bot API updates."""
         try:
@@ -1915,44 +2006,10 @@ def api_handler(path):
                         send_telegram_message(chat_id, "👋 Welcome to Attendance Studio Bot!\nOpen the app to link your account.")
 
                 elif text == '/timetable':
-                    ensure_telegram_tables()
-                    ts_row = pg_db.query_one("SELECT matric FROM telegram_settings WHERE chat_id = %s AND enabled = TRUE", (chat_id,))
-                    if not ts_row:
-                        send_telegram_message(chat_id, "❌ Not linked. Open Attendance Studio to connect your account.")
-                    else:
-                        matric = ts_row['matric']
-                        stud = pg_db.query_one("SELECT name, groups, password FROM students WHERE matric = %s", (matric,))
-                        if not stud:
-                            send_telegram_message(chat_id, "❌ Could not find your account.")
-                        else:
-                            name = stud.get('name', matric)
-                            group_ids = stud.get('groups') or []
-                            pwd = stud.get('password', '')
-                            try:
-                                req_s = get_authorized_session()
-                                lines = [f"📅 <b>Timetable for {name}</b>\n<code>{matric}</code>\n"]
-                                for gid in group_ids:
-                                    c = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
-                                    if not c: continue
-                                    # Attendance pct
-                                    try:
-                                        sessions = core_api.get_sessions(gid, req_s) or []
-                                        hist = core_api.get_student_history(matric, c['code'], gid, req_s) or []
-                                        total = len(sessions)
-                                        attended = sum(1 for h in hist if h.get('status') in ('P','M','L'))
-                                        pct = f"{attended}/{total} ({int(attended/total*100)}%)" if total > 0 else "N/A"
-                                    except:
-                                        pct = "N/A"
-                                    # Timetable slots
-                                    try:
-                                        slots = core_api.get_timetable(gid, req_s) or []
-                                        slot_str = ", ".join(set(f"{s.get('KETERANGAN_HARI','')} {s.get('MASA_MULA','')}-{s.get('MASA_TAMAT','')}" for s in slots if isinstance(s,dict) and s.get('KETERANGAN_HARI')))
-                                    except:
-                                        slot_str = "?"
-                                    lines.append(f"📚 <b>{c['code']} {c.get('course_group','')}</b>\n{c.get('name','')}\n🕐 {slot_str}\n📊 Attendance: {pct}\n")
-                                send_telegram_message(chat_id, "\n".join(lines))
-                            except Exception as e:
-                                send_telegram_message(chat_id, f"⚠️ Error fetching timetable: {str(e)[:100]}")
+                    send_telegram_timetable(chat_id)
+
+                elif text == '/config':
+                    send_telegram_config(chat_id)
 
                 elif text == '/stop':
                     ensure_telegram_tables()
@@ -1985,41 +2042,25 @@ def api_handler(path):
                             send_telegram_message(chat_id, f"❌ Could not activate autoscan: {str(e)[:80]}")
                             
                 elif cb_data == '/timetable':
-                    ensure_telegram_tables()
-                    ts_row = pg_db.query_one("SELECT matric FROM telegram_settings WHERE chat_id = %s AND enabled = TRUE", (chat_id,))
-                    if not ts_row:
-                        send_telegram_message(chat_id, "❌ Not linked. Open Attendance Studio to connect your account.")
-                    else:
-                        matric = ts_row['matric']
-                        stud = pg_db.query_one("SELECT name, groups, password FROM students WHERE matric = %s", (matric,))
-                        if not stud:
-                            send_telegram_message(chat_id, "❌ Could not find your account.")
-                        else:
-                            name = stud.get('name', matric)
-                            group_ids = stud.get('groups') or []
-                            try:
-                                req_s = get_authorized_session()
-                                lines = [f"📅 <b>Timetable for {name}</b>\n<code>{matric}</code>\n"]
-                                for gid in group_ids:
-                                    c = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
-                                    if not c: continue
-                                    try:
-                                        sessions = core_api.get_sessions(gid, req_s) or []
-                                        hist = core_api.get_student_history(matric, c['code'], gid, req_s) or []
-                                        total = len(sessions)
-                                        attended = sum(1 for h in hist if h.get('status') in ('P','M','L'))
-                                        pct = f"{attended}/{total} ({int(attended/total*100)}%)" if total > 0 else "N/A"
-                                    except:
-                                        pct = "N/A"
-                                    try:
-                                        slots = core_api.get_timetable(gid, req_s) or []
-                                        slot_str = ", ".join(set(f"{s.get('KETERANGAN_HARI','')} {s.get('MASA_MULA','')}-{s.get('MASA_TAMAT','')}" for s in slots if isinstance(s,dict) and s.get('KETERANGAN_HARI')))
-                                    except:
-                                        slot_str = "?"
-                                    lines.append(f"📚 <b>{c['code']} {c.get('course_group','')}</b>\n{c.get('name','')}\n🕐 {slot_str}\n📊 Attendance: {pct}\n")
-                                send_telegram_message(chat_id, "\n".join(lines))
-                            except Exception as e:
-                                send_telegram_message(chat_id, f"⚠️ Error fetching timetable: {str(e)[:100]}")
+                    send_telegram_timetable(chat_id)
+                    
+                elif cb_data == '/config':
+                    send_telegram_config(chat_id, message_id=msg.get('message_id'))
+                    
+                elif cb_data.startswith('tg_feat_'):
+                    key_map = {'tg_feat_autojobs': 'notify_autojobs', 'tg_feat_morning': 'notify_morning_schedule', 'tg_feat_awareness': 'notify_class_awareness'}
+                    feat_key = key_map.get(cb_data)
+                    if feat_key:
+                        ts_row = pg_db.query_one("SELECT features FROM telegram_settings WHERE chat_id = %s", (chat_id,))
+                        if ts_row:
+                            feats = ts_row.get('features') or {}
+                            if isinstance(feats, str):
+                                try: feats = json.loads(feats)
+                                except: feats = {}
+                            default = True if feat_key == 'notify_autojobs' else False
+                            feats[feat_key] = not feats.get(feat_key, default)
+                            pg_db.execute("UPDATE telegram_settings SET features = %s WHERE chat_id = %s", (json.dumps(feats), chat_id))
+                            send_telegram_config(chat_id, message_id=msg.get('message_id'))
 
             return jsonify({"ok": True})
         except Exception as e:
