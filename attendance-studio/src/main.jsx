@@ -19,6 +19,10 @@ if ('serviceWorker' in navigator) {
 // ------------------------------------------------
 
 window.addEventListener('error', (event) => {
+  if (event.message === 'Script error.' || event.message?.includes('Script error')) {
+    console.warn("Ignored cross-origin script error.");
+    return;
+  }
   const errorDiv = document.createElement('div');
   errorDiv.style.position = 'fixed';
   errorDiv.style.top = '0';
