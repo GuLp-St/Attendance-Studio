@@ -1865,7 +1865,11 @@ def api_handler(path):
                     features = EXCLUDED.features
             """, (matric, json.dumps(features), get_malaysia_time()))
             _, bot_username = get_telegram_bot_config()
-            deep_link = f"https://t.me/{bot_username}?start={matric}" if bot_username else None
+            if bot_username:
+                clean_uname = bot_username.lstrip('@')
+                deep_link = f"tg://resolve?domain={clean_uname}&start={matric}"
+            else:
+                deep_link = None
             return jsonify({"status": "ok", "deep_link": deep_link})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
