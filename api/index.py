@@ -1054,30 +1054,46 @@ def api_handler(path):
                                     today_slots = [s for s in slots if isinstance(s, dict) and s.get('KETERANGAN_HARI', '').upper() == today_bm]
                                     for slot in today_slots:
                                         try:
-                                            dt_start = datetime.strptime(f"{today_str} {slot['MASA_MULA']}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
+                                            time_str = slot.get('MASA_MULA', '').strip()
+                                            if not time_str: continue
+                                            dt_start = datetime.strptime(f"{today_str} {time_str}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
                                             mins_until = (dt_start.timestamp() - now_my.timestamp()) / 60
-                                            if 25 <= mins_until <= 35:  # ~30min window
+                                            
+                                            if 10 <= mins_until <= 45:  # ~30min window (expanded to 35min span for Vercel Cron jitter)
                                                 code_label = f"{c_doc['code']} {c_doc.get('course_group','')}"
                                                 loc = slot.get('LOKASI', '?')
+                                                
+                                                # Duplicate Prevention Check
+                                                dup_title = 'Class Reminder'
+                                                dup = pg_db.query_one("SELECT id FROM notifications WHERE matric = %s AND title = %s AND body LIKE %s AND timestamp > NOW() - INTERVAL '2 hours'", (tg_matric, dup_title, f"%{time_str}%"))
+                                                if dup: continue
+                                                
                                                 aj = pg_db.query_one("SELECT mode FROM autoscan_jobs WHERE matric = %s AND gid = %s", (tg_matric, str(gid)))
                                                 if aj:
                                                     msg = (f"🔔 <b>Class Incoming!</b>\n<b>{code_label}</b>\n{c_doc.get('name','')}\n"
-                                                           f"🕐 {slot['MASA_MULA']} @ {loc}\n"
+                                                           f"🕐 {time_str} @ {loc}\n"
                                                            f"✅ AutoScan is active ({aj['mode'].upper().replace('_',' • ')})")
                                                     send_telegram_message(chat_id, msg)
                                                 else:
                                                     msg = (f"🔔 <b>Class Incoming!</b>\n<b>{code_label}</b>\n{c_doc.get('name','')}\n"
-                                                           f"🕐 {slot['MASA_MULA']} @ {loc}\n"
+                                                           f"🕐 {time_str} @ {loc}\n"
                                                            f"⚠️ AutoScan not active. Activate?")
                                                     keyboard = {"inline_keyboard": [[
                                                         {"text": "✅ CROWD", "callback_data": f"autoscan_{tg_matric}_{gid}_crowd_onetime"},
                                                         {"text": "⏰ L.MINUTE", "callback_data": f"autoscan_{tg_matric}_{gid}_time_onetime"}
                                                     ]]}
                                                     send_telegram_message(chat_id, msg, reply_markup=keyboard)
-                                        except: pass
-                                except: pass
-                    except: pass
-            except: pass
+                                                
+                                                create_notification(tg_matric, 'class', dup_title, 'INFO', f"Sent reminder for {code_label} at {time_str}", 'auto')
+                                                full_log += f"\nSent CA Reminder: {tg_matric} for {code_label}"
+                                        except Exception as e:
+                                            full_log += f"\nCA Parse Error ({gid}): {str(e)}"
+                                except Exception as e:
+                                    full_log += f"\nCA Timetable Error ({gid}): {str(e)}"
+                    except Exception as e: 
+                        full_log += f"\nCA User Error ({tg_matric}): {str(e)}"
+            except Exception as e:
+                full_log += f"\nCA Global Error: {str(e)}"
 
             return Response(full_log, headers=headers)
 
