@@ -174,7 +174,7 @@ export const ExpandedProgress = ({ stat, animKey, isFirstExpand, statContent, c,
     );
 };
 
-export const TimetableList = memo(function TimetableList({ timetable, courses, loading, expandedGid, onExpand, sessionsForExpanded, isLoadingSessions, onAction, onExempt, onAutoscan, onCancelAutoscan, actionLoading }) {
+export const TimetableList = memo(function TimetableList({ timetable, courses, loading, expandedGid, onExpand, sessionsForExpanded, isLoadingSessions, onAction, onExempt, onAutoscan, onCancelAutoscan, actionLoading, isVisible }) {
     const initialMountTime = useRef(Date.now());
     const containerRef = useRef(null);
 
@@ -249,7 +249,7 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
                 }
             }
         }
-    }, [currentWeekMin, timetable.length, expandedGid]);
+    }, [currentWeekMin, timetable.length, expandedGid, isVisible]);
 
     const liveTimeString = activeTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 

@@ -554,6 +554,7 @@ export default function Dashboard() {
                   onAutoscan={initAutoscan}
                   onCancelAutoscan={cancelAutoscan}
                   actionLoading={actionLoading}
+                  isVisible={activeTab === 'modules'}
               />
           )}
       </div>
