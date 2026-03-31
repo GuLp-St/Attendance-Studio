@@ -2037,7 +2037,10 @@ def api_handler(path):
                                 "INSERT INTO autoscan_jobs (matric, gid, createdAt, status, mode, job_type) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (matric, gid) DO UPDATE SET status = EXCLUDED.status, mode = EXCLUDED.mode",
                                 (matric, gid, get_malaysia_time(), 'pending', mode, 'class')
                             )
-                            send_telegram_message(chat_id, f"✅ AutoScan activated for class <code>{gid}</code> in <b>{mode.upper().replace('_',' • ')}</b> mode.")
+                            c_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (gid,))
+                            c_label = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"GID {gid}"
+                            mode_label = 'Crowd-Based 👥' if 'crowd' in mode else 'Last-Minute ⏰'
+                            send_telegram_message(chat_id, f"✅ <b>AutoScan Activated!</b>\n<b>{c_label}</b>\nMode: <b>{mode_label}</b>\n\nI'll automatically register your attendance when the trigger condition is met! 🎯")
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ Could not activate autoscan: {str(e)[:80]}")
                             
