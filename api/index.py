@@ -1001,44 +1001,50 @@ def api_handler(path):
 
                         # --- MORNING SCHEDULE ---
                         if features.get('notify_morning_schedule', True) and is_morning_window:
-                            morning_lines = [f"🌅 <b>Good Morning, {stud_name}!</b>\nHere is your schedule for today:\n"]
-                            has_classes = False
-                            for gid in group_ids:
-                                c_doc = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
-                                if not c_doc: continue
-                                try:
-                                    slots = core_api.get_timetable(str(gid), req_session) or []
-                                    day_map = {'AHAD':'Sunday','ISNIN':'Monday','SELASA':'Tuesday','RABU':'Wednesday','KHAMIS':'Thursday','JUMAAT':'Friday','SABTU':'Saturday'}
-                                    today_day = now_my.strftime('%A').upper()
-                                    day_my = {v.upper(): k for k, v in day_map.items()}
-                                    today_bm = day_my.get(today_day, today_day)
-                                    today_slots = [s for s in slots if isinstance(s, dict) and s.get('KETERANGAN_HARI', '').upper() == today_bm]
-                                    if today_slots:
-                                        has_classes = True
-                                        slot = today_slots[0]
-                                        code_label = f"{c_doc['code']} {c_doc.get('course_group','')}"
-                                        time_str = f"{slot.get('MASA_MULA','')} - {slot.get('MASA_TAMAT','')}"
-                                        loc = slot.get('LOKASI', '?')
-                                        # Check if autoscan already active
-                                        aj = pg_db.query_one("SELECT mode FROM autoscan_jobs WHERE matric = %s AND gid = %s", (tg_matric, str(gid)))
-                                        if aj:
-                                            morning_lines.append(f"📚 <b>{code_label}</b>\n🕐 {time_str} @ {loc}\n✅ AutoScan active ({aj['mode'].upper().replace('_',' • ')})\n")
-                                        else:
-                                            morning_lines.append(f"📚 <b>{code_label}</b>\n🕐 {time_str} @ {loc}\n")
-                                            morning_lines.append(f"▸ Activate AutoScan?")
-                                        # Inline buttons to activate autoscan
-                                        keyboard = {"inline_keyboard": [[
-                                            {"text": "✅ CROWD", "callback_data": f"autoscan_{tg_matric}_{gid}_crowd_onetime"},
-                                            {"text": "⏰ L.MINUTE", "callback_data": f"autoscan_{tg_matric}_{gid}_time_onetime"}
-                                        ]]} if not aj else None
-                                        if keyboard:
-                                            send_telegram_message(chat_id, "\n".join(morning_lines), reply_markup=keyboard)
-                                            morning_lines = []  # reset for next course
-                                except: pass
-                            if morning_lines and has_classes:
-                                send_telegram_message(chat_id, "\n".join(morning_lines))
-                            elif not has_classes and is_morning_window:
-                                send_telegram_message(chat_id, f"🌅 <b>Good Morning, {stud_name}!</b>\nNo classes scheduled for today. Have a great day! 🎉")
+                            dup_title = 'Morning Schedule'
+                            dup = pg_db.query_one("SELECT id FROM notifications WHERE matric = %s AND title = %s AND timestamp > NOW() - INTERVAL '12 hours'", (tg_matric, dup_title))
+                            if not dup:
+                                morning_lines = [f"🌅 <b>Good Morning, {stud_name}!</b>\nHere is your schedule for today:\n"]
+                                has_classes = False
+                                for gid in group_ids:
+                                    c_doc = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
+                                    if not c_doc: continue
+                                    try:
+                                        slots = core_api.get_timetable(str(gid), req_session) or []
+                                        day_map = {'AHAD':'Sunday','ISNIN':'Monday','SELASA':'Tuesday','RABU':'Wednesday','KHAMIS':'Thursday','JUMAAT':'Friday','SABTU':'Saturday'}
+                                        today_day = now_my.strftime('%A').upper()
+                                        day_my = {v.upper(): k for k, v in day_map.items()}
+                                        today_bm = day_my.get(today_day, today_day)
+                                        today_slots = [s for s in slots if isinstance(s, dict) and s.get('KETERANGAN_HARI', '').upper() == today_bm]
+                                        if today_slots:
+                                            has_classes = True
+                                            slot = today_slots[0]
+                                            code_label = f"{c_doc['code']} {c_doc.get('course_group','')}"
+                                            time_str = f"{slot.get('MASA_MULA','')} - {slot.get('MASA_TAMAT','')}"
+                                            loc = slot.get('LOKASI', '?')
+                                            # Check if autoscan already active
+                                            aj = pg_db.query_one("SELECT mode FROM autoscan_jobs WHERE matric = %s AND gid = %s", (tg_matric, str(gid)))
+                                            if aj:
+                                                morning_lines.append(f"📚 <b>{code_label}</b>\n🕐 {time_str} @ {loc}\n✅ AutoScan active ({aj['mode'].upper().replace('_',' • ')})\n")
+                                            else:
+                                                morning_lines.append(f"📚 <b>{code_label}</b>\n🕐 {time_str} @ {loc}\n")
+                                                morning_lines.append(f"▸ Activate AutoScan?")
+                                            # Inline buttons to activate autoscan
+                                            keyboard = {"inline_keyboard": [[
+                                                {"text": "✅ CROWD", "callback_data": f"autoscan_{tg_matric}_{gid}_crowd_onetime"},
+                                                {"text": "⏰ L.MINUTE", "callback_data": f"autoscan_{tg_matric}_{gid}_time_onetime"}
+                                            ]]} if not aj else None
+                                            if keyboard:
+                                                send_telegram_message(chat_id, "\n".join(morning_lines), reply_markup=keyboard)
+                                                morning_lines = []  # reset for next course
+                                    except: pass
+                                if morning_lines and has_classes:
+                                    send_telegram_message(chat_id, "\n".join(morning_lines))
+                                elif not has_classes and is_morning_window:
+                                    send_telegram_message(chat_id, f"🌅 <b>Good Morning, {stud_name}!</b>\nNo classes scheduled for today. Have a great day! 🎉")
+                                
+                                create_notification(tg_matric, 'class', dup_title, 'INFO', f"Sent morning schedule overview.", 'auto')
+                                full_log += f"\nSent Morning Schedule to {tg_matric}"
 
                         # --- CLASS AWARENESS ---
                         if features.get('notify_class_awareness', True):
