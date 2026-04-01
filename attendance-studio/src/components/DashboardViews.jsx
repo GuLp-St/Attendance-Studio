@@ -184,37 +184,13 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
         return () => clearInterval(t);
     }, []);
 
-    if (loading) {
-        return (
-            <div className="timetable-grid">
-                {[1,2,3,4].map(i => <Skeleton key={i} type="course-card" />)}
-            </div>
-        );
-    }
+    const [markerY, setMarkerY] = useState(0);
 
     const days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
-    
-    if (!timetable || timetable.length === 0) return <div style={{ textAlign: 'center', padding: '100px 20px', color: '#555', fontSize: '0.8rem', letterSpacing: '2px' }}>No classes registered</div>;
-
-    const getCourse = (gid) => courses?.find(c => c.gid === gid);
-
     let activeTime = liveTime;
     let nowMinutes = activeTime.getHours() * 60 + activeTime.getMinutes();
     let currentDayStr = days[activeTime.getDay() === 0 ? 6 : activeTime.getDay() - 1];
-
-    const parseMinutes = (tStr) => {
-        if (!tStr) return 0;
-        const match = tStr.match(/(\d+):(\d+) (AM|PM)/i);
-        if (!match) return 0;
-        let h = parseInt(match[1]), m = parseInt(match[2]);
-        if (match[3].toUpperCase() === 'PM' && h < 12) h += 12;
-        if (match[3].toUpperCase() === 'AM' && h === 12) h = 0;
-        return h * 60 + m;
-    };
-
     const currentWeekMin = days.indexOf(currentDayStr) * 24 * 60 + nowMinutes;
-
-    const [markerY, setMarkerY] = useState(0);
 
     useEffect(() => {
         if (!containerRef.current) return;
@@ -249,7 +225,29 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
                 }
             }
         }
-    }, [currentWeekMin, timetable.length, expandedGid, isVisible]);
+    }, [currentWeekMin, timetable?.length, expandedGid, isVisible]);
+
+    if (loading) {
+        return (
+            <div className="timetable-grid">
+                {[1,2,3,4].map(i => <Skeleton key={i} type="course-card" />)}
+            </div>
+        );
+    }
+
+    if (!timetable || timetable.length === 0) return <div style={{ textAlign: 'center', padding: '100px 20px', color: '#555', fontSize: '0.8rem', letterSpacing: '2px' }}>No classes registered</div>;
+
+    const getCourse = (gid) => courses?.find(c => c.gid === gid);
+
+    const parseMinutes = (tStr) => {
+        if (!tStr) return 0;
+        const match = tStr.match(/(\d+):(\d+) (AM|PM)/i);
+        if (!match) return 0;
+        let h = parseInt(match[1]), m = parseInt(match[2]);
+        if (match[3].toUpperCase() === 'PM' && h < 12) h += 12;
+        if (match[3].toUpperCase() === 'AM' && h === 12) h = 0;
+        return h * 60 + m;
+    };
 
     const liveTimeString = activeTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
