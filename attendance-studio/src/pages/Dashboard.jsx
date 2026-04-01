@@ -252,46 +252,84 @@ export default function Dashboard() {
   }, [user.courses, selectedCourse]);
 
   // E. Lazy Load Profile
+  const profileFetchFired = useRef(false);
   useEffect(() => {
-      if (user?.courses && user?.timetable && !user?.profile) {
+      if (user?.courses && user?.timetable && !user?.profile && !profileFetchFired.current) {
+          profileFetchFired.current = true;
           api.get(`/profile?matric=${user.matric}`).then(data => {
-              if (!data.error) setUser(prev => prev ? { ...prev, profile: data } : null);
-          }).catch(() => {});
+              if (!data.error) {
+                  setUser(prev => prev ? { ...prev, profile: data } : null);
+              } else {
+                  profileFetchFired.current = false;
+              }
+          }).catch(() => {
+              profileFetchFired.current = false;
+          });
       }
   }, [user]);
 
   // F. Timetable Foreground Polling (~1.5s interval)
+  const pollActive = useRef({});
   const pollAttempts = useRef({});
+  
   useEffect(() => {
      if (!user || !user.courses) return;
+     let mounted = true;
 
-     const timer = setInterval(() => {
-        user.courses.forEach(c => {
-           const hasSlots = user.timetable && user.timetable.some(t => t.gid === c.gid);
-           const attempts = pollAttempts.current[c.gid] || 0;
-           
-           // Poll out to max 30 attempts per course (45 seconds).
-           if (!hasSlots && attempts < 30) {
+     user.courses.forEach(c => {
+         const hasSlots = user.timetable && user.timetable.some(t => t.gid === c.gid);
+         
+         if (!hasSlots && !pollActive.current[c.gid]) {
+             const poll = async () => {
+                 if (!mounted) {
+                     pollActive.current[c.gid] = false;
+                     return;
+                 }
+                 
+                 const attempts = pollAttempts.current[c.gid] || 0;
+                 if (attempts >= 30) {
+                     pollActive.current[c.gid] = false;
+                     return;
+                 }
+
+                 pollActive.current[c.gid] = true;
                  pollAttempts.current[c.gid] = attempts + 1;
-                 api.get(`/course_timetable?gid=${c.gid}&matric=${user.matric}`).then(data => {
-                    if (!data.error && Array.isArray(data) && data.length > 0) {
-                        setUser(prev => {
-                            if (!prev) return null;
-                            let next = { ...prev };
-                            const existingStrs = new Set((next.timetable || []).map(t => `${t.gid}_${t.day}_${t.start}`));
-                            const uniqueNewSlots = data.filter(s => !existingStrs.has(`${s.gid}_${s.day}_${s.start}`));
-                            if (uniqueNewSlots.length > 0) {
-                                next.timetable = [...(next.timetable || []), ...uniqueNewSlots];
-                            }
-                            return next;
-                        });
-                    }
-                 }).catch(() => {})
-           }
-        });
-     }, 1500);
 
-     return () => clearInterval(timer);
+                 try {
+                     const data = await api.get(`/course_timetable?gid=${c.gid}&matric=${user.matric}`);
+                     if (!data.error && Array.isArray(data) && data.length > 0) {
+                         setUser(prev => {
+                             if (!prev) return null;
+                             let next = { ...prev };
+                             const existingStrs = new Set((next.timetable || []).map(t => `${t.gid}_${t.day}_${t.start}`));
+                             const uniqueNewSlots = data.filter(s => !existingStrs.has(`${s.gid}_${s.day}_${s.start}`));
+                             if (uniqueNewSlots.length > 0) {
+                                 next.timetable = [...(next.timetable || []), ...uniqueNewSlots];
+                                 return next;
+                             }
+                             return prev;
+                         });
+                         pollActive.current[c.gid] = false;
+                         return; // Success, stop polling
+                     }
+                 } catch (e) {}
+
+                 // If failed or empty, wait 1.5s then poll again
+                 if (mounted) {
+                     setTimeout(() => {
+                         pollActive.current[c.gid] = false;
+                         if (mounted) poll();
+                     }, 1500);
+                 } else {
+                     pollActive.current[c.gid] = false;
+                 }
+             };
+
+             poll();
+         }
+     });
+
+     return () => { mounted = false; };
   }, [user?.courses, user?.matric, setUser]);
 
   // =========================================================================
