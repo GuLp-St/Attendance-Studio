@@ -663,25 +663,19 @@ def api_handler(path):
             raw_timetable = []
 
             def fetch_group(gid):
-                info = core_api.get_group_info(gid, req_session)
-                timetable_slots = core_api.get_timetable(gid, req_session)
-                return gid, info, timetable_slots
+                return gid, core_api.get_group_info(gid, req_session)
 
             with ThreadPoolExecutor(max_workers=8) as ex:
                 futures = {ex.submit(fetch_group, gid): gid for gid in group_ids}
                 for f in as_completed(futures):
-                    gid, info, slots = f.result()
+                    gid, info = f.result()
                     if info:
                         info['autoscan_active'] = (gid in active_autoscan)
                         info['autoscan_mode'] = active_autoscan.get(gid)
                         info['gid'] = gid
-                        info['sessions'] = None
                         courses[gid] = info
-                        if slots and isinstance(slots, list):
-                            for s in slots:
-                                if isinstance(s, dict):
-                                    raw_timetable.append({"day": s.get('KETERANGAN_HARI'), "start": s.get('MASA_MULA'), "end": s.get('MASA_TAMAT'), "loc": s.get('LOKASI'), "code": info['code'], "name": info['name'], "group": info['group'], "gid": gid})
 
+            raw_timetable = []
 
             final_courses = list(courses.values())
             final_courses.sort(key=lambda x: x['code'])
@@ -707,7 +701,9 @@ def api_handler(path):
             with ThreadPoolExecutor(max_workers=4) as ex:
                 f_m = ex.submit(core_api.get_sessions, gid, req_session)
                 f_h = ex.submit(core_api.get_student_history, matric, info['code'], gid, req_session)
+                f_t = ex.submit(core_api.get_timetable, gid, req_session)
                 ml, hl = f_m.result() or [], f_h.result() or []
+                slots_res = f_t.result()
 
             ml.sort(key=lambda x: x['eventDate'], reverse=True)
             h_map = {h['jadualKehadiran']['id']: h for h in hl if 'jadualKehadiran' in h and 'id' in h['jadualKehadiran']}
@@ -733,7 +729,26 @@ def api_handler(path):
                     "name": s.get('topic') or s.get('description') or "",
                     "status": st, "log_id": lid
                 })
+            
+            
             return Response(json.dumps(c_sess), headers=headers)
+        except Exception as e: return jsonify({"error": str(e)}), 500
+
+    elif path == '/course_timetable':
+        matric, gid = args.get('matric'), args.get('gid')
+        try:
+            req_session = get_authorized_session()
+            info = core_api.get_group_info(gid, req_session)
+            if not info: raise Exception("Info Fail")
+            
+            # 1 retry only because frontend will be polling
+            slots = core_api.get_timetable(gid, req_session, retries=1)
+            raw_slots = []
+            if slots and isinstance(slots, list):
+                for s in slots:
+                    if isinstance(s, dict):
+                        raw_slots.append({"day": s.get('KETERANGAN_HARI'), "start": s.get('MASA_MULA'), "end": s.get('MASA_TAMAT'), "loc": s.get('LOKASI'), "code": info['code'], "name": info['name'], "group": info['group'], "gid": gid})
+            return Response(json.dumps(raw_slots), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/target_details':
@@ -1006,11 +1021,15 @@ def api_handler(path):
                             if not dup:
                                 morning_lines = [f"🌅 <b>Good Morning, {stud_name}!</b>\nHere is your schedule for today:\n"]
                                 has_classes = False
+                                fetch_failed = False
                                 for gid in group_ids:
                                     c_doc = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
                                     if not c_doc: continue
                                     try:
-                                        slots = core_api.get_timetable(str(gid), req_session) or []
+                                        slots = core_api.get_timetable(str(gid), req_session)
+                                        if slots is None:
+                                            fetch_failed = True
+                                            break
                                         day_map = {'AHAD':'Sunday','ISNIN':'Monday','SELASA':'Tuesday','RABU':'Wednesday','KHAMIS':'Thursday','JUMAAT':'Friday','SABTU':'Saturday'}
                                         today_day = now_my.strftime('%A').upper()
                                         day_my = {v.upper(): k for k, v in day_map.items()}
@@ -1038,6 +1057,9 @@ def api_handler(path):
                                                 send_telegram_message(chat_id, "\n".join(morning_lines), reply_markup=keyboard)
                                                 morning_lines = []  # reset for next course
                                     except: pass
+                                
+                                if fetch_failed: continue  # Skip notification and dup row; will retry next cron tick
+
                                 if morning_lines and has_classes:
                                     send_telegram_message(chat_id, "\n".join(morning_lines))
                                 elif not has_classes and is_morning_window:
@@ -1052,7 +1074,8 @@ def api_handler(path):
                                 c_doc = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
                                 if not c_doc: continue
                                 try:
-                                    slots = core_api.get_timetable(str(gid), req_session) or []
+                                    slots = core_api.get_timetable(str(gid), req_session)
+                                    if slots is None: continue
                                     day_map = {'AHAD':'Sunday','ISNIN':'Monday','SELASA':'Tuesday','RABU':'Wednesday','KHAMIS':'Thursday','JUMAAT':'Friday','SABTU':'Saturday'}
                                     today_day = now_my.strftime('%A').upper()
                                     day_my = {v.upper(): k for k, v in day_map.items()}

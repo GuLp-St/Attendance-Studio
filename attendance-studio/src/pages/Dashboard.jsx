@@ -185,15 +185,16 @@ export default function Dashboard() {
               // Sessions might be an array or { sessions: [], slots: [] }
               const newSessions = Array.isArray(data) ? data : (data.sessions || []);
               const newSlots = Array.isArray(data) ? [] : (data.slots || []);
+              const hasFailedSlots = Array.isArray(data);
               
               setUser(prev => {
                 if (!prev) return null;
                 let next = { ...prev };
-                next.courses = next.courses.map(pc => pc.gid === c.gid ? { ...pc, sessions: newSessions } : pc);
+                next.courses = next.courses.map(pc => pc.gid === c.gid ? { ...pc, sessions: newSessions, slotsFailed: hasFailedSlots } : pc);
                 // If the course details return timetable slots, merge them into the global timetable
                 if (newSlots.length > 0) {
-                   const existingIds = new Set(next.timetable.map(t => t.id || t.gid));
-                   const uniqueNewSlots = newSlots.filter(s => !existingIds.has(s.id || s.gid));
+                   const existingStrs = new Set(next.timetable.map(t => `${t.gid}_${t.day}_${t.start}`));
+                   const uniqueNewSlots = newSlots.filter(s => !existingStrs.has(`${s.gid}_${s.day}_${s.start}`));
                    next.timetable = [...next.timetable, ...uniqueNewSlots];
                 }
                 return next;
@@ -258,6 +259,40 @@ export default function Dashboard() {
           }).catch(() => {});
       }
   }, [user]);
+
+  // F. Timetable Foreground Polling (~1.5s interval)
+  const pollAttempts = useRef({});
+  useEffect(() => {
+     if (!user || !user.courses) return;
+
+     const timer = setInterval(() => {
+        user.courses.forEach(c => {
+           const hasSlots = user.timetable && user.timetable.some(t => t.gid === c.gid);
+           const attempts = pollAttempts.current[c.gid] || 0;
+           
+           // Poll out to max 30 attempts per course (45 seconds).
+           if (!hasSlots && attempts < 30) {
+                 pollAttempts.current[c.gid] = attempts + 1;
+                 api.get(`/course_timetable?gid=${c.gid}&matric=${user.matric}`).then(data => {
+                    if (!data.error && Array.isArray(data) && data.length > 0) {
+                        setUser(prev => {
+                            if (!prev) return null;
+                            let next = { ...prev };
+                            const existingStrs = new Set((next.timetable || []).map(t => `${t.gid}_${t.day}_${t.start}`));
+                            const uniqueNewSlots = data.filter(s => !existingStrs.has(`${s.gid}_${s.day}_${s.start}`));
+                            if (uniqueNewSlots.length > 0) {
+                                next.timetable = [...(next.timetable || []), ...uniqueNewSlots];
+                            }
+                            return next;
+                        });
+                    }
+                 }).catch(() => {})
+           }
+        });
+     }, 1500);
+
+     return () => clearInterval(timer);
+  }, [user?.courses, user?.matric, setUser]);
 
   // =========================================================================
   // 3. CORE ACTIONS
