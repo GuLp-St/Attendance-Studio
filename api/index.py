@@ -748,7 +748,7 @@ def api_handler(path):
                 for s in slots:
                     if isinstance(s, dict):
                         raw_slots.append({"day": s.get('KETERANGAN_HARI'), "start": s.get('MASA_MULA'), "end": s.get('MASA_TAMAT'), "loc": s.get('LOKASI'), "code": info['code'], "name": info['name'], "group": info['group'], "gid": gid})
-            return Response(json.dumps(raw_slots), headers=headers)
+            return Response(json.dumps(consolidate_timetable(raw_slots)), headers=headers)
         except Exception as e: return jsonify({"error": str(e)}), 500
 
     elif path == '/target_details':
