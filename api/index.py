@@ -199,102 +199,6 @@ def save_job_log(category, status, items_processed, log_text=""):
         """, (category,))
     except: pass
 
-# ==========================================
-#  TELEGRAM HELPERS
-# ==========================================
-
-def ensure_telegram_tables():
-    """Create telegram tables if they don't exist yet."""
-    try:
-        pg_db.execute("""
-            CREATE TABLE IF NOT EXISTS telegram_settings (
-                matric TEXT PRIMARY KEY,
-                chat_id TEXT,
-                enabled BOOLEAN DEFAULT TRUE,
-                features JSONB DEFAULT '{}',
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-        """)
-        pg_db.execute("""
-            ALTER TABLE system_config ADD COLUMN IF NOT EXISTS telegram_bot_token TEXT
-        """)
-        pg_db.execute("""
-            ALTER TABLE system_config ADD COLUMN IF NOT EXISTS telegram_bot_username TEXT
-        """)
-    except: pass
-
-def get_telegram_bot_config():
-    """Returns (token, username) from system_config."""
-    try:
-        row = pg_db.query_one("SELECT telegram_bot_token, telegram_bot_username FROM system_config WHERE id = 'config'")
-        if row:
-            return row.get('telegram_bot_token', ''), row.get('telegram_bot_username', '')
-    except: pass
-    return '', ''
-
-def send_telegram_message(chat_id, text, reply_markup=None, parse_mode='HTML', message_id=None, append_menu=True):
-    """Send or edit a message via Telegram Bot API. Returns True on success."""
-    token, _ = get_telegram_bot_config()
-    if not token or not chat_id:
-        return False
-        
-    if append_menu:
-        main_menu = [
-            {"text": "📅 Timetable", "callback_data": "/timetable"},
-            {"text": "⚙️ Config", "callback_data": "/config"},
-            {"text": "🌐 Open App", "url": "https://no-class.vercel.app"}
-        ]
-        
-        if reply_markup is None:
-            reply_markup = {"inline_keyboard": [main_menu]}
-        elif isinstance(reply_markup, dict) and 'inline_keyboard' in reply_markup:
-            reply_markup['inline_keyboard'].append(main_menu)
-
-    try:
-        payload = {'chat_id': chat_id, 'text': text, 'parse_mode': parse_mode}
-        if message_id:
-            payload['message_id'] = message_id
-            endpoint = 'editMessageText'
-        else:
-            endpoint = 'sendMessage'
-            
-        if reply_markup:
-            payload['reply_markup'] = json.dumps(reply_markup)
-        r = requests.post(
-            f'https://api.telegram.org/bot{token}/{endpoint}',
-            json=payload, timeout=10
-        )
-        return r.status_code == 200
-    except:
-        return False
-
-def get_user_telegram(matric):
-    """Returns telegram_settings row for a matric or None."""
-    try:
-        ensure_telegram_tables()
-        return pg_db.query_one("SELECT * FROM telegram_settings WHERE matric = %s AND enabled = TRUE", (matric,))
-    except:
-        return None
-
-def notify_telegram_autojob(matric, title, status, details, mode):
-    """Send autojob result notification to user's Telegram if enabled."""
-    try:
-        ts = get_user_telegram(matric)
-        if not ts or not ts.get('chat_id'): return
-        features = ts.get('features') or {}
-        if isinstance(features, str):
-            try: features = json.loads(features)
-            except: features = {}
-        if not features.get('notify_autojobs', True): return
-        emoji = '✅' if status == 'SUCCESS' else '❌'
-        mode_str = mode.upper().replace('_', ' • ') if mode else 'AUTO'
-        msg = (f"{emoji} <b>AutoScan {status}</b>\n"
-               f"<b>{title}</b>\n"
-               f"Mode: {mode_str}\n"
-               f"<code>{details[:200]}</code>")
-        send_telegram_message(ts['chat_id'], msg)
-    except: pass
-
 def consolidate_timetable(slots):
 
     if not slots: return []
@@ -369,95 +273,6 @@ def verify_and_save_student(m, data, pwd, active_sem):
 # ==========================================
 #  MAIN ROUTE HANDLER
 # ==========================================
-
-def send_telegram_timetable(chat_id, message_id=None):
-    ensure_telegram_tables()
-    # Send a temporary loading message if we have a message_id to edit (interactive button click) or start a new one
-    temp_msg_id = message_id
-    if message_id:
-        send_telegram_message(chat_id, "⏳ Fetching your latest timetable...", message_id=message_id, append_menu=False)
-        
-    ts_row = pg_db.query_one("SELECT matric FROM telegram_settings WHERE chat_id = %s AND enabled = TRUE", (chat_id,))
-    if not ts_row:
-        send_telegram_message(chat_id, "❌ Not linked. Open Attendance Studio to connect your account.", message_id=temp_msg_id)
-        return
-    matric = ts_row['matric']
-    stud = pg_db.query_one("SELECT name, groups FROM students WHERE matric = %s", (matric,))
-    if not stud:
-        send_telegram_message(chat_id, "❌ Could not find your account.", message_id=temp_msg_id)
-        return
-    name = stud.get('name', matric)
-    group_ids = stud.get('groups') or []
-    try:
-        req_s = get_authorized_session()
-        att_dict = {}
-        master_slots = []
-        for gid in group_ids:
-            c = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
-            if not c: continue
-            try:
-                sessions = core_api.get_sessions(gid, req_s) or []
-                hist = core_api.get_student_history(matric, c['code'], gid, req_s) or []
-                total = len(sessions)
-                attended = sum(1 for h in hist if h.get('status') in ('P','M','L'))
-                att_dict[gid] = f"{attended}/{total} ({int(attended/total*100)}%)" if total > 0 else "N/A"
-            except:
-                att_dict[gid] = "N/A"
-            try:
-                raw_slots = core_api.get_timetable(gid, req_s) or []
-                for s in raw_slots:
-                    if isinstance(s, dict) and s.get('KETERANGAN_HARI'):
-                        master_slots.append({
-                            'day': s['KETERANGAN_HARI'],
-                            'start': s['MASA_MULA'],
-                            'end': s['MASA_TAMAT'],
-                            'code': c['code'],
-                            'name': c.get('name') or s.get('NAMA_KURSUS_BI', ''),
-                            'group': c.get('course_group') or s.get('KUMP_KULIAH', ''),
-                            'loc': s.get('LOKASI') or s.get('RUANG') or s.get('KOD_RUANG') or None,
-                            'group_id': gid
-                        })
-            except: pass
-            
-        final_slots = consolidate_timetable(master_slots)
-        days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
-        d_map = {}
-        for fs in final_slots:
-            d = str(fs['day']).upper()
-            if d not in d_map: d_map[d] = []
-            d_map[d].append(fs)
-        
-        lines = [f"📅 <b>Timetable for {name}</b>\n<code>{matric}</code>"]
-        for d in days:
-            if d in d_map:
-                lines.append(f"\n<b>━━ {d} ━━</b>")
-                for fs in d_map[d]:
-                    group_str = f"({fs['group']})" if fs.get('group') else ""
-                    loc_str = f"📍 {fs['loc']}\n" if fs.get('loc') else ""
-                    lines.append(f"🕐 {fs['start']} - {fs['end']}\n📚 <b>{fs['code']} {group_str}</b> [{att_dict.get(fs['group_id'])}]\n📖 {fs['name']}\n{loc_str}")
-                    
-        send_telegram_message(chat_id, "\n".join(lines), message_id=temp_msg_id)
-    except Exception as e:
-        send_telegram_message(chat_id, f"⚠️ Error fetching timetable: {str(e)[:100]}", message_id=temp_msg_id)
-
-def send_telegram_config(chat_id, message_id=None):
-    ts_row = pg_db.query_one("SELECT features FROM telegram_settings WHERE chat_id = %s", (chat_id,))
-    if not ts_row:
-        send_telegram_message(chat_id, "❌ Not linked.", message_id=message_id)
-        return
-    feats = ts_row.get('features') or {}
-    if isinstance(feats, str):
-        try: feats = json.loads(feats)
-        except: feats = {}
-    kb = {
-        "inline_keyboard": [
-            [{"text": f"{'✅' if feats.get('notify_autojobs', True) else '❌'} Auto-Job Notifications", "callback_data": "tg_feat_autojobs"}],
-            [{"text": f"{'✅' if feats.get('notify_morning_schedule', False) else '❌'} Morning Schedule", "callback_data": "tg_feat_morning"}],
-            [{"text": f"{'✅' if feats.get('notify_class_awareness', False) else '❌'} Class Awareness", "callback_data": "tg_feat_awareness"}],
-            [{"text": "🛑 Disconnect Telegram", "callback_data": "/stop"}]
-        ]
-    }
-    send_telegram_message(chat_id, "<b>⚙️ Notification Settings</b>\nTap a feature below to toggle it:", reply_markup=kb, message_id=message_id)
 
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'DELETE', 'OPTIONS'])
@@ -883,7 +698,6 @@ def api_handler(path):
                         c_doc = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (target_id,))
                         c_label = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"Class {target_id}"
                         create_notification(matric, 'class', c_label, status, res, raw_mode)
-                        notify_telegram_autojob(matric, c_label, status, res, raw_mode)
                         
                         if auto_mode == 'onetime':
                             pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
@@ -919,7 +733,6 @@ def api_handler(path):
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
                         status = "SUCCESS" if is_success else "FAILED"
                         create_notification(matric, 'activity', target.get('name'), status, f"Check-In: {r}", raw_mode)
-                        notify_telegram_autojob(matric, target.get('name','Activity'), status, f"Check-In: {r}", raw_mode)
                         if not req_co:
                             if auto_mode == 'onetime':
                                 pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
@@ -930,7 +743,6 @@ def api_handler(path):
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
                         status = "SUCCESS" if is_success else "FAILED"
                         create_notification(matric, 'activity', target.get('name'), status, f"Check-Out: {r}", raw_mode)
-                        notify_telegram_autojob(matric, target.get('name','Activity'), status, f"Check-Out: {r}", raw_mode)
                         if auto_mode == 'onetime':
                             pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return f"CO Attempted ({status}) - Job Deleted"
@@ -994,135 +806,7 @@ def api_handler(path):
             full_log = f"Jobs: {len(jobs)} | AR Jobs: {len(ar_jobs)} | Processed: {len(results)}\n" + "\n".join(results)
             save_job_log("autojobs", "SUCCESS", len(results), full_log)
 
-            # --- TELEGRAM: MORNING SCHEDULE + CLASS AWARENESS ---
-            try:
-                ensure_telegram_tables()
-                tg_users = pg_db.query("SELECT * FROM telegram_settings WHERE enabled = TRUE AND chat_id IS NOT NULL")
-                is_morning_window = (now_my.hour == 0)  # midnight hour
 
-                for tg in tg_users:
-                    try:
-                        tg_matric = tg['matric']
-                        chat_id = tg['chat_id']
-                        features = tg.get('features') or {}
-                        if isinstance(features, str):
-                            try: features = json.loads(features)
-                            except: features = {}
-
-                        stud = pg_db.query_one("SELECT name, groups FROM students WHERE matric = %s", (tg_matric,))
-                        if not stud: continue
-                        group_ids = stud.get('groups') or []
-                        stud_name = stud.get('name', tg_matric)
-
-                        # --- MORNING SCHEDULE ---
-                        if features.get('notify_morning_schedule', True) and is_morning_window:
-                            dup_title = 'Morning Schedule'
-                            dup = pg_db.query_one("SELECT id FROM notifications WHERE matric = %s AND title = %s AND timestamp > NOW() - INTERVAL '12 hours'", (tg_matric, dup_title))
-                            if not dup:
-                                morning_lines = [f"🌅 <b>Good Morning, {stud_name}!</b>\nHere is your schedule for today:\n"]
-                                has_classes = False
-                                fetch_failed = False
-                                for gid in group_ids:
-                                    c_doc = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
-                                    if not c_doc: continue
-                                    try:
-                                        slots = core_api.get_timetable(str(gid), req_session)
-                                        if slots is None:
-                                            fetch_failed = True
-                                            break
-                                        day_map = {'AHAD':'Sunday','ISNIN':'Monday','SELASA':'Tuesday','RABU':'Wednesday','KHAMIS':'Thursday','JUMAAT':'Friday','SABTU':'Saturday'}
-                                        today_day = now_my.strftime('%A').upper()
-                                        day_my = {v.upper(): k for k, v in day_map.items()}
-                                        today_bm = day_my.get(today_day, today_day)
-                                        today_slots = [s for s in slots if isinstance(s, dict) and s.get('KETERANGAN_HARI', '').upper() == today_bm]
-                                        if today_slots:
-                                            has_classes = True
-                                            slot = today_slots[0]
-                                            code_label = f"{c_doc['code']} {c_doc.get('course_group','')}"
-                                            time_str = f"{slot.get('MASA_MULA','')} - {slot.get('MASA_TAMAT','')}"
-                                            loc = slot.get('LOKASI', '?')
-                                            # Check if autoscan already active
-                                            aj = pg_db.query_one("SELECT mode FROM autoscan_jobs WHERE matric = %s AND gid = %s", (tg_matric, str(gid)))
-                                            if aj:
-                                                morning_lines.append(f"📚 <b>{code_label}</b>\n🕐 {time_str} @ {loc}\n✅ AutoScan active ({aj['mode'].upper().replace('_',' • ')})\n")
-                                            else:
-                                                morning_lines.append(f"📚 <b>{code_label}</b>\n🕐 {time_str} @ {loc}\n")
-                                                morning_lines.append(f"▸ Activate AutoScan?")
-                                            # Inline buttons to activate autoscan
-                                            keyboard = {"inline_keyboard": [[
-                                                {"text": "✅ CROWD", "callback_data": f"autoscan_{tg_matric}_{gid}_crowd_onetime"},
-                                                {"text": "⏰ L.MINUTE", "callback_data": f"autoscan_{tg_matric}_{gid}_time_onetime"}
-                                            ]]} if not aj else None
-                                            if keyboard:
-                                                send_telegram_message(chat_id, "\n".join(morning_lines), reply_markup=keyboard)
-                                                morning_lines = []  # reset for next course
-                                    except: pass
-                                
-                                if fetch_failed: continue  # Skip notification and dup row; will retry next cron tick
-
-                                if morning_lines and has_classes:
-                                    send_telegram_message(chat_id, "\n".join(morning_lines))
-                                elif not has_classes and is_morning_window:
-                                    send_telegram_message(chat_id, f"🌅 <b>Good Morning, {stud_name}!</b>\nNo classes scheduled for today. Have a great day! 🎉")
-                                
-                                create_notification(tg_matric, 'class', dup_title, 'INFO', f"Sent morning schedule overview.", 'auto')
-                                full_log += f"\nSent Morning Schedule to {tg_matric}"
-
-                        # --- CLASS AWARENESS ---
-                        if features.get('notify_class_awareness', True):
-                            for gid in group_ids:
-                                c_doc = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (gid,))
-                                if not c_doc: continue
-                                try:
-                                    slots = core_api.get_timetable(str(gid), req_session)
-                                    if slots is None: continue
-                                    day_map = {'AHAD':'Sunday','ISNIN':'Monday','SELASA':'Tuesday','RABU':'Wednesday','KHAMIS':'Thursday','JUMAAT':'Friday','SABTU':'Saturday'}
-                                    today_day = now_my.strftime('%A').upper()
-                                    day_my = {v.upper(): k for k, v in day_map.items()}
-                                    today_bm = day_my.get(today_day, today_day)
-                                    today_slots = [s for s in slots if isinstance(s, dict) and s.get('KETERANGAN_HARI', '').upper() == today_bm]
-                                    for slot in today_slots:
-                                        try:
-                                            time_str = slot.get('MASA_MULA', '').strip()
-                                            if not time_str: continue
-                                            dt_start = datetime.strptime(f"{today_str} {time_str}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
-                                            mins_until = (dt_start.timestamp() - now_my.timestamp()) / 60
-                                            
-                                            if 10 <= mins_until <= 45:  # ~30min window (expanded to 35min span for Vercel Cron jitter)
-                                                code_label = f"{c_doc['code']} {c_doc.get('course_group','')}"
-                                                loc = slot.get('LOKASI', '?')
-                                                
-                                                # Duplicate Prevention Check
-                                                dup_title = 'Class Reminder'
-                                                dup = pg_db.query_one("SELECT id FROM notifications WHERE matric = %s AND title = %s AND body LIKE %s AND timestamp > NOW() - INTERVAL '2 hours'", (tg_matric, dup_title, f"%{time_str}%"))
-                                                if dup: continue
-                                                
-                                                aj = pg_db.query_one("SELECT mode FROM autoscan_jobs WHERE matric = %s AND gid = %s", (tg_matric, str(gid)))
-                                                if aj:
-                                                    msg = (f"🔔 <b>Class Incoming!</b>\n<b>{code_label}</b>\n{c_doc.get('name','')}\n"
-                                                           f"🕐 {time_str} @ {loc}\n"
-                                                           f"✅ AutoScan is active ({aj['mode'].upper().replace('_',' • ')})")
-                                                    send_telegram_message(chat_id, msg)
-                                                else:
-                                                    msg = (f"🔔 <b>Class Incoming!</b>\n<b>{code_label}</b>\n{c_doc.get('name','')}\n"
-                                                           f"🕐 {time_str} @ {loc}\n"
-                                                           f"⚠️ AutoScan not active. Activate?")
-                                                    keyboard = {"inline_keyboard": [[
-                                                        {"text": "✅ CROWD", "callback_data": f"autoscan_{tg_matric}_{gid}_crowd_onetime"},
-                                                        {"text": "⏰ L.MINUTE", "callback_data": f"autoscan_{tg_matric}_{gid}_time_onetime"}
-                                                    ]]}
-                                                    send_telegram_message(chat_id, msg, reply_markup=keyboard)
-                                                
-                                                create_notification(tg_matric, 'class', dup_title, 'INFO', f"Sent reminder for {code_label} at {time_str}", 'auto')
-                                                full_log += f"\nSent CA Reminder: {tg_matric} for {code_label}"
-                                        except Exception as e:
-                                            full_log += f"\nCA Parse Error ({gid}): {str(e)}"
-                                except Exception as e:
-                                    full_log += f"\nCA Timetable Error ({gid}): {str(e)}"
-                    except Exception as e: 
-                        full_log += f"\nCA User Error ({tg_matric}): {str(e)}"
-            except Exception as e:
-                full_log += f"\nCA Global Error: {str(e)}"
 
             return Response(full_log, headers=headers)
 
@@ -1821,29 +1505,10 @@ def api_handler(path):
                 # Also include current job running states
                 job_running = {t: _job_status[t]['running'] for t in _JOB_TYPES}
 
-                # Telegram users
-                telegram_users = []
-                try:
-                    ensure_telegram_tables()
-                    tg_rows = pg_db.query("SELECT matric, phone, chat_id, enabled, features, created_at FROM telegram_settings ORDER BY created_at DESC")
-                    tg_token, tg_username = get_telegram_bot_config()
-                    for r in tg_rows:
-                        rd = dict(r)
-                        feats = rd.get('features') or {}
-                        if isinstance(feats, str):
-                            try: feats = json.loads(feats)
-                            except: feats = {}
-                        rd['features'] = feats
-                        telegram_users.append(rd)
-                except: tg_token, tg_username = '', ''
-
                 return Response(json.dumps({
                     "config": cfg, "logs": logs, "system_logs": system_logs,
                     "jobs": jobs, "banned_ips": banned, "ip_meta": ip_meta,
-                    "auto_accounts": auto_accounts, "job_running": job_running,
-                    "telegram_users": telegram_users,
-                    "telegram_token": tg_token if 'tg_token' in dir() else '',
-                    "telegram_username": tg_username if 'tg_username' in dir() else ''
+                    "auto_accounts": auto_accounts, "job_running": job_running
                 }, default=json_serial), headers=headers)
             
             elif req_type == 'save_settings':
@@ -1855,8 +1520,7 @@ def api_handler(path):
                 if 'priority_student_ids' in data: fields.append('priority_students = %s'); values.append(data['priority_student_ids'])
                 if 'system_matric' in data: fields.append('system_matric = %s'); values.append(data['system_matric'])
                 if 'system_pwd' in data: fields.append('system_pwd = %s'); values.append(data['system_pwd'])
-                if 'telegram_token' in data: fields.append('telegram_bot_token = %s'); values.append(data['telegram_token'])
-                if 'telegram_username' in data: fields.append('telegram_bot_username = %s'); values.append(data['telegram_username'])
+
                 
                 if fields:
                     pg_db.execute(f"UPDATE system_config SET {', '.join(fields)} WHERE id = 'config'", tuple(values))
@@ -1955,183 +1619,12 @@ def api_handler(path):
                 pg_db.execute("DELETE FROM logs WHERE ip = %s OR device_id = %s", (target_id, target_id))
                 return jsonify({"status": "Device logs cleared & unbanned"})
 
-            elif req_type == 'save_bot_token':
-                token = data.get('token', '').strip()
-                username = data.get('username', '').strip()
-                ensure_telegram_tables()
-                pg_db.execute("UPDATE system_config SET telegram_bot_token = %s, telegram_bot_username = %s WHERE id = 'config'", (token, username))
-                return jsonify({"status": "Bot token saved"})
 
-            elif req_type == 'delete_telegram_user':
-                matric = data.get('matric')
-                ensure_telegram_tables()
-                pg_db.execute("DELETE FROM telegram_settings WHERE matric = %s", (matric,))
-                return jsonify({"status": "Removed"})
         except Exception as e:
             traceback.print_exc()
             return jsonify({"error": str(e)}), 500
 
-    # ==========================================
-    #  TELEGRAM ENDPOINTS
-    # ==========================================
 
-    elif path == '/telegram/status':
-        matric = args.get('matric')
-        try:
-            ensure_telegram_tables()
-            ts = pg_db.query_one("SELECT * FROM telegram_settings WHERE matric = %s", (matric,))
-            _, bot_username = get_telegram_bot_config()
-            result = {
-                "enabled": False, "chat_id": None,
-                "features": {}, "bot_username": bot_username
-            }
-            if ts:
-                feats = ts.get('features') or {}
-                if isinstance(feats, str):
-                    try: feats = json.loads(feats)
-                    except: feats = {}
-                result = {
-                    "enabled": bool(ts.get('enabled')),
-                    "chat_id": ts.get('chat_id'), "features": feats,
-                    "bot_username": bot_username
-                }
-            return Response(json.dumps(result, default=json_serial), headers=headers)
-        except Exception as e:
-            traceback.print_exc()
-            return jsonify({"error": str(e)}), 500
-
-    elif path == '/telegram/setup' and request.method == 'POST':
-        d = request.get_json() or {}
-        matric = d.get('matric')
-        try:
-            ensure_telegram_tables()
-            features = d.get('features', {})
-            pg_db.execute("""
-                INSERT INTO telegram_settings (matric, enabled, features, created_at)
-                VALUES (%s, TRUE, %s, %s)
-                ON CONFLICT (matric) DO UPDATE SET
-                    enabled = TRUE,
-                    features = EXCLUDED.features
-            """, (matric, json.dumps(features), get_malaysia_time()))
-            _, bot_username = get_telegram_bot_config()
-            if bot_username:
-                clean_uname = bot_username.lstrip('@')
-                deep_link = f"tg://resolve?domain={clean_uname}&start={matric}"
-            else:
-                deep_link = None
-            return jsonify({"status": "ok", "deep_link": deep_link})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-    elif path == '/telegram/disable' and request.method == 'POST':
-        d = request.get_json() or {}
-        matric = d.get('matric')
-        try:
-            ensure_telegram_tables()
-            pg_db.execute("UPDATE telegram_settings SET enabled = FALSE, chat_id = NULL WHERE matric = %s", (matric,))
-            return jsonify({"status": "disabled"})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-    elif path == '/telegram/webhook' and request.method == 'POST':
-        """Receives Telegram Bot API updates."""
-        try:
-            update = request.get_json() or {}
-            cb = update.get('callback_query')
-            
-            if cb:
-                cb_id = cb.get('id')
-                cb_data = cb.get('data', '')
-                msg = cb.get('message', {})
-                chat_id = str(msg.get('chat', {}).get('id', ''))
-                
-                token, _ = get_telegram_bot_config()
-                if token and cb_id:
-                    try: requests.post(f'https://api.telegram.org/bot{token}/answerCallbackQuery', json={'callback_query_id': cb_id}, timeout=5)
-                    except: pass
-
-                if cb_data.startswith('autoscan_'):
-                    parts = cb_data.split('_', 3)
-                    if len(parts) == 4:
-                        _, matric, gid, mode = parts
-                        try:
-                            ensure_telegram_tables()
-                            pg_db.execute(
-                                "INSERT INTO autoscan_jobs (matric, gid, createdAt, status, mode, job_type) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (matric, gid) DO UPDATE SET status = EXCLUDED.status, mode = EXCLUDED.mode",
-                                (matric, gid, get_malaysia_time(), 'pending', mode, 'class')
-                            )
-                            c_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (gid,))
-                            c_label = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"GID {gid}"
-                            mode_label = 'Crowd-Based 👥' if 'crowd' in mode else 'Last-Minute ⏰'
-                            send_telegram_message(chat_id, f"✅ <b>AutoScan Activated!</b>\n<b>{c_label}</b>\nMode: <b>{mode_label}</b>\n\nI'll automatically register your attendance when the trigger condition is met! 🎯")
-                        except Exception as e:
-                            send_telegram_message(chat_id, f"❌ Could not activate autoscan: {str(e)[:80]}")
-                            
-                elif cb_data == '/timetable':
-                    send_telegram_timetable(chat_id, message_id=msg.get('message_id'))
-                    
-                elif cb_data == '/config':
-                    send_telegram_config(chat_id, message_id=msg.get('message_id'))
-                    
-                elif cb_data == '/stop':
-                    ensure_telegram_tables()
-                    pg_db.execute("UPDATE telegram_settings SET enabled = FALSE, chat_id = NULL WHERE chat_id = %s", (chat_id,))
-                    send_telegram_message(chat_id, "🔕 Telegram notifications disabled.\nYou can re-enable this anytime from Attendance Studio.", message_id=msg.get('message_id'), append_menu=False)
-                    
-                elif cb_data.startswith('tg_feat_'):
-                    key_map = {'tg_feat_autojobs': 'notify_autojobs', 'tg_feat_morning': 'notify_morning_schedule', 'tg_feat_awareness': 'notify_class_awareness'}
-                    feat_key = key_map.get(cb_data)
-                    if feat_key:
-                        ts_row = pg_db.query_one("SELECT features FROM telegram_settings WHERE chat_id = %s", (chat_id,))
-                        if ts_row:
-                            feats = ts_row.get('features') or {}
-                            if isinstance(feats, str):
-                                try: feats = json.loads(feats)
-                                except: feats = {}
-                            default = True if feat_key == 'notify_autojobs' else False
-                            feats[feat_key] = not feats.get(feat_key, default)
-                            pg_db.execute("UPDATE telegram_settings SET features = %s WHERE chat_id = %s", (json.dumps(feats), chat_id))
-                            send_telegram_config(chat_id, message_id=msg.get('message_id'))
-
-            elif update.get('message'):
-                msg = update.get('message')
-                chat_id = str(msg.get('chat', {}).get('id', ''))
-                text = msg.get('text', '').strip()
-
-                if text.startswith('/start'):
-                    parts = text.split(' ', 1)
-                    if len(parts) > 1:
-                        matric = parts[1].strip()
-                        ensure_telegram_tables()
-                        row = pg_db.query_one("SELECT matric FROM telegram_settings WHERE matric = %s", (matric,))
-                        if row:
-                            pg_db.execute("UPDATE telegram_settings SET chat_id = %s WHERE matric = %s", (chat_id, matric))
-                            stud = pg_db.query_one("SELECT name FROM students WHERE matric = %s", (matric,))
-                            name = stud['name'] if stud else matric
-                            send_telegram_message(chat_id,
-                                f"✅ <b>Linked!</b>\nYour Attendance Studio account (<code>{matric}</code>) is now connected, <b>{name}</b>!\n\n"
-                                f"Access your settings and schedule from the menu below! 👇")
-                        else:
-                            send_telegram_message(chat_id, "❌ Matric not found. Please enable Telegram in Attendance Studio first.")
-                    else:
-                        send_telegram_message(chat_id, "👋 Welcome to Attendance Studio Bot!\nOpen the app to link your account.")
-
-                elif text == '/timetable':
-                    send_telegram_timetable(chat_id)
-
-                elif text == '/config':
-                    send_telegram_config(chat_id)
-
-                elif text == '/stop':
-                    ensure_telegram_tables()
-                    pg_db.execute("UPDATE telegram_settings SET enabled = FALSE, chat_id = NULL WHERE chat_id = %s", (chat_id,))
-                    send_telegram_message(chat_id, "🔕 Telegram notifications disabled. You can re-enable from Attendance Studio.")
-
-
-            return jsonify({"ok": True})
-        except Exception as e:
-            traceback.print_exc()
-            return jsonify({"ok": True})  # Always 200 to Telegram
 
     return jsonify({"error": "Endpoint Not Found"}), 404
 

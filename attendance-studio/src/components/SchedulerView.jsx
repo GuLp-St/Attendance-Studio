@@ -155,189 +155,7 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
           .replace(' •  • ', ' • ');
     };
 
-    // --- TELEGRAM STATE ---
-    const [tgStatus, setTgStatus] = useState(null); // null = loading
-    const [tgLoading, setTgLoading] = useState(false);
-    const [tgFeatures, setTgFeatures] = useState({ notify_autojobs: true, notify_morning_schedule: true, notify_class_awareness: true });
 
-    useEffect(() => {
-        if (tab === 'telegram') loadTgStatus();
-    }, [tab]);
-
-    const loadTgStatus = async () => {
-        setTgStatus(null);
-        try {
-            const res = await api.get(`/telegram/status?matric=${user.matric}`);
-            setTgStatus(res);
-            if (res.features && Object.keys(res.features).length > 0) setTgFeatures(res.features);
-        } catch(e) {
-            setTgStatus({ enabled: false, chat_id: null, features: {} });
-        }
-    };
-
-    const saveTgFeatures = async (newFeats) => {
-        if (!tgStatus?.enabled) return;
-        try {
-            await api.post('/telegram/setup', { matric: user.matric, features: newFeats });
-        } catch(e) {}
-    };
-
-    const enableTelegram = async () => {
-        setTgLoading(true);
-        try {
-            const res = await api.post('/telegram/setup', { matric: user.matric, features: tgFeatures });
-            if (res.error) { showToast(res.error, 'error'); return; }
-            if (res.deep_link) {
-                showToast('Telegram enabled! Click the button to link your account.', 'success');
-            } else {
-                showToast('Telegram enabled! No bot configured yet — ask your admin.', 'info');
-            }
-            await loadTgStatus();
-        } catch(e) { showToast(e.message, 'error'); }
-        setTgLoading(false);
-    };
-
-    const disableTelegram = async () => {
-        if (!await confirm('Disconnect Telegram? You will stop receiving notifications.')) return;
-        setTgLoading(true);
-        try {
-            await api.post('/telegram/disable', { matric: user.matric });
-            showToast('Telegram disconnected.', 'success');
-            await loadTgStatus();
-        } catch(e) { showToast(e.message, 'error'); }
-        setTgLoading(false);
-    };
-
-    const toggleTgFeature = async (key) => {
-        const newFeats = { ...tgFeatures, [key]: !tgFeatures[key] };
-        setTgFeatures(newFeats);
-        await saveTgFeatures(newFeats);
-    };
-
-    const TelegramTab = () => {
-        if (tgStatus === null) return <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>Loading...</div>;
-
-        const isEnabled = tgStatus.enabled;
-        const isLinked = isEnabled && !!tgStatus.chat_id;
-        const cleanName = tgStatus.bot_username?.replace('@', '');
-        const deepLink = cleanName ? `tg://resolve?domain=${cleanName}&start=${user.matric}` : null;
-
-        const FeatureToggle = ({ label, icon, desc, featureKey }) => (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', border: '1px solid var(--grid-line)', borderRadius: '6px', marginBottom: '8px', opacity: tgLoading ? 0.6 : 1 }}>
-                <div style={{ fontSize: '1.2rem' }}>{icon}</div>
-                <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#fff' }}>{label}</div>
-                    <div style={{ fontSize: '0.65rem', color: '#888', marginTop: '2px' }}>{desc}</div>
-                </div>
-                <div
-                    onClick={() => !tgLoading && toggleTgFeature(featureKey)}
-                    style={{ 
-                        width: '36px', height: '20px', borderRadius: '10px', cursor: 'pointer',
-                        background: tgFeatures[featureKey] ? 'var(--primary)' : 'var(--grid-line)',
-                        position: 'relative', transition: 'background 0.2s', flexShrink: 0
-                    }}
-                >
-                    <div style={{
-                        position: 'absolute', top: '3px',
-                        left: tgFeatures[featureKey] ? '19px' : '3px',
-                        width: '14px', height: '14px', borderRadius: '50%',
-                        background: '#fff', transition: 'left 0.2s'
-                    }} />
-                </div>
-            </div>
-        );
-
-        return (
-            <div>
-                {/* HEADER */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', padding: '15px', background: 'rgba(0,243,255,0.05)', borderRadius: '8px', border: '1px solid rgba(0,243,255,0.2)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0088cc' }}>
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M20.665 3.717l-17.73 6.837c-1.21.486-1.203 1.161-.222 1.462l4.552 1.42 10.532-6.645c.498-.303.953-.14.579.192l-8.533 7.701h-.002l.002.001-.314 4.692c.46 0 .663-.211.921-.46l2.211-2.15 4.599 3.397c.848.467 1.457.227 1.668-.785l3.019-14.228c.309-1.239-.473-1.8-1.282-1.434z"/>
-                        </svg>
-                    </div>
-                    <div>
-                        <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: 'var(--primary)' }}>TELEGRAM NOTIFICATIONS</div>
-                        <div style={{ fontSize: '0.65rem', color: '#888', marginTop: '2px' }}>Receive alerts directly in your Telegram chat</div>
-                    </div>
-                    <div style={{ marginLeft: 'auto', fontSize: '0.65rem', padding: '3px 8px', borderRadius: '12px', fontWeight: 'bold', background: isLinked ? 'rgba(0,255,0,0.1)' : isEnabled ? 'rgba(255,200,0,0.1)' : 'rgba(255,0,0,0.1)', color: isLinked ? '#0f0' : isEnabled ? '#ffd700' : '#f00' }}>
-                        {isLinked ? '✓ LINKED' : isEnabled ? '⏳ PENDING' : 'DISABLED'}
-                    </div>
-                </div>
-
-                {!isEnabled ? (
-                    // --- DISABLED STATE ---
-                    <div>
-                        <button
-                            className="btn"
-                            disabled={tgLoading}
-                            onClick={enableTelegram}
-                            style={{ width: '100%', padding: '12px', borderColor: 'var(--primary)', color: 'var(--primary)', fontWeight: 'bold', fontSize: '0.85rem' }}
-                        >
-                            {tgLoading ? 'ENABLING...' : 'ENABLE TELEGRAM NOTIFICATIONS'}
-                        </button>
-                    </div>
-                ) : (
-                    // --- ENABLED STATE ---
-                    <div>
-                        {/* Link status */}
-                        {!isLinked && (
-                            <div style={{ marginBottom: '20px', padding: '15px', background: 'rgba(255,200,0,0.05)', border: '1px solid rgba(255,200,0,0.3)', borderRadius: '6px' }}>
-                                <div style={{ fontSize: '0.8rem', color: '#ffd700', fontWeight: 'bold', marginBottom: '8px' }}>⏳ WAITING FOR TELEGRAM LINK</div>
-                                <div style={{ fontSize: '0.7rem', color: '#888', marginBottom: '12px' }}>Click the button below to open Telegram and link your account. Come back and refresh once done.</div>
-                                {deepLink && (
-                                    <a href={deepLink} target="_blank" rel="noreferrer" style={{ display: 'block', textDecoration: 'none' }}>
-                                        <button className="btn" style={{ width: '100%', padding: '10px', borderColor: '#0088cc', color: '#0088cc', fontWeight: 'bold', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                                                <path d="M20.665 3.717l-17.73 6.837c-1.21.486-1.203 1.161-.222 1.462l4.552 1.42 10.532-6.645c.498-.303.953-.14.579.192l-8.533 7.701h-.002l.002.001-.314 4.692c.46 0 .663-.211.921-.46l2.211-2.15 4.599 3.397c.848.467 1.457.227 1.668-.785l3.019-14.228c.309-1.239-.473-1.8-1.282-1.434z"/>
-                                            </svg>
-                                            OPEN TELEGRAM TO LINK ACCOUNT
-                                        </button>
-                                    </a>
-                                )}
-                                <button className="btn" onClick={loadTgStatus} style={{ width: '100%', marginTop: '8px', padding: '8px', borderColor: 'var(--grid-line)', color: '#888', fontSize: '0.7rem' }}>
-                                    ↻ REFRESH STATUS
-                                </button>
-                            </div>
-                        )}
-
-                        {/* FEATURE TOGGLES */}
-                        <div style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 'bold', marginBottom: '10px' }}>NOTIFICATION FEATURES</div>
-                        <FeatureToggle
-                            label="AutoJob Notifications"
-                            icon="🔔"
-                            desc="Get notified when AutoScan or Auto-Register job runs"
-                            featureKey="notify_autojobs"
-                        />
-                        <FeatureToggle
-                            label="Morning Schedule"
-                            icon="🌅"
-                            desc="Daily class schedule at midnight with AutoScan prompt"
-                            featureKey="notify_morning_schedule"
-                        />
-                        <FeatureToggle
-                            label="Class Awareness"
-                            icon="🔭"
-                            desc="Alert ~30 min before class starts, with AutoScan option"
-                            featureKey="notify_class_awareness"
-                        />
-
-                        {/* DISCONNECT */}
-                        <div style={{ marginTop: '24px' }}>
-                            <button
-                                className="btn"
-                                disabled={tgLoading}
-                                onClick={disableTelegram}
-                                style={{ width: '100%', padding: '10px', borderColor: '#f00', color: '#f00', fontSize: '0.75rem', fontWeight: 'bold', opacity: tgLoading ? 0.5 : 1 }}
-                            >
-                                {tgLoading ? '...' : 'DISCONNECT TELEGRAM'}
-                            </button>
-                        </div>
-                    </div>
-                )}
-            </div>
-        );
-    };
 
     // --- GLOBAL COURSES ---
     const activateGlobalCourses = async () => {
@@ -419,7 +237,7 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
     const TABS = [
         { id: 'auto-jobs',   label: 'AUTO JOBS'   },
         { id: 'history',     label: 'NOTIFICATIONS' },
-        { id: 'telegram',    label: 'TELEGRAM' },
+
     ];
 
     // Button states
@@ -679,12 +497,7 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                     }
                 </div>
             )}
-            {/* ===== TELEGRAM TAB ===== */}
-            {tab === 'telegram' && (
-                <div style={{ marginTop: 0 }}>
-                    <TelegramTab />
-                </div>
-            )}
+
         </div>
     );
 }
