@@ -48,7 +48,7 @@ export default function A2HSPrompt() {
 
   return (
     <div className="a2hs-banner">
-      <div style={{ flex: 1, 100: '100%', textAlign: 'center', marginBottom: '10px' }}>
+      <div style={{ flex: 1, width: '100%', textAlign: 'center', marginBottom: '10px' }}>
         <h4 style={{ margin: 0, color: 'var(--primary)', marginBottom: '5px' }}>ADD TO HOME SCREEN</h4>
         <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-dim)' }}>
           Install Attendance Studio for push notifications and faster access.
