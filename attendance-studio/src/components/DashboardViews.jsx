@@ -87,10 +87,9 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, o
                     style={{ padding: '4px 8px', borderColor: 'transparent', background: 'transparent', boxShadow: 'none', display:'flex', alignItems:'center' }}
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-dim)' }}>
-                        <line x1="12" y1="22" x2="12" y2="18"/>
-                        <path d="M8 22h8"/>
-                        <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5.76.76 1.23 1.52 1.41 2.5"/>
-                        <line x1="9" y1="18" x2="15" y2="18"/>
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
                     </svg>
                 </button>
                 <button className="back-btn" onClick={onLogout}>LOGOUT</button>
@@ -197,7 +196,8 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
         return () => clearInterval(t);
     }, []);
 
-    const [markerY, setMarkerY] = useState(0);
+    const [markerY, setMarkerY] = useState(null); // null = hidden until first measurement
+    const [measureTick, setMeasureTick] = useState(0);
 
     const days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
     let activeTime = liveTime;
@@ -205,7 +205,9 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
     let currentDayStr = days[activeTime.getDay() === 0 ? 6 : activeTime.getDay() - 1];
     const currentWeekMin = days.indexOf(currentDayStr) * 24 * 60 + nowMinutes;
 
-    useEffect(() => {
+    // Use useLayoutEffect so the calculation runs synchronously right after the DOM paints
+    // This avoids the 1-second delay from waiting for the next liveTime tick
+    React.useLayoutEffect(() => {
         if (!containerRef.current) return;
         const nodes = Array.from(containerRef.current.querySelectorAll('.time-node'));
         if (nodes.length === 0) return;
@@ -222,15 +224,15 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
         }).sort((a, b) => a.time - b.time);
 
         if (currentWeekMin < points[0].time) {
-            setMarkerY(points[0].y); // Lock solidly onto first class bounds
+            setMarkerY(points[0].y);
         } else if (currentWeekMin >= points[points.length-1].time) {
-            setMarkerY(points[points.length-1].y); // Lock solidly onto last class bounds
+            setMarkerY(points[points.length-1].y);
         } else {
             for (let i = 0; i < points.length - 1; i++) {
                 if (currentWeekMin >= points[i].time && currentWeekMin < points[i+1].time) {
                     const elapsed = currentWeekMin - points[i].time;
                     const duration = points[i+1].time - points[i].time;
-                    if (duration === 0) continue; // Bypass instantaneous timeline gaps
+                    if (duration === 0) continue;
                     const progress = elapsed / duration;
                     const yDiff = points[i+1].y - points[i].y;
                     setMarkerY(points[i].y + yDiff * progress);
@@ -238,16 +240,12 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
                 }
             }
         }
-    }, [currentWeekMin, timetable?.length, expandedGid, isVisible]);
+    }, [currentWeekMin, timetable?.length, expandedGid, isVisible, measureTick]);
 
-    // Re-run the marker calculation also when the container resizes/lays out for the first time.
-    // This ensures markerY is correct immediately on mount rather than waiting for first liveTime tick.
-    useEffect(() => {
+    // ResizeObserver: bump measureTick when container lays out so the above effect re-runs
+    React.useLayoutEffect(() => {
         if (!containerRef.current) return;
-        const ro = new ResizeObserver(() => {
-            // Trigger the marker calculation by bumping a counter via liveTime setter
-            setLiveTime(prev => new Date(prev.getTime() + 1));
-        });
+        const ro = new ResizeObserver(() => setMeasureTick(t => t + 1));
         ro.observe(containerRef.current);
         return () => ro.disconnect();
     }, [timetable?.length]);
@@ -283,7 +281,8 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
             <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, position: 'relative' }}>
                 <div className="timetable-grid" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 'clamp(4px, 1vh, 10px)', marginTop: '5px', padding: '0 10px 40px 45px', overflowY: 'auto', position: 'relative' }} ref={containerRef}>
                 
-                    {/* Global Timeline Overlay */}
+                    {/* Global Timeline Overlay — only show after first real measurement */}
+                    {markerY !== null && (
                     <div style={{ 
                         position: 'absolute', left: 0, right: '10px', top: `${markerY}px`, height: '1px', 
                         background: 'linear-gradient(90deg, transparent 0%, var(--primary) 15%, var(--primary) 100%)', 
@@ -305,6 +304,7 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
                             {liveTimeString}
                         </div>
                     </div>
+                    )}
                     {days.map(day => {
                 const slots = timetable.filter(t => t.day === day).sort((a,b) => parseMinutes(a.start) - parseMinutes(b.start));
                 const isToday = day === currentDayStr;
