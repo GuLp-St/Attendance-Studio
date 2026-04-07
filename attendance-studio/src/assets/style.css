@@ -59,10 +59,10 @@ button { font-family: inherit; }
     opacity: 1; transition: opacity 0.5s ease-out;
 }
 .splash-container.fade-out { opacity: 0; pointer-events: none; }
-.splash-logo { display: flex; flex-direction: column; align-items: center; }
-.splash-icon { width: 100px; height: 100px; margin-bottom: 20px; filter: drop-shadow(0 0 10px var(--primary)); animation: pulse 2s infinite; border-radius: 50%; background: var(--bg-color); }
-.splash-title { color: var(--primary); font-size: 1.5rem; text-align: center; line-height: 1.2; text-shadow: 0 0 10px var(--primary-dim); letter-spacing: 4px; font-weight: 300; margin-bottom: 30px; }
-.splash-loader { width: 40px; height: 40px; border: 2px solid transparent; border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
+.splash-logo { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; }
+.splash-icon { width: 100px; height: 100px; filter: drop-shadow(0 0 10px var(--primary)); border-radius: 50%; background: var(--bg-color); }
+.splash-title { position: absolute; top: 120px; color: var(--primary); font-size: 1.5rem; text-align: center; line-height: 1.2; text-shadow: 0 0 10px var(--primary-dim); letter-spacing: 4px; font-weight: 300; width: 300px; margin: 0; }
+.splash-loader { position: absolute; top: 200px; width: 40px; height: 40px; border: 2px solid transparent; border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
 
 .search-container { 
     display: flex; justify-content: center; align-items: center; 

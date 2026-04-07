@@ -83,7 +83,7 @@ export default function Onboarding() {
       actionType: 'click',
       title: 'COURSE DETAILS',
       text: 'Click on one of your registered courses below to explore its details.',
-      targetSelector: '.master-row',
+      targetSelector: '.course-card, .t-input',
       position: 'bottom'
     },
     {
