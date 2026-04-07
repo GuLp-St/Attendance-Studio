@@ -149,9 +149,10 @@ export default function Onboarding() {
         if (currentStep.targetSelector.startsWith('text=')) {
             const targetText = currentStep.targetSelector.split('=')[1];
             const btns = Array.from(document.querySelectorAll('button'));
-            el = btns.find(b => b.textContent && b.textContent.includes(targetText));
+            el = btns.find(b => b.textContent && b.textContent.includes(targetText) && b.getBoundingClientRect().height > 0);
         } else {
-            el = document.querySelector(currentStep.targetSelector);
+            const els = Array.from(document.querySelectorAll(currentStep.targetSelector));
+            el = els.find(e => e.getBoundingClientRect().height > 0) || null;
         }
 
         if (el) {
@@ -195,6 +196,12 @@ export default function Onboarding() {
       setStepIndex(stepIndex + 1);
     } else {
       endTutorial();
+    }
+  };
+
+  const handlePrev = () => {
+    if (stepIndex > 0) {
+      setStepIndex(stepIndex - 1);
     }
   };
 
@@ -266,6 +273,11 @@ export default function Onboarding() {
             {stepIndex + 1} / {steps.length}
           </span>
           <div style={{ display: 'flex', gap: '10px' }}>
+            {stepIndex > 0 && (
+              <button className="btn" style={{ padding: '6px 12px', fontSize: '0.7rem' }} onClick={handlePrev}>
+                PREV
+              </button>
+            )}
             <button className="btn" style={{ padding: '6px 12px', fontSize: '0.7rem' }} onClick={endTutorial}>
               SKIP ALL
             </button>
