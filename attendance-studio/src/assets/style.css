@@ -664,3 +664,31 @@ details > summary::-webkit-details-marker { display: none; }
     div.desktop-meta { display: flex; }
     span.desktop-meta { display: inline; }
 }
+
+/* ==========================================================================
+   12. TOGGLE SWITCH (TRON STYLE)
+   ========================================================================== */
+.switch { position: relative; display: inline-block; width: 40px; height: 20px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .slider {
+    position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+    background-color: rgba(255,255,255,0.05); transition: .4s;
+    border: 1px solid var(--text-dim); border-radius: 20px;
+}
+.switch .slider:before {
+    position: absolute; content: ""; height: 12px; width: 12px;
+    left: 3px; bottom: 3px; background-color: var(--text-dim);
+    transition: .4s; border-radius: 50%;
+}
+.switch input:checked + .slider {
+    background-color: rgba(0, 243, 255, 0.15);
+    border-color: var(--primary);
+    box-shadow: 0 0 10px var(--primary-dim);
+}
+.switch input:checked + .slider:before {
+    background-color: var(--primary);
+    transform: translateX(20px);
+    box-shadow: 0 0 8px var(--primary);
+}
+.switch input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
+.switch input:disabled + .slider:before { background-color: #555; }

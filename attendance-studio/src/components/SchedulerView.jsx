@@ -563,38 +563,53 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                             <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#ccc', fontSize: '0.85rem' }}>
                                 <span>Enable Notifications Globally</span>
-                                <input type="checkbox" checked={userSettings.notif_enabled} onChange={e => handleSettingChange('notif_enabled', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                                <label className="switch">
+                                    <input type="checkbox" checked={userSettings.notif_enabled} onChange={e => handleSettingChange('notif_enabled', e.target.checked)} />
+                                    <span className="slider"></span>
+                                </label>
                             </label>
                             
                             <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: userSettings.notif_enabled ? '#ccc' : '#555', fontSize: '0.85rem' }}>
-                                <span>Enable Web OS Push</span>
-                                <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_push_enabled} onChange={e => handleSettingChange('notif_push_enabled', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                                <span>Enable Push Notification</span>
+                                <label className="switch">
+                                    <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_push_enabled} onChange={e => handleSettingChange('notif_push_enabled', e.target.checked)} />
+                                    <span className="slider"></span>
+                                </label>
                             </label>
 
                             <hr style={{ borderTop: '1px solid var(--grid-line)', margin: '5px 0' }}/>
 
                             <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: userSettings.notif_enabled ? '#ccc' : '#555', fontSize: '0.85rem' }}>
-                                <span>Autojob Execution Logging</span>
-                                <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_autojobs} onChange={e => handleSettingChange('notif_autojobs', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                                <span>Autojob Results</span>
+                                <label className="switch">
+                                    <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_autojobs} onChange={e => handleSettingChange('notif_autojobs', e.target.checked)} />
+                                    <span className="slider"></span>
+                                </label>
                             </label>
 
                             <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: userSettings.notif_enabled ? '#ccc' : '#555', fontSize: '0.85rem' }}>
-                                <span>Morning Class Schedule Summary</span>
-                                <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_daily} onChange={e => handleSettingChange('notif_daily', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                                <span>Daily Schedule Reminder</span>
+                                <label className="switch">
+                                    <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_daily} onChange={e => handleSettingChange('notif_daily', e.target.checked)} />
+                                    <span className="slider"></span>
+                                </label>
                             </label>
 
                             <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: userSettings.notif_enabled ? '#ccc' : '#555', fontSize: '0.85rem' }}>
-                                <span>Pre-Class Awareness Alert</span>
-                                <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_class_awareness} onChange={e => handleSettingChange('notif_class_awareness', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                                <span>Class Reminder</span>
+                                <label className="switch">
+                                    <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_class_awareness} onChange={e => handleSettingChange('notif_class_awareness', e.target.checked)} />
+                                    <span className="slider"></span>
+                                </label>
                             </label>
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: (!userSettings.notif_enabled || !userSettings.notif_class_awareness) ? 0.5 : 1 }}>
-                                <span style={{ color: '#ccc', fontSize: '0.85rem' }}>Awareness Lead Time (Mins)</span>
+                                <span style={{ color: '#ccc', fontSize: '0.85rem' }}>Minutes before class to remind</span>
                                 <select 
                                     disabled={!userSettings.notif_enabled || !userSettings.notif_class_awareness}
                                     value={userSettings.notif_awareness_time} 
                                     onChange={e => handleSettingChange('notif_awareness_time', Number(e.target.value))}
-                                    className="t-input" style={{ width: '80px', padding: '4px', textAlign: 'center' }}
+                                    className="t-input" style={{ width: '80px', padding: '4px', textAlign: 'center', backgroundColor: '#111', color: '#00f3ff', border: '1px solid #00f3ff', borderRadius: '4px' }}
                                 >
                                     <option value={15}>15</option>
                                     <option value={30}>30</option>
