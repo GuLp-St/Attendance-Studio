@@ -57,9 +57,31 @@ const getDeviceId = () => {
     }
 };
 
+// --- RETRY HELPER ---
+const fetchWithRetry = async (url, options = {}, retries = 3, delayMs = 1000) => {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const res = await fetch(url, options);
+            // Only retry on server errors (5xx) or network failures, not client errors (4xx)
+            if (res.status >= 500 && attempt < retries) {
+                await new Promise(r => setTimeout(r, delayMs * Math.pow(2, attempt)));
+                continue;
+            }
+            return res;
+        } catch (networkErr) {
+            // True network failure (no connection, server went away)
+            if (attempt < retries) {
+                await new Promise(r => setTimeout(r, delayMs * Math.pow(2, attempt)));
+            } else {
+                throw networkErr;
+            }
+        }
+    }
+};
+
 export const api = {
   get: async (endpoint) => {
-    const res = await fetch(`${API_URL}${endpoint}`, {
+    const res = await fetchWithRetry(`${API_URL}${endpoint}`, {
         headers: { 'X-Device-ID': getDeviceId() }
     });
     if (!res.ok) {
@@ -74,7 +96,7 @@ export const api = {
   },
   
   post: async (endpoint, body) => {
-    const res = await fetch(`${API_URL}${endpoint}`, {
+    const res = await fetchWithRetry(`${API_URL}${endpoint}`, {
       method: 'POST',
       headers: { 
           'Content-Type': 'application/json',
@@ -88,13 +110,14 @@ export const api = {
   },
   
   delete: async (endpoint) => {
-    const res = await fetch(`${API_URL}${endpoint}`, {
+    const res = await fetchWithRetry(`${API_URL}${endpoint}`, {
       method: 'DELETE',
       headers: { 'X-Device-ID': getDeviceId() }
     });
     return res.json();
   }
 };
+
 
 // --- GLOBAL DICTIONARY CACHE ---
 let _directoryCache = null;
