@@ -110,6 +110,13 @@ export default function Onboarding() {
       position: 'center'
     },
     {
+      actionType: 'click',
+      title: 'SCHEDULER SETTINGS',
+      text: 'Now click on the SETTINGS tab to specify how these jobs behave.',
+      targetSelector: 'text=SETTINGS',
+      position: 'bottom'
+    },
+    {
       actionType: 'info',
       title: 'NOTIFICATIONS',
       text: 'The Settings panel lets you enable logic for push notifications. Make sure to "ADD TO HOME PAGE" if you haven\'t yet to utilize push notifications fully!',
@@ -148,11 +155,20 @@ export default function Onboarding() {
         let el = null;
         if (currentStep.targetSelector.startsWith('text=')) {
             const targetText = currentStep.targetSelector.split('=')[1];
-            const btns = Array.from(document.querySelectorAll('button'));
-            el = btns.find(b => b.textContent && b.textContent.includes(targetText) && b.getBoundingClientRect().height > 0);
+            // Get text matches and pick the deepest visible active element
+            const els = Array.from(document.querySelectorAll('button, div, span'));
+            const matches = els.filter(b => b.textContent && b.textContent.includes(targetText) && b.getBoundingClientRect().height > 0);
+            
+            // To prevent picking outer wrapper containers, favor buttons first, then take the deepest node
+            const buttonMatch = matches.find(b => b.tagName === 'BUTTON');
+            el = buttonMatch || matches.pop();
         } else {
-            const els = Array.from(document.querySelectorAll(currentStep.targetSelector));
-            el = els.find(e => e.getBoundingClientRect().height > 0) || null;
+            const selectors = currentStep.targetSelector.split(',').map(s => s.trim());
+            for (let s of selectors) {
+                const els = Array.from(document.querySelectorAll(s));
+                el = els.find(e => e.getBoundingClientRect().height > 0) || null;
+                if (el) break;
+            }
         }
 
         if (el) {
