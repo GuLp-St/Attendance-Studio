@@ -42,6 +42,7 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [sessionsFetched, setSessionsFetched] = useState(false); 
   const [tutorialKey, setTutorialKey] = useState(0); // Increment to restart tutorial
+  const [tutorialImmediate, setTutorialImmediate] = useState(false);
   
   // Modal Data State
   const [selectedCourse, setSelectedCourse] = useState(null);
@@ -554,6 +555,7 @@ export default function Dashboard() {
           onLogout={logout} 
           onRestartTutorial={() => {
             localStorage.removeItem('atd_tutorial_done');
+            setTutorialImmediate(true);
             setTutorialKey(k => k + 1);
           }}
           onOpenManager={loadManager} 
@@ -783,7 +785,7 @@ export default function Dashboard() {
           onSubmit={handleExemptSubmit} 
       />
       
-      <Onboarding key={tutorialKey} />
+      <Onboarding key={tutorialKey} immediate={tutorialImmediate} />
     </div>
   );
 }

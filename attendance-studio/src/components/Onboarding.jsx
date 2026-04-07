@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-export default function Onboarding() {
+export default function Onboarding({ immediate }) {
   const [stepIndex, setStepIndex] = useState(0);
   const [show, setShow] = useState(false);
   const [targetRect, setTargetRect] = useState(null);
   const [windowSize, setWindowSize] = useState({ w: window.innerWidth, h: window.innerHeight });
 
-  // Add a listener to resize
   useEffect(() => {
     const handleResize = () => setWindowSize({ w: window.innerWidth, h: window.innerHeight });
     window.addEventListener('resize', handleResize);
@@ -20,12 +19,25 @@ export default function Onboarding() {
 
   useEffect(() => {
     const isDone = localStorage.getItem('atd_tutorial_done') === 'true';
-    if (!isDone) setTimeout(() => setShow(true), 2000);
-  }, []);
+    if (!isDone) {
+      // Show immediately if manually triggered, otherwise wait 2s for UI to settle on first boot
+      const delay = immediate ? 0 : 2000;
+      const t = setTimeout(() => setShow(true), delay);
+      return () => clearTimeout(t);
+    }
+  }, [immediate]);
 
   // Complex sequence of steps matching specific user instructions
   const steps = [
-    // --- CLASSES TAB (Step 0 - 2) ---
+    // --- STEP 0: Guard — make sure user is on Classes tab ---
+    {
+      actionType: 'click',
+      title: 'LET\'S START',
+      text: 'Welcome to the Attendance Studio tutorial! Let\'s begin with the Classes tab. Click CLASSES to proceed.',
+      targetSelector: 'text=CLASSES',
+      position: 'bottom'
+    },
+    // --- CLASSES TAB (Step 1 - 3) ---
     {
       actionType: 'info',
       title: 'TIMETABLE & CLASSES',

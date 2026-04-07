@@ -84,8 +84,8 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, o
                     className="back-btn" 
                     title="Restart Tutorial"
                     onClick={onRestartTutorial}
-                    style={{ padding: '5px 10px', fontSize: '1rem', borderColor: 'var(--text-dim)', color: 'var(--text-dim)' }}
-                >?</button>
+                    style={{ padding: '4px 8px', fontSize: '1.1rem', borderColor: 'transparent', color: 'var(--text-dim)', background: 'transparent', boxShadow: 'none' }}
+                >💡</button>
                 <button className="back-btn" onClick={onLogout}>LOGOUT</button>
             </div>
         </div>
