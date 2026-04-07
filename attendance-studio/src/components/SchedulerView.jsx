@@ -103,27 +103,31 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
         }
     }, [tab, user.matric, vapidKey, settingsLoading]);
 
-    const handleSettingChange = (key, val) => setUserSettings({ ...userSettings, [key]: val });
-    const saveSettings = async () => {
-        setSettingsLoading(true);
+    const handleSettingChange = async (key, val) => {
+        const newSettings = { ...userSettings, [key]: val };
+        setUserSettings(newSettings);
+        
+        // Immediate visual update, background save
         try {
-            await api.post('/settings', { matric: user.matric, ...userSettings });
-            if (userSettings.notif_push_enabled && vapidKey) {
+            await api.post('/settings', { matric: user.matric, ...newSettings });
+            if (key === 'notif_push_enabled' && val && vapidKey) {
                 const sub = await subscribeToPush(vapidKey);
                 if (sub) {
                     await api.post('/subscribe', { matric: user.matric, subscription: sub });
                     showToast("Push Enabled!", "success");
                 } else {
                     showToast("Push permission denied/failed.", "error");
-                    const noPush = { ...userSettings, notif_push_enabled: false };
+                    const noPush = { ...newSettings, notif_push_enabled: false };
                     setUserSettings(noPush);
                     await api.post('/settings', { matric: user.matric, ...noPush });
                 }
-            } else {
-                showToast("Settings Saved", "success");
+            } else if (key === 'notif_push_enabled' && !val) {
+                showToast("Push Disabled", "info");
             }
-        } catch (e) { showToast("Save failed", "error"); }
-        setSettingsLoading(false);
+        } catch (e) { 
+            showToast("Save failed", "error"); 
+            setUserSettings(userSettings); // Revert on failure
+        }
     };
 
     // Notification Unread Logic
@@ -618,10 +622,8 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                                 </select>
                             </div>
 
-                            <button className="btn" style={{ borderColor: 'var(--primary)', color: 'var(--primary)', padding: '10px', marginTop: '10px' }} onClick={saveSettings} disabled={settingsLoading}>
-                                {settingsLoading ? 'SAVING...' : 'SAVE SETTINGS'}
-                            </button>
-                        </div>
+                            </div>
+
                     )}
                 </div>
             )}
