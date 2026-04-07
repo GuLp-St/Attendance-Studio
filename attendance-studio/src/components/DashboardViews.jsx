@@ -51,7 +51,7 @@ export const getStats = (sessions) => {
 // COMPONENTS
 // ============================================================================
 
-export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, notifCount }) {
+export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, onRestartTutorial, notifCount }) {
     return (
         <div className="nav-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '15px', minWidth: 0 }}>
@@ -79,7 +79,13 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, n
                 </div>
             </div>
             
-            <div className="header-actions" style={{ alignItems: 'center', flexShrink: 0 }}>
+            <div className="header-actions" style={{ alignItems: 'center', flexShrink: 0, display: 'flex', gap: '6px' }}>
+                <button 
+                    className="back-btn" 
+                    title="Restart Tutorial"
+                    onClick={onRestartTutorial}
+                    style={{ padding: '5px 10px', fontSize: '1rem', borderColor: 'var(--text-dim)', color: 'var(--text-dim)' }}
+                >?</button>
                 <button className="back-btn" onClick={onLogout}>LOGOUT</button>
             </div>
         </div>
@@ -226,6 +232,18 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
             }
         }
     }, [currentWeekMin, timetable?.length, expandedGid, isVisible]);
+
+    // Re-run the marker calculation also when the container resizes/lays out for the first time.
+    // This ensures markerY is correct immediately on mount rather than waiting for first liveTime tick.
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const ro = new ResizeObserver(() => {
+            // Trigger the marker calculation by bumping a counter via liveTime setter
+            setLiveTime(prev => new Date(prev.getTime() + 1));
+        });
+        ro.observe(containerRef.current);
+        return () => ro.disconnect();
+    }, [timetable?.length]);
 
     if (loading) {
         return (
