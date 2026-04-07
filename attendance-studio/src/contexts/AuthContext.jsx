@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { useToast } from './ToastContext';
 
@@ -11,6 +11,18 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(false);
   const { showToast } = useToast();
 
+  useEffect(() => {
+    // Auto-login if we have a persisted user
+    const savedUser = localStorage.getItem('atd_user');
+    if (savedUser) {
+      try {
+        setUser(JSON.parse(savedUser));
+      } catch (e) {
+        localStorage.removeItem('atd_user');
+      }
+    }
+  }, []);
+
   const login = async (matric, name) => {
     setLoading(true);
     try {
@@ -18,7 +30,9 @@ export const AuthProvider = ({ children }) => {
       if (data.error) throw new Error(data.error);
 
       // FIX: Do NOT push history here. Keep the stack clean.
-      setUser({ matric, name, ...data });
+      const userPayload = { matric, name, ...data };
+      setUser(userPayload);
+      localStorage.setItem('atd_user', JSON.stringify(userPayload));
 
       const recents = JSON.parse(localStorage.getItem('atd_recents') || '[]');
       const newRecents = [{ m: matric, n: name }, ...recents.filter(r => r.m !== matric)].slice(0, 5);
@@ -36,6 +50,7 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     setUser(null);
+    localStorage.removeItem('atd_user');
     // No history manipulation needed. React renders Search, URL stays as is (or whatever browser has).
   };
 

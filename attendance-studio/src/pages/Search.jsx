@@ -5,6 +5,7 @@ import { getDirectory } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import AdminPanel from './AdminPanel';
+import A2HSPrompt from '../components/A2HSPrompt';
 
 export default function Search() {
   const { login, loading } = useAuth();
@@ -90,9 +91,10 @@ export default function Search() {
   return (
     <div className="search-container">
       <div className="search-box">
+        <h2 style={{ textAlign: 'center', color: 'var(--primary)', marginBottom: '20px', letterSpacing: '3px' }}>LOGIN TO ATTENDANCE STUDIO</h2>
         <div style={{ position: 'relative', width: '100%' }}>
             <input 
-                type="text" className="search-input" placeholder="SEARCH DATABASE..." 
+                type="text" className="search-input" placeholder="LOGIN ID / MATRIC NO..." 
                 style={{ width: '100%', paddingRight: '40px' }}
                 value={query} onChange={(e) => handleSearch(e.target.value)}
                 onFocus={(e) => { 
@@ -114,7 +116,7 @@ export default function Search() {
         
         {results.length > 0 && (
           <div className="results-list" style={{ display: 'block', position: 'relative', width: '100%', left: 0, top: 0, zIndex: 20, marginTop: '10px' }}>
-            {results[0].isRecent && <div style={{padding:'10px 15px', fontSize:'0.7rem', color:'var(--accent)', borderBottom:'1px solid var(--grid-line)'}}>RECENT SEARCHES</div>}
+            {results[0].isRecent && <div style={{padding:'10px 15px', fontSize:'0.7rem', color:'var(--accent)', borderBottom:'1px solid var(--grid-line)'}}>SAVED ACCOUNTS</div>}
             {results.map(u => (
               <div key={u.m} className="result-item" onClick={() => login(u.m, u.n)}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
@@ -131,6 +133,8 @@ export default function Search() {
       <Modal title="ADMIN CONSOLE" isOpen={showAdmin} onClose={closeAdmin} maxWidth="900px">
         <AdminPanel />
       </Modal>
+      
+      <A2HSPrompt />
     </div>
   );
 }

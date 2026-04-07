@@ -22,6 +22,7 @@ import DirectoryView from '../components/DirectoryView';
 import Skeleton from '../components/Skeleton';
 
 import SchedulerView from '../components/SchedulerView';
+import Onboarding from '../components/Onboarding';
 
 // Modal Components
 import PromptModal from '../components/DashboardModals/PromptModal';
@@ -777,6 +778,7 @@ export default function Dashboard() {
           onSubmit={handleExemptSubmit} 
       />
       
+      <Onboarding />
     </div>
   );
 }
