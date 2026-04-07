@@ -43,7 +43,7 @@ export default function Onboarding() {
     {
       actionType: 'info',
       title: 'CLASS MANAGEMENT',
-      text: 'This is where you can manually SCAN, EXEMPT, or DELETE your attendance. Note that manual scanning is only available within the class time range. You can also quickly toggle AUTOSCAN here.',
+      text: 'This is where you can manually SCAN, EXEMPT, or DELETE your attendance. Note that scan in is only available within the class time range, manual and exempt however is always available. You can also quickly toggle AUTOSCAN here.',
       targetSelector: null, // Full screen overlay
       position: 'center'
     },
@@ -53,7 +53,7 @@ export default function Onboarding() {
       actionType: 'click',
       title: 'SWITCH TO ACTIVITIES',
       text: 'Now, let\'s look at Activities. Click the ACTIVITIES tab button.',
-      targetSelector: 'button.btn[style*="--accent"]', // Approximate match for Activities tab
+      targetSelector: 'text=ACTIVITIES',
       position: 'bottom'
     },
     {
@@ -69,7 +69,7 @@ export default function Onboarding() {
       actionType: 'click',
       title: 'SWITCH TO COURSEHUB',
       text: 'Click the COURSEHUB tab button.',
-      targetSelector: 'button.btn[style*="#0f0"]', // Coursehub tab
+      targetSelector: 'text=COURSEHUB',
       position: 'bottom'
     },
     {
@@ -99,7 +99,7 @@ export default function Onboarding() {
       actionType: 'click',
       title: 'SWITCH TO SCHEDULER',
       text: 'Click the SCHEDULER tab button to access Master Controls.',
-      targetSelector: 'button.btn[style*="#f0f"]', // Scheduler tab
+      targetSelector: 'text=SCHEDULER',
       position: 'bottom'
     },
     {
@@ -122,7 +122,7 @@ export default function Onboarding() {
       actionType: 'click',
       title: 'SWITCH TO DIRECTORY',
       text: 'Finally, click the DIRECTORY tab button to access the student database.',
-      targetSelector: 'button.btn[style*="#ff6"]', // Directory tab
+      targetSelector: 'text=DIRECTORY',
       position: 'bottom'
     },
     {
@@ -145,19 +145,26 @@ export default function Onboarding() {
 
     const findAndSetTarget = () => {
       if (currentStep.targetSelector) {
-        const el = document.querySelector(currentStep.targetSelector);
+        let el = null;
+        if (currentStep.targetSelector.startsWith('text=')) {
+            const targetText = currentStep.targetSelector.split('=')[1];
+            const btns = Array.from(document.querySelectorAll('button'));
+            el = btns.find(b => b.textContent && b.textContent.includes(targetText));
+        } else {
+            el = document.querySelector(currentStep.targetSelector);
+        }
+
         if (el) {
           const rect = el.getBoundingClientRect();
           setTargetRect({ top: rect.top, left: rect.left, width: rect.width, height: rect.height });
           
-          // If the step is waiting for a click, temporarily add a listener to advance
           if (currentStep.actionType === 'click') {
+             // Safe detachment logic handles re-renders properly
              const advance = () => {
                  el.removeEventListener('click', advance);
-                 setTimeout(() => handleNext(), 300); // Wait a bit for UI to settle
+                 setTimeout(() => handleNext(), 200); 
              };
              el.addEventListener('click', advance);
-             // Ensure we clean up if component unmounts or step changes
              return () => el.removeEventListener('click', advance);
           }
         } else {
@@ -219,24 +226,27 @@ export default function Onboarding() {
   const getTooltipStyle = () => {
     const base = {
       position: 'fixed', zIndex: 9999, background: 'rgba(5, 10, 15, 0.95)', border: '1px solid var(--primary)', 
-      boxShadow: '0 0 20px var(--primary-dim)', padding: '20px', borderRadius: '8px', 
-      width: '90%', maxWidth: '350px', color: '#fff', backdropFilter: 'blur(10px)', transition: 'all 0.3s ease'
+      boxShadow: '0 0 20px var(--primary-dim)', padding: '15px', borderRadius: '8px', 
+      width: '85vw', maxWidth: '320px', boxSizing: 'border-box', color: '#fff', backdropFilter: 'blur(10px)', transition: 'all 0.3s ease'
     };
     
     if (!targetRect || currentStep.position === 'center') {
       return { ...base, top: '50%', left: '50%', transform: 'translate(-50%, -50%)' };
     }
 
-    if (currentStep.position === 'bottom') {
-      const topPos = targetRect.top + targetRect.height + 20;
-      // If it flows off screen, flip it
-      if (topPos + 200 > windowSize.h) {
-          return { ...base, bottom: windowSize.h - targetRect.top + 20, left: '50%', transform: 'translateX(-50%)' };
-      }
-      return { ...base, top: topPos, left: '50%', transform: 'translateX(-50%)' };
+    // Try bottom position first
+    let finalTop = targetRect.top + targetRect.height + 20;
+    
+    // If bottom clips off screen, position it above target instead
+    if (finalTop + 200 > windowSize.h) {
+        finalTop = targetRect.top - 200 - 20;
+        // If it also clips top (super tight screen), just center it over everything
+        if (finalTop < 20) {
+            return { ...base, top: '50%', left: '50%', transform: 'translate(-50%, -50%)' };
+        }
     }
     
-    return { ...base, top: '50%', left: '50%', transform: 'translate(-50%, -50%)' };
+    return { ...base, top: finalTop, left: '50%', transform: 'translateX(-50%)' };
   };
 
   return (

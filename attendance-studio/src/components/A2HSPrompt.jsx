@@ -5,6 +5,11 @@ export default function A2HSPrompt() {
   const [showPrompt, setShowPrompt] = useState(false);
 
   useEffect(() => {
+    // Only show if not previously dismissed
+    if (localStorage.getItem('atd_a2hs_dismissed') === 'true') {
+        return;
+    }
+
     // Show the prompt immediately if not running standalone
     // We do this because the user explicitly wants to see it to indicate they should install!
     if (!window.matchMedia('(display-mode: standalone)').matches) {
@@ -35,6 +40,7 @@ export default function A2HSPrompt() {
   };
 
   const handleDismiss = () => {
+    localStorage.setItem('atd_a2hs_dismissed', 'true');
     setShowPrompt(false);
   };
 
@@ -42,15 +48,15 @@ export default function A2HSPrompt() {
 
   return (
     <div className="a2hs-banner">
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1, 100: '100%', textAlign: 'center', marginBottom: '10px' }}>
         <h4 style={{ margin: 0, color: 'var(--primary)', marginBottom: '5px' }}>ADD TO HOME SCREEN</h4>
         <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-dim)' }}>
           Install Attendance Studio for push notifications and faster access.
         </p>
       </div>
-      <div style={{ display: 'flex', gap: '10px' }}>
-        <button className="btn" onClick={handleDismiss}>MAYBE LATER</button>
-        <button className="btn" style={{ borderColor: 'var(--primary)', color: 'var(--primary)' }} onClick={handleInstallClick}>INSTALL APP</button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+        <button className="btn" style={{ borderColor: 'var(--primary)', color: 'var(--primary)', width: '100%', padding: '10px' }} onClick={handleInstallClick}>INSTALL APP</button>
+        <button className="btn" style={{ width: '100%', padding: '10px' }} onClick={handleDismiss}>MAYBE LATER</button>
       </div>
     </div>
   );
