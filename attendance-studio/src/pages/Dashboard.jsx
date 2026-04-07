@@ -277,7 +277,7 @@ export default function Dashboard() {
      let mounted = true;
 
      user.courses.forEach(c => {
-         const hasSlots = user.timetable && user.timetable.some(t => t.gid === c.gid);
+         const hasSlots = user.timetable && user.timetable.some(t => String(t.gid) === String(c.gid));
          
          if (!hasSlots && !pollActive.current[c.gid]) {
              const poll = async () => {
@@ -315,14 +315,10 @@ export default function Dashboard() {
                  } catch (e) {}
 
                  // If failed or empty, wait 1.5s then poll again
-                 if (mounted) {
-                     setTimeout(() => {
-                         pollActive.current[c.gid] = false;
-                         if (mounted) poll();
-                     }, 1500);
-                 } else {
+                 setTimeout(() => {
                      pollActive.current[c.gid] = false;
-                 }
+                     if (mounted) poll();
+                 }, 1500);
              };
 
              poll();
