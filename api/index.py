@@ -17,6 +17,7 @@ import traceback
 import core_api
 import base64
 from decimal import Decimal
+from pywebpush import webpush, WebPushException
 
 # ==========================================
 #  JOB LOCK & STATUS (in-process, per job type)
@@ -88,12 +89,17 @@ FALLBACK_ACT_START = 107000
 FALLBACK_ACT_LIMIT = 5000
 FALLBACK_ACT_MONTHS = 6
 
+# Web Push VAPID KEYS
+VAPID_PUBLIC_KEY = "BGRJsd1U5wtbyyO8MyKeLCowG9U2YJZ8gW9TyLHZxTBpw_EV2VnloxLhemZxnWKI-4f11JeIM8eMUrncrlzC5TU"
+VAPID_PRIVATE_KEY = "QtGtGXrdy2k7WqE1WpmNrBS6zV1_g3hQ44YeZGW9cPM"
+VAPID_CLAIMS = {"sub": "mailto:admin@attendance-studio.com"}
+
 # ==========================================
 #  HELPERS
 # ==========================================
 
 def get_malaysia_time():
-    return datetime.now(timezone.utc) + timedelta(hours=8)
+    return datetime.now(timezone(timedelta(hours=8)))
 
 def get_sys_config():
     conf = pg_db.query_one("SELECT * FROM system_config WHERE id = 'config'")
@@ -148,10 +154,52 @@ def log_action(ip, matric, action, details=""):
             (get_malaysia_time(), "USER_ACTION", ip, dev_id, matric, action, str(details)))
     except: pass
 
+def send_web_push(matric, payload):
+    try:
+        subs = pg_db.query("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE matric = %s", (matric,))
+        if not subs: return
+        for sub in subs:
+            try:
+                sub_info = {
+                    "endpoint": sub["endpoint"],
+                    "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}
+                }
+                webpush(
+                    subscription_info=sub_info,
+                    data=json.dumps(payload),
+                    vapid_private_key=VAPID_PRIVATE_KEY,
+                    vapid_claims=VAPID_CLAIMS
+                )
+            except WebPushException as ex:
+                if ex.response and ex.response.status_code in [404, 410]:
+                    pg_db.execute("DELETE FROM push_subscriptions WHERE endpoint = %s", (sub["endpoint"],))
+            except Exception:
+                pass
+    except Exception as e:
+        traceback.print_exc()
+
 def create_notification(matric, type, title, status, details, mode):
     try:
+        user_doc = pg_db.query_one("SELECT notif_enabled, notif_push_enabled, notif_autojobs, notif_daily, notif_class_awareness FROM students WHERE matric = %s", (matric,))
+        if user_doc:
+            if not user_doc.get('notif_enabled', False): return
+            
+            should_send = False
+            if mode == 'daily':
+                should_send = user_doc.get('notif_daily', False)
+            elif mode == 'awareness':
+                should_send = user_doc.get('notif_class_awareness', False)
+            else:
+                should_send = user_doc.get('notif_autojobs', False)
+                
+            if not should_send: return
+
         pg_db.execute("INSERT INTO notifications (timestamp, matric, type, title, status, details, mode) VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (get_malaysia_time(), matric, type, title, status, details, mode))
+            
+        if user_doc and user_doc.get('notif_push_enabled', False):
+            payload = {"title": f"[{status}] {title}" if status else title, "body": details}
+            send_web_push(matric, payload)
     except: pass
 
 def save_sync_log(log_type_key, status, messages, items_count):
@@ -639,6 +687,52 @@ def api_handler(path):
         except Exception as e: msg = str(e)
         return jsonify({"msg": msg})
 
+    elif path == '/settings' and request.method == 'GET':
+        matric = request.args.get('matric')
+        try:
+            doc = pg_db.query_one("SELECT notif_enabled, notif_push_enabled, notif_autojobs, notif_daily, notif_class_awareness, notif_awareness_time FROM students WHERE matric = %s", (matric,))
+            if not doc: return jsonify({"error": "User missing"}), 404
+            return jsonify({"settings": dict(doc), "vapidPublic": VAPID_PUBLIC_KEY})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    elif path == '/settings' and request.method == 'POST':
+        d = request.get_json()
+        matric = d.get('matric')
+        try:
+            pg_db.execute("""
+                UPDATE students 
+                SET notif_enabled = %s, notif_push_enabled = %s, notif_autojobs = %s, 
+                    notif_daily = %s, notif_class_awareness = %s, notif_awareness_time = %s 
+                WHERE matric = %s
+            """, (
+                d.get('notif_enabled', False), d.get('notif_push_enabled', False), 
+                d.get('notif_autojobs', False), d.get('notif_daily', False), 
+                d.get('notif_class_awareness', False), int(d.get('notif_awareness_time', 30)), 
+                matric
+            ))
+            return jsonify({"msg": "Settings updated"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    elif path == '/subscribe' and request.method == 'POST':
+        d = request.get_json()
+        matric = d.get('matric')
+        sub = d.get('subscription')
+        if not matric or not sub: return jsonify({"error": "Missing data"}), 400
+        try:
+            endpoint = sub.get('endpoint')
+            p256dh = sub.get('keys', {}).get('p256dh')
+            auth = sub.get('keys', {}).get('auth')
+            pg_db.execute("""
+                INSERT INTO push_subscriptions (matric, endpoint, p256dh, auth) 
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (endpoint) DO UPDATE SET matric = EXCLUDED.matric, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth
+            """, (matric, endpoint, p256dh, auth))
+            return jsonify({"msg": "Subscribed"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     elif path == '/cron':
         try:
             start_time = time.time()
@@ -674,7 +768,7 @@ def api_handler(path):
                     if not target: return "No Class"
                     my_log = core_api.get_log(target['id'], matric, req_session)
                     if my_log and my_log.get('status') == 'P':
-                        create_notification(matric, 'class', f"Class {target_id}", 'SUCCESS', 'Already marked Present', mode)
+                        create_notification(matric, 'class', f"Class {target_id}", 'SUCCESS', 'Already marked Present', raw_mode)
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return "Already Present"
                     should_scan = False
@@ -711,7 +805,7 @@ def api_handler(path):
                     is_ci, is_co = (log and log.get('checkInTime')), (log and log.get('checkOutTime'))
                     req_co = target.get('requireCheckout', False)
                     if (req_co and is_ci and is_co) or (not req_co and is_ci):
-                        create_notification(matric, 'activity', target.get('name'), 'SUCCESS', 'Activity Completed', mode)
+                        create_notification(matric, 'activity', target.get('name'), 'SUCCESS', 'Activity Completed', raw_mode)
                         pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                         return "Completed"
                     scan_ci, scan_co = False, False
@@ -806,7 +900,93 @@ def api_handler(path):
             full_log = f"Jobs: {len(jobs)} | AR Jobs: {len(ar_jobs)} | Processed: {len(results)}\n" + "\n".join(results)
             save_job_log("autojobs", "SUCCESS", len(results), full_log)
 
+            # --- DAILY REMINDERS & AWARENESS ---
+            try:
+                notif_users = pg_db.query("SELECT matric, name, notif_daily, notif_class_awareness, notif_awareness_time, last_daily_notif, awareness_sent_slots, groups FROM students WHERE notif_daily = TRUE OR notif_class_awareness = TRUE")
+                for u in notif_users:
+                    matric = u['matric']
+                    ldn = u.get('last_daily_notif')
+                    need_daily = False
+                    if u.get('notif_daily', False):
+                        if not ldn: need_daily = True
+                        else:
+                            try:
+                                if ldn.tzinfo is None: ldn = ldn.replace(tzinfo=timezone.utc)
+                                if ldn.astimezone(timezone(timedelta(hours=8))).date() < now_my.date(): need_daily = True
+                            except: need_daily = True
 
+                    need_aware = u.get('notif_class_awareness', False)
+                    if not need_daily and not need_aware: continue
+                    
+                    groups = u.get('groups')
+                    if not groups: continue
+                    
+                    today_classes = []
+                    def get_today_class(gid):
+                        try:
+                            sessions = core_api.get_sessions(gid, req_session)
+                            target = next((s for s in sessions if datetime.fromtimestamp(s['eventDate']/1000).strftime('%Y-%m-%d') == today_str), None)
+                            if target: return (gid, target)
+                        except: pass
+                        return None
+
+                    with ThreadPoolExecutor(max_workers=5) as in_ex:
+                        fs = [in_ex.submit(get_today_class, g) for g in groups]
+                        for f in as_completed(fs):
+                            res = f.result()
+                            if res: today_classes.append(res)
+                            
+                    today_classes.sort(key=lambda x: datetime.strptime(x[1]['startTime'], "%I:%M %p").time() if x[1].get('startTime') else time(0,0))
+                    
+                    if need_daily:
+                        if today_classes:
+                            msg_lines = []
+                            for gid, sess in today_classes:
+                                c_doc = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (str(gid),))
+                                c_title = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"Class {gid}"
+                                loc = sess.get('location', 'Unknown')
+                                
+                                as_job = pg_db.query_one("SELECT mode FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, str(gid)))
+                                as_str = "- no autoscan"
+                                if as_job:
+                                    m_pts = as_job['mode'].split('_')
+                                    as_str = f"- autoscan: {m_pts[0].lower()}"
+                                msg_lines.append(f"{c_title} at {sess['startTime']} {loc} {as_str}")
+                                
+                            body = f"You have {len(today_classes)} class(es) today:\n" + "\n".join(msg_lines)
+                            create_notification(matric, "daily", f"Good morning!", "INFO", body, "daily")
+                        pg_db.execute("UPDATE students SET last_daily_notif = %s WHERE matric = %s", (now_my, matric))
+                        
+                    if need_aware:
+                        lead_time = u.get('notif_awareness_time', 30)
+                        sent_slots = u.get('awareness_sent_slots') or []
+                        new_sent = list(sent_slots)
+                        for gid, sess in today_classes:
+                            try:
+                                dt_start = datetime.strptime(f"{today_str} {sess['startTime']}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
+                                diff_mins = (dt_start.timestamp() - now_my.timestamp()) / 60.0
+                                slot_id = f"{gid}_{sess['id']}"
+                                
+                                if 0 < diff_mins <= lead_time and slot_id not in sent_slots:
+                                    c_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (str(gid),))
+                                    c_title = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"Class {gid}"
+                                    loc = sess.get('location', 'Unknown')
+                                    
+                                    as_job = pg_db.query_one("SELECT mode FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, str(gid)))
+                                    as_str = "- no autoscan"
+                                    if as_job:
+                                        m_pts = as_job['mode'].split('_')
+                                        as_str = f"- autoscan: {m_pts[0].lower()}"
+                                        
+                                    body = f"{c_title} at {loc} {as_str}"
+                                    create_notification(matric, "awareness", f"Class starts in {int(diff_mins)} mins", "INFO", body, "awareness")
+                                    new_sent.append(slot_id)
+                            except: pass
+                            
+                        if len(new_sent) > len(sent_slots):
+                            pg_db.execute("UPDATE students SET awareness_sent_slots = %s WHERE matric = %s", (new_sent, matric))
+            except Exception as e:
+                print("Daily Notif Err:", e)
 
             return Response(full_log, headers=headers)
 

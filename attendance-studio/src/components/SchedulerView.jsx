@@ -69,6 +69,63 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
     const [actionLoadingGlobal, setActionLoadingGlobal] = useState(false);
     const [localConfig, setLocalConfig] = useState({});
 
+    // Settings State
+    const [userSettings, setUserSettings] = useState({
+        notif_enabled: false, notif_push_enabled: false, notif_autojobs: false,
+        notif_daily: false, notif_class_awareness: false, notif_awareness_time: 30
+    });
+    const [settingsLoading, setSettingsLoading] = useState(false);
+    const [vapidKey, setVapidKey] = useState(null);
+
+    const subscribeToPush = async (vapidPublic) => {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+        try {
+            const reg = await navigator.serviceWorker.register('/sw.js');
+            await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: vapidPublic
+            });
+            return sub.toJSON();
+        } catch (e) { console.error("Push Error", e); return null; }
+    };
+
+    useEffect(() => {
+        if (tab === 'settings' && !vapidKey && !settingsLoading) {
+            setSettingsLoading(true);
+            api.get(`/settings?matric=${user.matric}`).then(res => {
+                if (res.settings) {
+                    setUserSettings(prev => ({ ...prev, ...res.settings }));
+                }
+                if (res.vapidPublic) setVapidKey(res.vapidPublic);
+            }).catch(e => console.error(e))
+              .finally(() => setSettingsLoading(false));
+        }
+    }, [tab, user.matric, vapidKey, settingsLoading]);
+
+    const handleSettingChange = (key, val) => setUserSettings({ ...userSettings, [key]: val });
+    const saveSettings = async () => {
+        setSettingsLoading(true);
+        try {
+            await api.post('/settings', { matric: user.matric, ...userSettings });
+            if (userSettings.notif_push_enabled && vapidKey) {
+                const sub = await subscribeToPush(vapidKey);
+                if (sub) {
+                    await api.post('/subscribe', { matric: user.matric, subscription: sub });
+                    showToast("Push Enabled!", "success");
+                } else {
+                    showToast("Push permission denied/failed.", "error");
+                    const noPush = { ...userSettings, notif_push_enabled: false };
+                    setUserSettings(noPush);
+                    await api.post('/settings', { matric: user.matric, ...noPush });
+                }
+            } else {
+                showToast("Settings Saved", "success");
+            }
+        } catch (e) { showToast("Save failed", "error"); }
+        setSettingsLoading(false);
+    };
+
     // Notification Unread Logic
     const [lastReadNotif, setLastReadNotif] = useState(() => {
         return parseInt(localStorage.getItem('atd_last_read_notif') || '0');
@@ -237,7 +294,7 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
     const TABS = [
         { id: 'auto-jobs',   label: 'AUTO JOBS'   },
         { id: 'history',     label: 'NOTIFICATIONS' },
-
+        { id: 'settings',    label: 'SETTINGS' }
     ];
 
     // Button states
@@ -495,6 +552,62 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
                             />
                         ))
                     }
+                </div>
+            )}
+
+            {/* ===== SETTINGS TAB ===== */}
+            {tab === 'settings' && (
+                <div style={{ padding: '15px', border: '1px solid var(--grid-line)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '15px' }}>NOTIFICATION SETTINGS</div>
+                    {settingsLoading && !vapidKey ? <div style={{ color: '#888', fontSize: '0.8rem' }}>Loading settings...</div> : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                            <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#ccc', fontSize: '0.85rem' }}>
+                                <span>Enable Notifications Globally</span>
+                                <input type="checkbox" checked={userSettings.notif_enabled} onChange={e => handleSettingChange('notif_enabled', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                            </label>
+                            
+                            <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: userSettings.notif_enabled ? '#ccc' : '#555', fontSize: '0.85rem' }}>
+                                <span>Enable Web OS Push</span>
+                                <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_push_enabled} onChange={e => handleSettingChange('notif_push_enabled', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                            </label>
+
+                            <hr style={{ borderTop: '1px solid var(--grid-line)', margin: '5px 0' }}/>
+
+                            <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: userSettings.notif_enabled ? '#ccc' : '#555', fontSize: '0.85rem' }}>
+                                <span>Autojob Execution Logging</span>
+                                <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_autojobs} onChange={e => handleSettingChange('notif_autojobs', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                            </label>
+
+                            <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: userSettings.notif_enabled ? '#ccc' : '#555', fontSize: '0.85rem' }}>
+                                <span>Morning Class Schedule Summary</span>
+                                <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_daily} onChange={e => handleSettingChange('notif_daily', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                            </label>
+
+                            <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: userSettings.notif_enabled ? '#ccc' : '#555', fontSize: '0.85rem' }}>
+                                <span>Pre-Class Awareness Alert</span>
+                                <input type="checkbox" disabled={!userSettings.notif_enabled} checked={userSettings.notif_class_awareness} onChange={e => handleSettingChange('notif_class_awareness', e.target.checked)} style={{ transform: 'scale(1.3)' }}/>
+                            </label>
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: (!userSettings.notif_enabled || !userSettings.notif_class_awareness) ? 0.5 : 1 }}>
+                                <span style={{ color: '#ccc', fontSize: '0.85rem' }}>Awareness Lead Time (Mins)</span>
+                                <select 
+                                    disabled={!userSettings.notif_enabled || !userSettings.notif_class_awareness}
+                                    value={userSettings.notif_awareness_time} 
+                                    onChange={e => handleSettingChange('notif_awareness_time', Number(e.target.value))}
+                                    className="t-input" style={{ width: '80px', padding: '4px', textAlign: 'center' }}
+                                >
+                                    <option value={15}>15</option>
+                                    <option value={30}>30</option>
+                                    <option value={60}>60</option>
+                                    <option value={120}>120</option>
+                                </select>
+                            </div>
+
+                            <button className="btn" style={{ borderColor: 'var(--primary)', color: 'var(--primary)', padding: '10px', marginTop: '10px' }} onClick={saveSettings} disabled={settingsLoading}>
+                                {settingsLoading ? 'SAVING...' : 'SAVE SETTINGS'}
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
 
