@@ -57,22 +57,35 @@ const getDeviceId = () => {
     }
 };
 
-// --- RETRY HELPER ---
-const fetchWithRetry = async (url, options = {}, retries = 3, delayMs = 1000) => {
+// --- RETRY HELPER with exponential backoff + jitter ---
+// Why not infinite retry: if the server is down, infinite loops amplify load on recovery (thundering herd).
+// Jitter spreads out client reconnects so the server isn't hit by everyone simultaneously.
+// 5 retries = max ~31s total wait (1 + 2 + 4 + 8 + 16s with jitter ~2-3x them in total)
+const fetchWithRetry = async (url, options = {}, retries = 5) => {
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
             const res = await fetch(url, options);
-            // Only retry on server errors (5xx) or network failures, not client errors (4xx)
+            // 4xx = client error (bad request, not found, unauthorized) — no retry, won't self-heal
+            if (res.status >= 400 && res.status < 500) return res;
+            // 5xx = server error or pool exhaustion — retry with backoff
             if (res.status >= 500 && attempt < retries) {
-                await new Promise(r => setTimeout(r, delayMs * Math.pow(2, attempt)));
+                const base = Math.pow(2, attempt) * 500;          // 500ms, 1s, 2s, 4s, 8s
+                const jitter = Math.random() * base;               // randomize ±100% to spread load
+                await new Promise(r => setTimeout(r, base + jitter));
                 continue;
             }
             return res;
         } catch (networkErr) {
-            // True network failure (no connection, server went away)
+            // True network failure — apply same backoff
             if (attempt < retries) {
-                await new Promise(r => setTimeout(r, delayMs * Math.pow(2, attempt)));
+                const base = Math.pow(2, attempt) * 500;
+                const jitter = Math.random() * base;
+                await new Promise(r => setTimeout(r, base + jitter));
             } else {
+                // All retries exhausted — notify the app via a DOM event (framework-agnostic)
+                window.dispatchEvent(new CustomEvent('atd:apierror', {
+                    detail: { message: 'Connection lost. Please check your network.' }
+                }));
                 throw networkErr;
             }
         }
