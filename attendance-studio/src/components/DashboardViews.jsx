@@ -84,8 +84,15 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, o
                     className="back-btn" 
                     title="Restart Tutorial"
                     onClick={onRestartTutorial}
-                    style={{ padding: '4px 8px', fontSize: '1.1rem', borderColor: 'transparent', color: 'var(--text-dim)', background: 'transparent', boxShadow: 'none' }}
-                >💡</button>
+                    style={{ padding: '4px 8px', borderColor: 'transparent', background: 'transparent', boxShadow: 'none', display:'flex', alignItems:'center' }}
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-dim)' }}>
+                        <line x1="12" y1="22" x2="12" y2="18"/>
+                        <path d="M8 22h8"/>
+                        <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5.76.76 1.23 1.52 1.41 2.5"/>
+                        <line x1="9" y1="18" x2="15" y2="18"/>
+                    </svg>
+                </button>
                 <button className="back-btn" onClick={onLogout}>LOGOUT</button>
             </div>
         </div>

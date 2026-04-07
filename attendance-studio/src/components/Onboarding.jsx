@@ -29,15 +29,7 @@ export default function Onboarding({ immediate }) {
 
   // Complex sequence of steps matching specific user instructions
   const steps = [
-    // --- STEP 0: Guard — make sure user is on Classes tab ---
-    {
-      actionType: 'click',
-      title: 'LET\'S START',
-      text: 'Welcome to the Attendance Studio tutorial! Let\'s begin with the Classes tab. Click CLASSES to proceed.',
-      targetSelector: 'text=CLASSES',
-      position: 'bottom'
-    },
-    // --- CLASSES TAB (Step 1 - 3) ---
+    // --- CLASSES TAB ---
     {
       actionType: 'info',
       title: 'TIMETABLE & CLASSES',

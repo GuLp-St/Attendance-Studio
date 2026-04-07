@@ -555,8 +555,7 @@ export default function Dashboard() {
           onLogout={logout} 
           onRestartTutorial={() => {
             localStorage.removeItem('atd_tutorial_done');
-            setTutorialImmediate(true);
-            setTutorialKey(k => k + 1);
+            window.location.reload();
           }}
           onOpenManager={loadManager} 
           notifCount={notifications.length}
