@@ -60,7 +60,7 @@ button { font-family: inherit; }
 }
 .splash-container.fade-out { opacity: 0; pointer-events: none; }
 .splash-logo { display: flex; flex-direction: column; align-items: center; }
-.splash-icon { width: 100px; height: 100px; margin-bottom: 20px; filter: drop-shadow(0 0 10px var(--primary)); animation: pulse 2s infinite; }
+.splash-icon { width: 100px; height: 100px; margin-bottom: 20px; filter: drop-shadow(0 0 10px var(--primary)); animation: pulse 2s infinite; border-radius: 50%; background: var(--bg-color); }
 .splash-title { color: var(--primary); font-size: 1.5rem; text-align: center; line-height: 1.2; text-shadow: 0 0 10px var(--primary-dim); letter-spacing: 4px; font-weight: 300; margin-bottom: 30px; }
 .splash-loader { width: 40px; height: 40px; border: 2px solid transparent; border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
 

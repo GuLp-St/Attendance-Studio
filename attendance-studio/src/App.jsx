@@ -11,15 +11,18 @@ import { getDirectory } from './services/api';
 function App() {
   const { user, loading } = useAuth();
   const [showSplash, setShowSplash] = useState(true);
+  const [dataReady, setDataReady] = useState(false);
 
   // Fire background download immediately when site opens
   useEffect(() => {
-    getDirectory().catch(()=>{});
+    getDirectory()
+      .then(() => setDataReady(true))
+      .catch(() => setDataReady(true)); // ready even if failed, to let UI handle it
   }, []);
 
   return (
     <>
-      {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
+      {showSplash && <SplashScreen isReady={dataReady} onComplete={() => setShowSplash(false)} />}
       <div className="container" style={{ display: showSplash ? 'none' : 'flex' }}>
         {loading ? (
           <DashboardSkeleton />

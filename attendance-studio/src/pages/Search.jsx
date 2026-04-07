@@ -91,10 +91,9 @@ export default function Search() {
   return (
     <div className="search-container">
       <div className="search-box">
-        <h2 style={{ textAlign: 'center', color: 'var(--primary)', marginBottom: '20px', letterSpacing: '3px' }}>LOGIN TO ATTENDANCE STUDIO</h2>
         <div style={{ position: 'relative', width: '100%' }}>
             <input 
-                type="text" className="search-input" placeholder="LOGIN ID / MATRIC NO..." 
+                type="text" className="search-input" placeholder="LOGIN WITH MATRIC / NAME..." 
                 style={{ width: '100%', paddingRight: '40px' }}
                 value={query} onChange={(e) => handleSearch(e.target.value)}
                 onFocus={(e) => { 
