@@ -209,7 +209,7 @@ export default function Onboarding() {
         <div style={{
           position: 'fixed', top: targetRect.top, left: targetRect.left, width: targetRect.width, height: targetRect.height,
           boxShadow: '0 0 20px rgba(0, 243, 255, 0.8), inset 0 0 10px rgba(0, 243, 255, 0.4)', border: '2px dashed var(--primary)', borderRadius: '4px',
-          transition: 'all 0.3s'
+          transition: 'all 0.3s', pointerEvents: 'none'
         }} />
       </div>
     );
@@ -242,19 +242,6 @@ export default function Onboarding() {
   return (
     <>
       {renderMasks()}
-      
-      {/* The pointer-events mask to disable clicking ANYTHING except the target if actionType is 'click' */}
-      {currentStep.actionType === 'click' && targetRect && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9997 }} onClick={(e) => {
-            // Prevent clicks outside target rect
-            if (e.clientX >= targetRect.left && e.clientX <= targetRect.left + targetRect.width &&
-                e.clientY >= targetRect.top && e.clientY <= targetRect.top + targetRect.height) {
-                // Let through
-            } else {
-                e.preventDefault(); e.stopPropagation();
-            }
-        }}></div>
-      )}
 
       <div className="onboarding-tooltip" style={getTooltipStyle()}>
         <h3 style={{ color: 'var(--primary)', marginTop: 0, marginBottom: '10px', fontSize: '1rem', letterSpacing: '1px' }}>

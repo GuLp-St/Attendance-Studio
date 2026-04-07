@@ -5,21 +5,18 @@ export default function A2HSPrompt() {
   const [showPrompt, setShowPrompt] = useState(false);
 
   useEffect(() => {
-    // Listen for the beforeinstallprompt event
+    // Show the prompt immediately if not running standalone
+    // We do this because the user explicitly wants to see it to indicate they should install!
+    if (!window.matchMedia('(display-mode: standalone)').matches) {
+       setTimeout(() => setShowPrompt(true), 2000);
+    }
+
     const handler = (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
-      // Wait a bit before showing the prompt so it's not too aggressive
-      setTimeout(() => setShowPrompt(true), 2000);
     };
 
     window.addEventListener('beforeinstallprompt', handler);
-    
-    // Check if running as standalone (PWA)
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      setShowPrompt(false);
-    }
-
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
 
@@ -31,6 +28,9 @@ export default function A2HSPrompt() {
         setShowPrompt(false);
       }
       setDeferredPrompt(null);
+    } else {
+      // Fallback if the browser doesn't send beforeinstallprompt or it was missed
+      alert("To install: tap the Share button (iOS) or browser menu (Android/Desktop) and select 'Add to Home Screen'.");
     }
   };
 
