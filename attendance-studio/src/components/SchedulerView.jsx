@@ -308,8 +308,8 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
     const canStopAllActivities = allOrgs.some(o => o.autoscan_active);
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: '20px' }}>
-            <div style={{ display: 'flex', borderBottom: '1px solid var(--grid-line)', marginBottom: '15px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: '20px', position: 'relative' }}>
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--grid-line)', marginBottom: '15px', flexShrink: 0, position: 'sticky', top: 0, zIndex: 10, background: '#050505', paddingTop: '10px' }}>
                 {TABS.map(t => (
                     <div key={t.id}
                         onClick={() => handleTabClick(t.id)}

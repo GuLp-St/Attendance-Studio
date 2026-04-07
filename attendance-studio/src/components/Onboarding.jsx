@@ -157,7 +157,7 @@ export default function Onboarding() {
             const targetText = currentStep.targetSelector.split('=')[1];
             // Get text matches and pick the deepest visible active element
             const els = Array.from(document.querySelectorAll('button, div, span'));
-            const matches = els.filter(b => b.textContent && b.textContent.includes(targetText) && b.getBoundingClientRect().height > 0);
+            const matches = els.filter(b => b.textContent && b.textContent.trim() === targetText && b.getBoundingClientRect().height > 0);
             
             // To prevent picking outer wrapper containers, favor buttons first, then take the deepest node
             const buttonMatch = matches.find(b => b.tagName === 'BUTTON');
