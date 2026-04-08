@@ -81,6 +81,7 @@ export const DashboardHeader = memo(function DashboardHeader({ user, onLogout, o
             
             <div className="header-actions" style={{ alignItems: 'center', flexShrink: 0, display: 'flex', gap: '6px' }}>
                 <button 
+                    id="tutorial-btn"
                     className="back-btn" 
                     title="Restart Tutorial"
                     onClick={onRestartTutorial}

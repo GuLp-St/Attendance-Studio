@@ -142,6 +142,15 @@ export default function Onboarding({ immediate }) {
       text: 'Search all students in the database.\n"UNVER" (Unverified) means the account doesn\'t have a valid password—you can try to validate it or just view their biodata. "Verified" accounts show much more information. Use the advanced sorting and filtering to find anyone!',
       targetSelector: null,
       position: 'center'
+    },
+
+    // --- FINAL STEP ---
+    {
+      actionType: 'info',
+      title: 'YOU\'RE ALL SET!',
+      text: 'That\'s everything! You can replay this tutorial at any time by tapping the ⓘ icon next to the LOGOUT button at the top right.',
+      targetSelector: '#tutorial-btn',
+      position: 'bottom'
     }
   ];
 
