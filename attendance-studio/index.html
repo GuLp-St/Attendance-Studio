@@ -7,6 +7,7 @@
     <link rel="apple-touch-icon" href="/favicon.png">
     <link rel="manifest" href="/manifest.json">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#050505" media="(prefers-color-scheme: dark)">
     <meta name="theme-color" content="#050505">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -22,6 +23,8 @@
       .splash-loader { position: absolute; top: 200px; width: 40px; height: 40px; border: 2px solid transparent; border-top-color: #00f3ff; border-radius: 50%; animation: spin 1s linear infinite, fadeIn 1s ease 0.5s both; }
       @keyframes spin { 100% { transform: rotate(360deg); } }
       @keyframes fadeIn { 0% { opacity: 0; } 100% { opacity: 1; } }
+      @keyframes splashFadeOut { 0% { opacity: 1; pointer-events: all; } 100% { opacity: 0; pointer-events: none; } }
+      .splash-container { animation: splashFadeOut 0.6s ease 1.2s both; }
     </style>
     <div id="root">
       <div class="splash-container">
