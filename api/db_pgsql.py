@@ -6,11 +6,14 @@ import time
 import random
 from contextlib import contextmanager
 
-# Port 5432 = Supabase Transaction Mode Pooler (designed for serverless, handles many concurrent clients)
-# Port 6543 = Session Mode (each connection held for entire request lifetime, exhausts pool fast)
-SUPABASE_POSTGRES_URL = os.environ.get("SUPABASE_POSTGRES_URL_NON_POOLING")
+# Port 6543 = Supabase Transaction Mode Pooler (designed for serverless, handles many concurrent clients)
+#             Connection is released after each transaction — best for APIs
+# Port 5432 = Session Mode (each connection held for entire request lifetime, exhausts pool fast)
+# Port 5432 (direct) = Non-pooling direct connection (bypasses PgBouncer entirely)
+SUPABASE_POSTGRES_URL = os.environ.get("SUPABASE_POSTGRES_URL")
 if not SUPABASE_POSTGRES_URL:
-    SUPABASE_POSTGRES_URL = "postgres://postgres.gzbprvnzaxknqbpxzifa:TTksSjMC4WYgaCXM@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require"
+    # ✅ Transaction Mode: port 6543 — releases connections after each transaction
+    SUPABASE_POSTGRES_URL = "postgres://postgres.gzbprvnzaxknqbpxzifa:TTksSjMC4WYgaCXM@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require"
 
 from psycopg2.pool import ThreadedConnectionPool
 
@@ -35,20 +38,14 @@ def get_db():
             conn.autocommit = True
             try:
                 yield conn
-                return
             except psycopg2.OperationalError:
                 # Broken connection — drop it and recreate pool next time
-                try:
-                    pool.putconn(conn, close=True)
-                except Exception:
-                    pass
                 _pool = None
+                pool.putconn(conn, close=True)
                 raise
-            finally:
-                try:
-                    pool.putconn(conn)
-                except Exception:
-                    pass
+            else:
+                pool.putconn(conn)
+            return
         except psycopg2.pool.PoolError:
             # Pool exhausted — wait with exponential backoff + jitter then retry
             if attempt < max_attempts - 1:
