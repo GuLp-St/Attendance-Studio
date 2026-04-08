@@ -750,7 +750,9 @@ def api_handler(path):
                 if isinstance(job_time, str): job_time = datetime.fromisoformat(job_time.replace("Z", "+00:00"))
                 if job_time.tzinfo is None: job_time = job_time.replace(tzinfo=timezone.utc)
                 
-                if (now_my - job_time).total_seconds() > 86400:
+                raw_mode_early = str(d.get('mode', 'crowd'))
+                auto_mode_early = raw_mode_early.split('_')[1] if '_' in raw_mode_early else 'permanent'
+                if auto_mode_early != 'permanent' and (now_my - job_time).total_seconds() > 86400:
                     create_notification(d['matric'], d.get('job_type','class'), d.get('gid', 'Unknown'), 'FAILED', 'Autoscan Expired (24h)', d.get('mode','crowd'))
                     pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (d['matric'], d['gid']))
                     return "Cleaned (Expired)"
