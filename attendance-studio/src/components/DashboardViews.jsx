@@ -187,7 +187,7 @@ export const ExpandedProgress = ({ stat, animKey, isFirstExpand, statContent, c,
     );
 };
 
-export const TimetableList = memo(function TimetableList({ timetable, courses, loading, expandedGid, onExpand, sessionsForExpanded, isLoadingSessions, onAction, onExempt, onAutoscan, onCancelAutoscan, actionLoading, isVisible }) {
+export const TimetableList = memo(function TimetableList({ timetable, courses, loading, expandedGid, onExpand, sessionsForExpanded, isLoadingSessions, pollStatus, onRetryFetches, onAction, onExempt, onAutoscan, onCancelAutoscan, actionLoading, isVisible }) {
     const initialMountTime = useRef(Date.now());
     const containerRef = useRef(null);
 
@@ -251,15 +251,47 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
         return () => ro.disconnect();
     }, [timetable?.length]);
 
-    if (loading) {
+    const pollingCourses = courses?.filter(c => pollStatus?.[c.gid] === 'polling') || [];
+    
+    if (loading || (!timetable?.length && pollingCourses.length > 0)) {
+        if (!courses || courses.length === 0) {
+            return (
+                <div className="timetable-grid">
+                    {[1,2,3,4].map(i => <Skeleton key={i} type="course-card" />)}
+                </div>
+            );
+        }
+        
+        const pending = pollingCourses.length > 0 ? pollingCourses : courses;
         return (
-            <div className="timetable-grid">
-                {[1,2,3,4].map(i => <Skeleton key={i} type="course-card" />)}
+            <div className="timetable-grid" style={{ padding: '0 10px 40px 10px', marginTop: '20px' }}>
+                <div style={{ textAlign: 'center', color: 'var(--primary)', marginBottom: '15px', fontSize: '0.8rem', letterSpacing: '1px', fontWeight: 'bold' }}>FETCHING SCHEDULES...</div>
+                {pending.map((c, i) => (
+                    <div key={i} style={{ marginBottom: '15px' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#fff', marginBottom: '5px' }}>{c.code || c.name}</div>
+                        <Skeleton type="session-row" />
+                    </div>
+                ))}
             </div>
         );
     }
 
-    if (!timetable || timetable.length === 0) return <div style={{ textAlign: 'center', padding: '100px 20px', color: '#555', fontSize: '0.8rem', letterSpacing: '2px' }}>No classes registered</div>;
+    if (!timetable || timetable.length === 0) {
+        if (!courses || courses.length === 0) {
+            return <div style={{ textAlign: 'center', padding: '100px 20px', color: '#555', fontSize: '0.8rem', letterSpacing: '2px' }}>NO CLASSES REGISTERED</div>;
+        } else {
+            return (
+                <div style={{ textAlign: 'center', padding: '100px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px' }}>
+                    <div style={{ color: '#555', fontSize: '0.85rem', letterSpacing: '1px', fontWeight: 'bold' }}>
+                        COULD NOT LOAD SCHEDULES
+                    </div>
+                    <button className="btn" onClick={onRetryFetches} style={{ borderColor: 'var(--primary)', color: 'var(--primary)', padding: '8px 20px', fontWeight: 'bold', cursor: 'pointer' }}>
+                        RETRY FETCH
+                    </button>
+                </div>
+            );
+        }
+    }
 
     const getCourse = (gid) => courses?.find(c => c.gid === gid);
 

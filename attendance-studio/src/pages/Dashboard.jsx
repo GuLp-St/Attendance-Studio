@@ -61,6 +61,13 @@ export default function Dashboard() {
   const [actionLoading, setActionLoading] = useState(null);
   const [pendingAutoscan, setPendingAutoscan] = useState(null);
   const [promptConfig, setPromptConfig] = useState(null); // { sid, gid }
+  const [pollStatus, setPollStatus] = useState({});
+  const [retryTrigger, setRetryTrigger] = useState(0);
+
+  const retryTimetableFetches = () => {
+      pollAttempts.current = {};
+      setRetryTrigger(prev => prev + 1);
+  };
 
   // =========================================================================
   // 1. HISTORY & NAVIGATION LOGIC (HASH BASED)
@@ -282,23 +289,25 @@ export default function Dashboard() {
      user.courses.forEach(c => {
          const hasSlots = user.timetable && user.timetable.some(t => String(t.gid) === String(c.gid));
          
-         if (!hasSlots && !pollActive.current[c.gid]) {
-             const poll = async () => {
-                 if (!mounted) {
-                     pollActive.current[c.gid] = false;
-                     return;
-                 }
-                 
-                 const attempts = pollAttempts.current[c.gid] || 0;
-                 if (attempts >= 30) {
-                     pollActive.current[c.gid] = false;
-                     return;
-                 }
+             if (!hasSlots && !pollActive.current[c.gid]) {
+                 const poll = async () => {
+                     if (!mounted) {
+                         pollActive.current[c.gid] = false;
+                         return;
+                     }
+                     
+                     const attempts = pollAttempts.current[c.gid] || 0;
+                     if (attempts >= 30) {
+                         pollActive.current[c.gid] = false;
+                         setPollStatus(prev => prev[c.gid] === 'exhausted' ? prev : { ...prev, [c.gid]: 'exhausted' });
+                         return;
+                     }
 
-                 pollActive.current[c.gid] = true;
-                 pollAttempts.current[c.gid] = attempts + 1;
+                     pollActive.current[c.gid] = true;
+                     pollAttempts.current[c.gid] = attempts + 1;
+                     setPollStatus(prev => prev[c.gid] === 'polling' ? prev : { ...prev, [c.gid]: 'polling' });
 
-                 try {
+                     try {
                      const data = await api.get(`/course_timetable?gid=${c.gid}&matric=${user.matric}`);
                      if (!data.error && Array.isArray(data) && data.length > 0) {
                          setUser(prev => {
@@ -310,9 +319,10 @@ export default function Dashboard() {
                                  next.timetable = [...(next.timetable || []), ...uniqueNewSlots];
                                  return next;
                              }
-                             return prev;
+                             return next;
                          });
                          pollActive.current[c.gid] = false;
+                         setPollStatus(prev => prev[c.gid] === 'success' ? prev : { ...prev, [c.gid]: 'success' });
                          return; // Success, stop polling
                      }
                  } catch (e) {}
@@ -325,11 +335,13 @@ export default function Dashboard() {
              };
 
              poll();
+         } else if (hasSlots) {
+             setPollStatus(prev => prev[c.gid] === 'success' ? prev : { ...prev, [c.gid]: 'success' });
          }
      });
 
      return () => { mounted = false; };
-  }, [user?.courses, user?.matric, setUser]);
+  }, [user?.courses, user?.matric, setUser, retryTrigger]);
 
   // =========================================================================
   // 3. CORE ACTIONS
@@ -625,6 +637,8 @@ export default function Dashboard() {
                   onExpand={(gid) => openCourseByGid(gid)}
                   sessionsForExpanded={courseSessions}
                   isLoadingSessions={loadingDetail && selectedCourse}
+                  pollStatus={pollStatus}
+                  onRetryFetches={retryTimetableFetches}
                   onAction={handleAction}
                   onExempt={openExemptPrompt}
                   onAutoscan={initAutoscan}

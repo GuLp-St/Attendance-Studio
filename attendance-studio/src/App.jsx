@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import Search from './pages/Search';
 import Dashboard from './pages/Dashboard';
 import { DashboardSkeleton } from './components/Skeleton';
-import SplashScreen from './components/SplashScreen';
 import { useAuth } from './contexts/AuthContext';
 import { useToast } from './contexts/ToastContext';
 import { getDirectory } from './services/api';
@@ -10,7 +9,6 @@ import { getDirectory } from './services/api';
 function App() {
   const { user, loading } = useAuth();
   const { showToast } = useToast();
-  const [showSplash, setShowSplash] = useState(true);
   const [dataReady, setDataReady] = useState(false);
 
   // Global API error handler — fires when all retries are exhausted
@@ -30,12 +28,11 @@ function App() {
 
   return (
     <>
-      {showSplash && <SplashScreen isReady={dataReady} onComplete={() => setShowSplash(false)} />}
-      <div className="container" style={{ display: showSplash ? 'none' : 'flex' }}>
+      <div className="container" style={{ display: 'flex' }}>
         {loading ? (
           <DashboardSkeleton />
         ) : (
-          !user ? <Search /> : <Dashboard />
+          !user ? <Search dataReady={dataReady} /> : <Dashboard />
         )}
       </div>
     </>

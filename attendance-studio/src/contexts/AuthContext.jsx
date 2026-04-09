@@ -7,21 +7,17 @@ const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem('atd_user');
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch (e) {
+      localStorage.removeItem('atd_user');
+      return null;
+    }
+  });
   const [loading, setLoading] = useState(false);
   const { showToast } = useToast();
-
-  useEffect(() => {
-    // Auto-login if we have a persisted user
-    const savedUser = localStorage.getItem('atd_user');
-    if (savedUser) {
-      try {
-        setUser(JSON.parse(savedUser));
-      } catch (e) {
-        localStorage.removeItem('atd_user');
-      }
-    }
-  }, []);
 
   const login = async (matric, name) => {
     setLoading(true);
