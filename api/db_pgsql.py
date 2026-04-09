@@ -5,15 +5,17 @@ import os
 import time
 import random
 from contextlib import contextmanager
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
-# Port 6543 = Supabase Transaction Mode Pooler (designed for serverless, handles many concurrent clients)
-#             Connection is released after each transaction — best for APIs
-# Port 5432 = Session Mode (each connection held for entire request lifetime, exhausts pool fast)
-# Port 5432 (direct) = Non-pooling direct connection (bypasses PgBouncer entirely)
 SUPABASE_POSTGRES_URL = os.environ.get("SUPABASE_POSTGRES_URL")
 if not SUPABASE_POSTGRES_URL:
     # ✅ Transaction Mode: port 6543 — releases connections after each transaction
     SUPABASE_POSTGRES_URL = "postgres://postgres.gzbprvnzaxknqbpxzifa:TTksSjMC4WYgaCXM@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require"
+
+# Sanitize DSN to remove the unsupported 'supa' parameter added by newer Supabase pooler connection strings
+parsed_url = urlparse(SUPABASE_POSTGRES_URL)
+clean_query = urlencode([(k, v) for k, v in parse_qsl(parsed_url.query) if k != 'supa'])
+SUPABASE_POSTGRES_URL = urlunparse(parsed_url._replace(query=clean_query))
 
 from psycopg2.pool import ThreadedConnectionPool
 
