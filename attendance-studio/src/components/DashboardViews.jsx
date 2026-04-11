@@ -252,21 +252,30 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
     }, [timetable?.length]);
 
     const pollingCourses = courses?.filter(c => pollStatus?.[c.gid] === 'polling') || [];
-    
-    if (loading || (!timetable?.length && pollingCourses.length > 0)) {
-        if (!courses || courses.length === 0) {
-            return (
-                <div className="timetable-grid">
-                    {[1,2,3,4].map(i => <Skeleton key={i} type="course-card" />)}
-                </div>
-            );
-        }
-        
-        const pending = pollingCourses.length > 0 ? pollingCourses : courses;
+    const exhaustedCourses = courses?.filter(c => pollStatus?.[c.gid] === 'exhausted') || [];
+    // Courses that have no slots yet (not yet marked success)
+    const missingCourses = exhaustedCourses.filter(c => !timetable?.some(t => String(t.gid) === String(c.gid)));
+
+    // True global load: no courses at all — user has no registered classes
+    if (loading && (!courses || courses.length === 0)) {
+        return (
+            <div className="timetable-grid">
+                {[1,2,3,4].map(i => <Skeleton key={i} type="course-card" />)}
+            </div>
+        );
+    }
+
+    // No courses registered at all (from database)
+    if (!loading && (!courses || courses.length === 0)) {
+        return <div style={{ textAlign: 'center', padding: '100px 20px', color: '#555', fontSize: '0.8rem', letterSpacing: '2px' }}>NO CLASSES REGISTERED</div>;
+    }
+
+    // All courses are still polling and timetable is empty — full loading view
+    if (!timetable?.length && pollingCourses.length === courses?.length) {
         return (
             <div className="timetable-grid" style={{ padding: '0 10px 40px 10px', marginTop: '20px' }}>
                 <div style={{ textAlign: 'center', color: 'var(--primary)', marginBottom: '15px', fontSize: '0.8rem', letterSpacing: '1px', fontWeight: 'bold' }}>FETCHING SCHEDULES...</div>
-                {pending.map((c, i) => (
+                {courses.map((c, i) => (
                     <div key={i} style={{ marginBottom: '15px' }}>
                         <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#fff', marginBottom: '5px' }}>{c.code || c.name}</div>
                         <Skeleton type="session-row" />
@@ -276,21 +285,19 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
         );
     }
 
-    if (!timetable || timetable.length === 0) {
-        if (!courses || courses.length === 0) {
-            return <div style={{ textAlign: 'center', padding: '100px 20px', color: '#555', fontSize: '0.8rem', letterSpacing: '2px' }}>NO CLASSES REGISTERED</div>;
-        } else {
-            return (
-                <div style={{ textAlign: 'center', padding: '100px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px' }}>
-                    <div style={{ color: '#555', fontSize: '0.85rem', letterSpacing: '1px', fontWeight: 'bold' }}>
-                        COULD NOT LOAD SCHEDULES
-                    </div>
-                    <button className="btn" onClick={onRetryFetches} style={{ borderColor: 'var(--primary)', color: 'var(--primary)', padding: '8px 20px', fontWeight: 'bold', cursor: 'pointer' }}>
-                        RETRY FETCH
-                    </button>
+    // All exhausted, nothing loaded — retry view
+    if (!timetable?.length && missingCourses.length > 0 && pollingCourses.length === 0) {
+        return (
+            <div style={{ textAlign: 'center', padding: '60px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px' }}>
+                <div style={{ color: '#555', fontSize: '0.85rem', letterSpacing: '1px', fontWeight: 'bold' }}>COULD NOT LOAD SCHEDULES</div>
+                <div style={{ fontSize: '0.7rem', color: '#444', maxWidth: '250px', textAlign: 'center', lineHeight: 1.5 }}>
+                    {missingCourses.map(c => c.code || c.name).join(', ')}
                 </div>
-            );
-        }
+                <button className="btn" onClick={onRetryFetches} style={{ borderColor: 'var(--primary)', color: 'var(--primary)', padding: '8px 20px', fontWeight: 'bold', cursor: 'pointer' }}>
+                    RETRY FETCH
+                </button>
+            </div>
+        );
     }
 
     const getCourse = (gid) => courses?.find(c => c.gid === gid);
@@ -313,8 +320,39 @@ export const TimetableList = memo(function TimetableList({ timetable, courses, l
         <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0 }}>
             <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, position: 'relative' }}>
                 <div className="timetable-grid" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 'clamp(4px, 1vh, 10px)', marginTop: '5px', padding: '0 10px 40px 45px', overflowY: 'auto', position: 'relative' }} ref={containerRef}>
-                
+
+                    {/* ── Inline: Still-loading courses ── */}
+                    {pollingCourses.length > 0 && (
+                        <div style={{ marginBottom: '5px' }}>
+                            <div style={{ fontSize: '0.65rem', color: 'var(--primary)', letterSpacing: '1px', fontWeight: 'bold', marginBottom: '6px', opacity: 0.8 }}>
+                                FETCHING SCHEDULES...
+                            </div>
+                            {pollingCourses.map((c, i) => (
+                                <div key={i} style={{ marginBottom: '8px' }}>
+                                    <div style={{ fontSize: '0.7rem', color: '#888', marginBottom: '4px' }}>{c.code || c.name}</div>
+                                    <Skeleton type="session-row" />
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* ── Inline: Failed / exhausted courses (with retry) ── */}
+                    {missingCourses.length > 0 && pollingCourses.length === 0 && (
+                        <div style={{ marginBottom: '10px', padding: '10px 12px', border: '1px solid rgba(255,0,0,0.2)', borderLeft: '3px solid #f00', borderRadius: '4px', background: 'rgba(255,0,0,0.04)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                            <div>
+                                <div style={{ fontSize: '0.7rem', color: '#f00', fontWeight: 'bold', marginBottom: '3px' }}>FAILED TO LOAD</div>
+                                <div style={{ fontSize: '0.65rem', color: '#888', lineHeight: 1.4 }}>
+                                    {missingCourses.map(c => c.code || c.name).join(', ')}
+                                </div>
+                            </div>
+                            <button className="btn" onClick={onRetryFetches} style={{ flexShrink: 0, borderColor: 'var(--primary)', color: 'var(--primary)', padding: '5px 12px', fontSize: '0.65rem', fontWeight: 'bold' }}>
+                                RETRY
+                            </button>
+                        </div>
+                    )}
+
                     {/* Global Timeline Overlay — only show after first real measurement */}
+
                     {markerY !== null && (
                     <div style={{ 
                         position: 'absolute', left: 0, right: '10px', top: `${markerY}px`, height: '1px', 

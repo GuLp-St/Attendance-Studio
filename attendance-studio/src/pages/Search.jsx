@@ -7,7 +7,7 @@ import Modal from '../components/Modal';
 import AdminPanel from './AdminPanel';
 import A2HSPrompt from '../components/A2HSPrompt';
 
-export default function Search({ dataReady }) {
+export default function Search() {
   const { login, loading } = useAuth();
 
   const [query, setQuery] = useState('');
@@ -93,28 +93,23 @@ export default function Search({ dataReady }) {
       <div className="search-box">
         <div style={{ position: 'relative', width: '100%' }}>
             <input 
-                type="text" className="search-input" placeholder={dataReady ? "LOGIN WITH MATRIC / NAME..." : "DOWNLOADING DIRECTORY..."} 
+                type="text" className="search-input" placeholder="LOGIN WITH MATRIC / NAME..." 
                 style={{ width: '100%', paddingRight: '40px' }}
                 value={query} onChange={(e) => handleSearch(e.target.value)}
                 onFocus={(e) => { 
-                    if(!query && dataReady) loadRecents(); 
+                    if(!query) loadRecents(); 
                     setTimeout(() => {
                         e.target.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }, 300);
                 }} 
-                onBlur={handleBlur} disabled={loading || !dataReady} 
+                onBlur={handleBlur} disabled={loading} 
             />
-            {query && dataReady && (
+            {query && (
                 <span 
                     onClick={() => { setQuery(''); setResults([]); }} 
                     style={{ position: 'absolute', right: '15px', top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', color: '#888', fontWeight: 'bold', zIndex: 10 }}>
                     ✕
                 </span>
-            )}
-            {!dataReady && (
-                <div style={{ position: 'absolute', right: '15px', top: '50%', transform: 'translateY(-50%)', zIndex: 10 }}>
-                    <div className="splash-loader" style={{ width: '20px', height: '20px', margin: 0 }}></div>
-                </div>
             )}
         </div>
         

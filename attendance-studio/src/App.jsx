@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Search from './pages/Search';
 import Dashboard from './pages/Dashboard';
 import { DashboardSkeleton } from './components/Skeleton';
+import SplashScreen from './components/SplashScreen';
 import { useAuth } from './contexts/AuthContext';
 import { useToast } from './contexts/ToastContext';
 import { getDirectory } from './services/api';
@@ -10,6 +11,7 @@ function App() {
   const { user, loading } = useAuth();
   const { showToast } = useToast();
   const [dataReady, setDataReady] = useState(false);
+  const [showSplash, setShowSplash] = useState(true);
 
   // Global API error handler — fires when all retries are exhausted
   useEffect(() => {
@@ -25,14 +27,17 @@ function App() {
       .catch(() => setDataReady(true)); // ready even if failed, to let UI handle it
   }, []);
 
+  // Only show splash for unauthenticated users waiting for directory
+  const splashVisible = showSplash && !user;
 
   return (
     <>
-      <div className="container" style={{ display: 'flex' }}>
+      {splashVisible && <SplashScreen isReady={dataReady} onComplete={() => setShowSplash(false)} />}
+      <div className="container" style={{ display: splashVisible ? 'none' : 'flex' }}>
         {loading ? (
           <DashboardSkeleton />
         ) : (
-          !user ? <Search dataReady={dataReady} /> : <Dashboard />
+          !user ? <Search /> : <Dashboard />
         )}
       </div>
     </>
