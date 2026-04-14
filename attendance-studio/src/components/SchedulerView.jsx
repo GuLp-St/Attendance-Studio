@@ -61,7 +61,7 @@ const SwipeableNotification = ({ n, formatMode, fmtDate, onDismiss }) => {
     );
 };
 
-export default function SchedulerView({ user, notifications, onDismissNotif, onClearAllNotifs, clearLoading, onCancelJob, onCancelAutoReg, goToTools, actionLoading, onAutoscan, onGlobalRefresh }) {
+export default function SchedulerView({ user, notifications, onDismissNotif, onClearAllNotifs, clearLoading, onCancelJob, onCancelAutoReg, goToTools, actionLoading, onAutoscan, onGlobalRefresh, unreadCount, onMarkHistoryRead }) {
     const { showToast } = useToast();
     const { confirm } = useConfirm();
     const [tab, setTab] = useState('auto-jobs');
@@ -130,29 +130,19 @@ export default function SchedulerView({ user, notifications, onDismissNotif, onC
         }
     };
 
-    // Notification Unread Logic
-    const [lastReadNotif, setLastReadNotif] = useState(() => {
-        return parseInt(localStorage.getItem('atd_last_read_notif') || '0');
-    });
-
-    const unreadCount = notifications ? notifications.filter(n => new Date(n.timestamp).getTime() > lastReadNotif).length : 0;
-
     useEffect(() => {
         if (tab === 'history' && notifications?.length > 0) {
-            const latest = Math.max(...notifications.map(n => new Date(n.timestamp).getTime()));
-            if (latest > lastReadNotif) {
-                setLastReadNotif(latest);
-                localStorage.setItem('atd_last_read_notif', String(latest));
+            if (unreadCount > 0) {
+                const latest = Math.max(...notifications.map(n => new Date(n.timestamp).getTime()));
+                onMarkHistoryRead(latest);
             }
         }
-    }, [notifications, tab, lastReadNotif]);
+    }, [notifications, tab, unreadCount, onMarkHistoryRead]);
 
     const handleTabClick = (tabId) => {
         setTab(tabId);
         if (tabId === 'history') {
-            const now = Date.now();
-            setLastReadNotif(now);
-            localStorage.setItem('atd_last_read_notif', String(now));
+            if (onMarkHistoryRead) onMarkHistoryRead(Date.now());
         }
     };
 

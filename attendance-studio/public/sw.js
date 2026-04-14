@@ -8,6 +8,10 @@ self.addEventListener('push', function(event) {
         }
     }
 
+    if (navigator.setAppBadge && data.badgeCount) {
+        navigator.setAppBadge(data.badgeCount).catch(() => {});
+    }
+
     const options = {
         body: data.body,
         icon: '/pwa-512x512.png',

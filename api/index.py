@@ -199,6 +199,10 @@ def create_notification(matric, type, title, status, details, mode):
             
         if user_doc and user_doc.get('notif_push_enabled', False):
             payload = {"title": f"[{status}] {title}" if status else title, "body": details}
+            try:
+                c_res = pg_db.query_one("SELECT COUNT(*) as c FROM notifications WHERE matric = %s", (matric,))
+                if c_res: payload["badgeCount"] = c_res.get("c", 1)
+            except: pass
             send_web_push(matric, payload)
     except: pass
 
@@ -926,9 +930,26 @@ def api_handler(path):
                     today_classes = []
                     def get_today_class(gid):
                         try:
-                            sessions = core_api.get_sessions(gid, req_session)
-                            target = next((s for s in sessions if datetime.fromtimestamp(s['eventDate']/1000).strftime('%Y-%m-%d') == today_str), None)
-                            if target: return (gid, target)
+                            tt = core_api.get_timetable(gid, req_session, retries=1)
+                            if tt and isinstance(tt, list):
+                                day_str = now_my.strftime('%A').upper()
+                                today_slots = [s for s in tt if isinstance(s, dict) and s.get('KETERANGAN_HARI', '').upper() == day_str]
+                                
+                                if today_slots:
+                                    def parse_t(t_str):
+                                        try: return datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
+                                        except: return now_my
+                                        
+                                    today_slots.sort(key=lambda s: parse_t(s.get('MASA_MULA', '11:59 PM')))
+                                    first_slot = today_slots[0]
+                                    
+                                    target = {
+                                        'id': f"tt_{first_slot.get('SLOT', 1)}",
+                                        'startTime': first_slot.get('MASA_MULA', ''),
+                                        'endTime': first_slot.get('MASA_TAMAT', ''),
+                                        'location': first_slot.get('LOKASI', 'Unknown')
+                                    }
+                                    return (gid, target)
                         except: pass
                         return None
 

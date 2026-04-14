@@ -40,6 +40,19 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('modules');
   const [loadingDetail, setLoadingDetail] = useState(false); 
   const [notifications, setNotifications] = useState([]);
+  const [lastReadNotif, setLastReadNotif] = useState(() => parseInt(localStorage.getItem('atd_last_read_notif') || '0'));
+  const unreadCount = notifications ? notifications.filter(n => new Date(n.timestamp).getTime() > lastReadNotif).length : 0;
+  
+  useEffect(() => {
+      if ('setAppBadge' in navigator) {
+          if (unreadCount > 0) {
+              navigator.setAppBadge(unreadCount).catch(() => {});
+          } else if ('clearAppBadge' in navigator) {
+              navigator.clearAppBadge().catch(() => {});
+          }
+      }
+  }, [unreadCount]);
+
   const [sessionsFetched, setSessionsFetched] = useState(false); 
   const [tutorialKey, setTutorialKey] = useState(0); // Increment to restart tutorial
   const [tutorialImmediate, setTutorialImmediate] = useState(false);
@@ -597,10 +610,21 @@ export default function Dashboard() {
         </button>
         <button 
             className="btn" 
-            style={activeTab === 'scheduler' ? { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: '#f0f', color: '#f0f', background: 'rgba(255,0,255,0.1)' } : { flex: 1, fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
+            style={activeTab === 'scheduler' ? { flex: 1, position: 'relative', fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap', borderColor: '#f0f', color: '#f0f', background: 'rgba(255,0,255,0.1)' } : { flex: 1, position: 'relative', fontSize: 'clamp(0.55rem, 2vw, 0.75rem)', padding: '8px 2px', whiteSpace: 'nowrap' }} 
             onClick={() => setActiveTab('scheduler')}
         >
             SCHEDULER
+            {unreadCount > 0 && (
+                <span style={{
+                    position: 'absolute', top: '-2px', right: '0px',
+                    background: '#f00', color: '#fff', fontSize: '0.5rem',
+                    borderRadius: '50%', width: '12px', height: '12px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontWeight: 'bold'
+                }}>
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+            )}
         </button>
         <button 
             className="btn" 
@@ -738,6 +762,11 @@ export default function Dashboard() {
               clearLoading={clearLoading}
               onCancelJob={cancelAutoscan}
               onCancelAutoReg={(gid) => handleUpdateAutoReg(gid, false)}
+              unreadCount={unreadCount}
+              onMarkHistoryRead={(ts) => {
+                  setLastReadNotif(ts);
+                  localStorage.setItem('atd_last_read_notif', String(ts));
+              }}
               goToTools={() => setActiveTab('tools')}
               actionLoading={actionLoading}
               onAutoscan={autoscanDirect}
