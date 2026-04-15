@@ -982,15 +982,23 @@ def api_handler(path):
                         
                     if need_aware:
                         lead_time = u.get('notif_awareness_time', 30)
-                        sent_slots = u.get('awareness_sent_slots') or []
-                        new_sent = list(sent_slots)
                         for gid, sess in today_classes:
                             try:
                                 dt_start = datetime.strptime(f"{today_str} {sess['startTime']}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
                                 diff_mins = (dt_start.timestamp() - now_my.timestamp()) / 60.0
                                 slot_id = f"{gid}_{sess['id']}"
                                 
-                                if 0 < diff_mins <= lead_time and slot_id not in sent_slots:
+                                if 0 < diff_mins <= lead_time:
+                                    # Atomic claim: only fires if slot_id is NOT already in the array
+                                    rows = pg_db.execute(
+                                        "UPDATE students SET awareness_sent_slots = array_append(COALESCE(awareness_sent_slots, '{}'), %s) "
+                                        "WHERE matric = %s AND NOT (%s = ANY(COALESCE(awareness_sent_slots, '{}'))) "
+                                        "RETURNING matric",
+                                        (slot_id, matric, slot_id)
+                                    )
+                                    if not rows:
+                                        continue  # Another cron already claimed this slot
+                                    
                                     c_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (str(gid),))
                                     c_title = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"Class {gid}"
                                     loc = sess.get('location', 'Unknown')
@@ -1003,11 +1011,7 @@ def api_handler(path):
                                         
                                     body = f"{c_title} at {loc} {as_str}"
                                     create_notification(matric, "awareness", f"Class starts in {int(diff_mins)} mins", "INFO", body, "awareness")
-                                    new_sent.append(slot_id)
                             except: pass
-                            
-                        if len(new_sent) > len(sent_slots):
-                            pg_db.execute("UPDATE students SET awareness_sent_slots = %s WHERE matric = %s", (new_sent, matric))
             except Exception as e:
                 print("Daily Notif Err:", e)
 

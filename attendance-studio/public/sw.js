@@ -8,8 +8,9 @@ self.addEventListener('push', function(event) {
         }
     }
 
+    let badgePromise = Promise.resolve();
     if (navigator.setAppBadge && data.badgeCount) {
-        navigator.setAppBadge(data.badgeCount).catch(() => {});
+        badgePromise = navigator.setAppBadge(data.badgeCount).catch(() => {});
     }
 
     const options = {
@@ -24,12 +25,20 @@ self.addEventListener('push', function(event) {
     };
 
     event.waitUntil(
-        self.registration.showNotification(data.title, options)
+        Promise.all([
+            badgePromise,
+            self.registration.showNotification(data.title, options)
+        ])
     );
 });
 
 self.addEventListener('notificationclick', function(event) {
     event.notification.close();
+    
+    if (navigator.clearAppBadge) {
+        navigator.clearAppBadge().catch(() => {});
+    }
+
     event.waitUntil(
         clients.matchAll({ type: 'window' }).then(windowClients => {
             for (var i = 0; i < windowClients.length; i++) {
