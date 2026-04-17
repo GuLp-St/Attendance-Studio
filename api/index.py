@@ -769,83 +769,131 @@ def api_handler(path):
                 auto_mode = mode_parts[1] if len(mode_parts) > 1 else 'permanent'
                 
                 if j_type == 'class':
+                    tt = core_api.get_timetable(target_id, req_session)
+                    tt_slot = None
+                    if tt and isinstance(tt, list):
+                        day_str = now_my.strftime('%A').upper()
+                        today_slots = [s for s in tt if isinstance(s, dict) and s.get('KETERANGAN_HARI', '').upper() == day_str]
+                        if today_slots:
+                            def parse_t(t_str):
+                                try: return datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
+                                except: return now_my
+                            today_slots.sort(key=lambda s: parse_t(s.get('MASA_MULA', '11:59 PM')))
+                            tt_slot = today_slots[0]
+                    
+                    if not tt_slot: return "No Class (Timetable)"
+                    
+                    t_start = parse_t(tt_slot.get('MASA_MULA', '12:00 AM'))
+                    t_end = parse_t(tt_slot.get('MASA_TAMAT', '11:59 PM'))
+                    
+                    # 1. Determine if already present
                     sessions = core_api.get_sessions(target_id, req_session)
                     target = next((s for s in sessions if datetime.fromtimestamp(s['eventDate']/1000).strftime('%Y-%m-%d') == today_str), None)
-                    if not target: return "No Class"
-                    my_log = core_api.get_log(target['id'], matric, req_session)
-                    if my_log and my_log.get('status') == 'P':
-                        create_notification(matric, 'class', f"Class {target_id}", 'SUCCESS', 'Already marked Present', raw_mode)
-                        pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
-                        return "Already Present"
+                    
+                    if target:
+                        my_log = core_api.get_log(target['id'], matric, req_session)
+                        if my_log and my_log.get('status') == 'P':
+                            if auto_mode == 'onetime':
+                                pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                            return "Already Present (P)"
+                    
+                    # Not present yet.
+                    if now_my < t_start: return "Pending (Early)"
+                    
+                    if now_my > t_end:
+                        # Failed to scan in class
+                        if job_time > t_end: return "Expired Class (Job Added Later)"
+                        
+                        last_proc = d.get('last_processed_date')
+                        if not last_proc or str(last_proc) != today_str:
+                            c_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (target_id,))
+                            c_label = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"Class {target_id}"
+                            create_notification(matric, 'class', c_label, "FAILED", "Missed class or class canceled by lecturer.", raw_mode)
+                            pg_db.execute("UPDATE autoscan_jobs SET last_processed_date = CURRENT_DATE WHERE matric = %s AND gid = %s", (matric, target_id))
+                            if auto_mode == 'onetime':
+                                pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                        return "Class Ended (Failed)"
+
+                    # During Class
+                    if not target: return "Waiting for lecturer to generate QR"
+                    
                     should_scan = False
                     if trigger_mode == 'crowd' and core_api.get_attendance_count(target['id'], req_session) >= 5: should_scan = True
-                    elif trigger_mode == 'time':
-                        try:
-                            dt_end = datetime.strptime(f"{today_str} {target['endTime']}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
-                            if (dt_end.timestamp() - 1200) <= now_my.timestamp(): should_scan = True
-                        except: pass
+                    elif trigger_mode == 'time' and (t_end.timestamp() - 1200) <= now_my.timestamp(): should_scan = True
                     
-                    # If auto_mode is one time, do NOT unconditionally say True, it must still trigger on crowd/time.
-                    # Wait, 'one time' means it waits for the trigger (crowd/time) just ONCE and then deletes itself.
-                    # 'permanent' means it waits for trigger and keeps the job.
-                    # So should_scan is completely dictated by trigger_mode!
-
                     if should_scan:
                         res = core_api.scan_qr(target['id'], matric, req_session)
                         is_success = ("Success" in res or "taken" in res.lower() or ("Server:" in res and "Server Error" not in res))
-                        status = "SUCCESS" if is_success else "FAILED"
-                        # Get course name for nicer notification
-                        c_doc = pg_db.query_one("SELECT code, name, course_group FROM courses WHERE id = %s", (target_id,))
-                        c_label = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"Class {target_id}"
-                        create_notification(matric, 'class', c_label, status, res, raw_mode)
-                        
-                        if auto_mode == 'onetime':
-                            pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
-                        return f"Attempted ({status})"
+                        if is_success:
+                            c_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (target_id,))
+                            c_label = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"Class {target_id}"
+                            create_notification(matric, 'class', c_label, "SUCCESS", res, raw_mode)
+                            if auto_mode == 'onetime':
+                                pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                            return f"Attempted (SUCCESS)"
+                        return f"Attempted (FAILED - retrying)"
                     return f"Pending ({raw_mode})"
+
                 elif j_type == 'activity':
                     events = core_api.get_organizer_events(target_id, req_session)
                     target = next((e for e in events if e['eventDate'] == today_str), None)
                     if not target: return "No Event"
+                    
                     log = core_api.get_activity_log(target['id'], matric, req_session)
                     is_ci, is_co = (log and log.get('checkInTime')), (log and log.get('checkOutTime'))
                     req_co = target.get('requireCheckout', False)
+                    
                     if (req_co and is_ci and is_co) or (not req_co and is_ci):
-                        create_notification(matric, 'activity', target.get('name'), 'SUCCESS', 'Activity Completed', raw_mode)
-                        pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
-                        return "Completed"
+                        if auto_mode == 'onetime':
+                            pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                        return "Already Completed"
+
+                    try:
+                        t_str = target['endTime']
+                        try: dt_end = datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
+                        except: dt_end = datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=8)))
+                    except: dt_end = now_my + timedelta(hours=1) # Fallback
+
+                    if now_my > dt_end:
+                        if job_time > dt_end: return "Event Ended (Job Added Later)"
+                        
+                        last_proc = d.get('last_processed_date')
+                        if not last_proc or str(last_proc) != today_str:
+                            fail_type = "Check-Out" if (is_ci and req_co) else "Check-In"
+                            create_notification(matric, 'activity', target.get('name'), "FAILED", f"Missed {fail_type} scan.", raw_mode)
+                            pg_db.execute("UPDATE autoscan_jobs SET last_processed_date = CURRENT_DATE WHERE matric = %s AND gid = %s", (matric, target_id))
+                            if auto_mode == 'onetime':
+                                pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                        return "Event Ended (Failed)"
+
                     scan_ci, scan_co = False, False
                     if trigger_mode == 'crowd':
                         stats = core_api.get_event_stats(target['id'], req_session)
                         if not is_ci and stats[0] >= 5: scan_ci = True
                         if is_ci and not is_co and req_co and stats[1] >= 5: scan_co = True
-                    elif trigger_mode == 'time':
-                        try:
-                            t_str = target['endTime']
-                            try: dt_end = datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
-                            except: dt_end = datetime.strptime(f"{today_str} {t_str}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=8)))
-                            if (dt_end.timestamp() - 1200) <= now_my.timestamp():
-                                if not is_ci: scan_ci = True
-                                if is_ci and not is_co and req_co: scan_co = True
-                        except: pass
+                    elif trigger_mode == 'time' and (dt_end.timestamp() - 1200) <= now_my.timestamp():
+                        if not is_ci: scan_ci = True
+                        if is_ci and not is_co and req_co: scan_co = True
+
                     if scan_ci:
                         r = core_api.scan_activity_qr(target['id'], matric, 'i')
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
-                        status = "SUCCESS" if is_success else "FAILED"
-                        create_notification(matric, 'activity', target.get('name'), status, f"Check-In: {r}", raw_mode)
-                        if not req_co:
-                            if auto_mode == 'onetime':
+                        if is_success:
+                            create_notification(matric, 'activity', target.get('name'), "SUCCESS", f"Check-In: {r}", raw_mode)
+                            if not req_co and auto_mode == 'onetime':
                                 pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
-                            return f"CI Attempted ({status}) - Job Deleted"
-                        return f"CI Attempted ({status}) - Job Kept for CO"
+                            return f"CI Attempted (SUCCESS)"
+                        return "CI Attempted (FAILED - retrying)"
+                        
                     if scan_co:
                         r = core_api.scan_activity_qr(target['id'], matric, 'o')
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
-                        status = "SUCCESS" if is_success else "FAILED"
-                        create_notification(matric, 'activity', target.get('name'), status, f"Check-Out: {r}", raw_mode)
-                        if auto_mode == 'onetime':
-                            pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
-                        return f"CO Attempted ({status}) - Job Deleted"
+                        if is_success:
+                            create_notification(matric, 'activity', target.get('name'), "SUCCESS", f"Check-Out: {r}", raw_mode)
+                            if auto_mode == 'onetime':
+                                pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
+                            return f"CO Attempted (SUCCESS)"
+                        return "CO Attempted (FAILED - retrying)"
                     return f"Pending ({raw_mode})"
                 return "Invalid Type"
 
