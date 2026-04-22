@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, request, jsonify, Response
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 import json
 import requests
 import traceback
@@ -51,7 +51,7 @@ def _job_end(job_type):
         pass
 
 def json_serial(obj):
-    if isinstance(obj, (datetime, datetime)):
+    if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     if isinstance(obj, timedelta):
         return str(obj)
