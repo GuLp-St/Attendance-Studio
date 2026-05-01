@@ -784,7 +784,7 @@ def api_handler(path):
                     if not tt_slot: return "No Class (Timetable)"
                     
                     t_start = parse_t(tt_slot.get('MASA_MULA', '12:00 AM'))
-                    t_end = parse_t(tt_slot.get('MASA_TAMAT', '11:59 PM'))
+                    t_end = parse_t(today_slots[-1].get('MASA_TAMAT', '11:59 PM'))
                     
                     # 1. Determine if already present
                     sessions = core_api.get_sessions(target_id, req_session)
@@ -828,6 +828,7 @@ def api_handler(path):
                             c_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (target_id,))
                             c_label = f"{c_doc['code']} {c_doc.get('course_group','')}" if c_doc else f"Class {target_id}"
                             create_notification(matric, 'class', c_label, "SUCCESS", res, raw_mode)
+                            pg_db.execute("UPDATE autoscan_jobs SET last_processed_date = CURRENT_DATE WHERE matric = %s AND gid = %s", (matric, target_id))
                             if auto_mode == 'onetime':
                                 pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                             return f"Attempted (SUCCESS)"
@@ -880,6 +881,7 @@ def api_handler(path):
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
                         if is_success:
                             create_notification(matric, 'activity', target.get('name'), "SUCCESS", f"Check-In: {r}", raw_mode)
+                            pg_db.execute("UPDATE autoscan_jobs SET last_processed_date = CURRENT_DATE WHERE matric = %s AND gid = %s", (matric, target_id))
                             if not req_co and auto_mode == 'onetime':
                                 pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                             return f"CI Attempted (SUCCESS)"
@@ -890,6 +892,7 @@ def api_handler(path):
                         is_success = "Success" in r or ("Server:" in r and "Server Error" not in r)
                         if is_success:
                             create_notification(matric, 'activity', target.get('name'), "SUCCESS", f"Check-Out: {r}", raw_mode)
+                            pg_db.execute("UPDATE autoscan_jobs SET last_processed_date = CURRENT_DATE WHERE matric = %s AND gid = %s", (matric, target_id))
                             if auto_mode == 'onetime':
                                 pg_db.execute("DELETE FROM autoscan_jobs WHERE matric = %s AND gid = %s", (matric, target_id))
                             return f"CO Attempted (SUCCESS)"
@@ -979,7 +982,8 @@ def api_handler(path):
                     def get_today_class(gid):
                         try:
                             tt = core_api.get_timetable(gid, req_session, retries=1)
-                            if tt and isinstance(tt, list):
+                            if tt is None: return "ERROR"
+                            if isinstance(tt, list):
                                 day_str = now_my.strftime('%A').upper()
                                 today_slots = [s for s in tt if isinstance(s, dict) and s.get('KETERANGAN_HARI', '').upper() == day_str]
                                 
@@ -998,18 +1002,20 @@ def api_handler(path):
                                         'location': first_slot.get('LOKASI', 'Unknown')
                                     }
                                     return (gid, target)
-                        except: pass
+                        except: return "ERROR"
                         return None
 
+                    has_errors = False
                     with ThreadPoolExecutor(max_workers=5) as in_ex:
                         fs = [in_ex.submit(get_today_class, g) for g in groups]
                         for f in as_completed(fs):
                             res = f.result()
-                            if res: today_classes.append(res)
+                            if res == "ERROR": has_errors = True
+                            elif res: today_classes.append(res)
                             
                     today_classes.sort(key=lambda x: datetime.strptime(x[1]['startTime'], "%I:%M %p").time() if x[1].get('startTime') else time(0,0))
                     
-                    if need_daily:
+                    if need_daily and not has_errors:
                         if today_classes:
                             msg_lines = []
                             for gid, sess in today_classes:
@@ -1034,17 +1040,17 @@ def api_handler(path):
                             try:
                                 dt_start = datetime.strptime(f"{today_str} {sess['startTime']}", "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone(timedelta(hours=8)))
                                 diff_mins = (dt_start.timestamp() - now_my.timestamp()) / 60.0
-                                slot_id = f"{gid}_{sess['id']}"
+                                slot_id = f"{gid}_{sess['id']}_{today_str}"
                                 
                                 if 0 < diff_mins <= lead_time:
                                     # Atomic claim: only fires if slot_id is NOT already in the array
-                                    rows = pg_db.execute(
+                                    update_res = pg_db.execute(
                                         "UPDATE students SET awareness_sent_slots = array_append(COALESCE(awareness_sent_slots, '{}'), %s) "
                                         "WHERE matric = %s AND NOT (%s = ANY(COALESCE(awareness_sent_slots, '{}'))) "
                                         "RETURNING matric",
                                         (slot_id, matric, slot_id)
                                     )
-                                    if not rows:
+                                    if not update_res:
                                         continue  # Another cron already claimed this slot
                                     
                                     c_doc = pg_db.query_one("SELECT code, course_group FROM courses WHERE id = %s", (str(gid),))

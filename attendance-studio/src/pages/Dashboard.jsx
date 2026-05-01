@@ -578,9 +578,11 @@ export default function Dashboard() {
       <DashboardHeader 
           user={user} 
           onLogout={logout} 
-          onRestartTutorial={() => {
-            localStorage.removeItem('atd_tutorial_done');
-            window.location.reload();
+          onRestartTutorial={async () => {
+            if (await confirm("Are you sure you want to restart the interactive tutorial?")) {
+              localStorage.removeItem('atd_tutorial_done');
+              window.location.reload();
+            }
           }}
           onOpenManager={loadManager} 
           notifCount={notifications.length}
